@@ -79,7 +79,7 @@ class TestCloseFills(unittest.TestCase):
         self.assertEqual(stop_slippage_short(state), -1.0)
 
     def test_manual_close_slippage_is_zero(self):
-        """Dashboard kill/close — not a stop exit; slippage is 0."""
+        """Dashboard kill/close — not a stop exit; operator slippage is None."""
         state = {
             'status': 'closed',
             'entry': {'net_credit': 0.65, 'two_x_net_credit': 2.6},
@@ -92,6 +92,35 @@ class TestCloseFills(unittest.TestCase):
         self.assertIsNone(stop_out_slippage_per_spread(state))
         self.assertIsNone(slippage_dollars(state))
         self.assertEqual(slippage_label(None), '')
+
+    def test_manual_close_null_long_defaults_to_zero_not_open_fill(self):
+        """Jul 2 spread kill — missing long STC must not infer open long fill (0.37)."""
+        state = {
+            'status': 'closed',
+            'short_close_price': 0.20,
+            'long_close_price': None,
+            'long_leg': {'fill_price': 0.37},
+            'close_mechanism': 'manual_close',
+        }
+        self.assertEqual(brokerage_spread_exit_debit(state), 0.20)
+
+    def test_admin_killswitch_null_long_defaults_to_zero(self):
+        state = {
+            'short_close_price': 1.05,
+            'long_leg': {'fill_price': 0.40},
+            'close_mechanism': 'admin_killswitch',
+        }
+        self.assertEqual(brokerage_spread_exit_debit(state), 1.05)
+
+    def test_exchange_stop_null_long_no_open_fill_inference(self):
+        """Stop/breach exits — no inference; brokerage exit unknown until long leg recorded."""
+        state = {
+            'short_close_price': 3.4,
+            'long_leg': {'fill_price': 1.25},
+            'close_mechanism': 'exchange_stop',
+        }
+        self.assertIsNone(brokerage_spread_exit_debit(state))
+        self.assertIsNone(stop_out_slippage_per_spread(state))
 
     def test_slippage_dollars_scales_qty(self):
         state = {

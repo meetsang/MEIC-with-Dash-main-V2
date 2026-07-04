@@ -42,17 +42,23 @@ OPERATOR_SLIPPAGE_MECHANISMS = frozenset({
     'stop_filled',
 })
 
+# Operator kill paths — null long_close_price defaults to 0.0 (V2.9), not open-fill inference.
+MANUAL_KILL_MECHANISMS = frozenset({
+    'manual_close',
+    'admin_killswitch',
+})
+
 
 def _resolved_long_close_price(state: Dict[str, Any]) -> Optional[float]:
-    """Long STC fill; when missing, infer from open long fill (spread-close JSON gap)."""
+    """Long STC fill; manual kill with missing leg uses 0.0 (V2.9), not open long fill."""
     long_close = state.get('long_close_price')
     if long_close is not None:
         return float(long_close)
     if state.get('short_close_price') is None:
         return None
-    long_fill = (state.get('long_leg') or {}).get('fill_price')
-    if long_fill is not None and float(long_fill) > 0:
-        return float(long_fill)
+    mechanism = str(state.get('close_mechanism') or '').lower()
+    if mechanism in MANUAL_KILL_MECHANISMS:
+        return 0.0
     return None
 
 
