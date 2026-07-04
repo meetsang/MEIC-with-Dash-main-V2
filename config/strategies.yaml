@@ -1,0 +1,16 @@
+# V2 strategy registry — enable/disable without code changes.
+strategies:
+  - name: MEIC_IC
+    enabled: true
+    module: strategies.meic.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: meic_credit_spread
+
+  - name: MANUAL_SPREAD
+    enabled: true
+    module: strategies.manual_spread.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: meic_credit_spread
+    scheduled: false

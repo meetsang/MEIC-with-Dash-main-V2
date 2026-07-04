@@ -1,0 +1,13 @@
+requests
+rauth
+paho-mqtt
+openpyxl
+pandas
+schwab-py
+python-dotenv
+flask
+flask-socketio
+pandas-market-calendars
+beautifulsoup4
+tastytrade>=12.4.0
+pyyaml>=6.0

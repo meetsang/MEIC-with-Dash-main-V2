@@ -1,0 +1,3061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>MEIC Autotrader Dashboard</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bs-body-bg:#0f1117; --bs-body-color:#e2e8f0; }
+  body  { background:#0f1117; color:#e2e8f0; font-family:'Segoe UI',sans-serif; }
+  .card { background:#1a1d27; border:1px solid #2d3148; border-radius:12px; }
+  .card-header { background:#22263a; border-bottom:1px solid #2d3148; font-weight:600; letter-spacing:.04em; }
+  .table { --bs-table-bg:transparent; --bs-table-border-color:#2d3148; color:#e2e8f0; }
+  .table thead th { color:#94a3b8; font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; border-bottom:2px solid #2d3148; }
+  .badge-lot { background:#2d3148; color:#94a3b8; font-size:.7rem; padding:3px 8px; border-radius:6px; }
+  .pnl-card  { border-radius:14px; padding:1.2rem 1.6rem; }
+  .pnl-pos   { background:linear-gradient(135deg,#0d3d26,#14532d); border:1px solid #16a34a; }
+  .pnl-neg   { background:linear-gradient(135deg,#3d0d0d,#531414); border:1px solid #dc2626; }
+  .pnl-zero  { background:#1a1d27; border:1px solid #2d3148; }
+  .pnl-card .pnl-sub-stat { margin-top:.65rem; padding-top:.55rem; border-top:1px solid rgba(255,255,255,.12); }
+  .pnl-zero .pnl-sub-stat { border-top-color:#2d3148; }
+  .pnl-sub-label { display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.1em; color:#94a3b8; margin-bottom:.15rem; }
+  .pnl-pos .pnl-sub-label, .pnl-neg .pnl-sub-label { color:rgba(255,255,255,.75); }
+  .pnl-sub-value { font-family:monospace; font-size:1.05rem; font-weight:700; }
+  .pnl-sub-value.slip-pos { color:#4ade80; }
+  .pnl-sub-value.slip-neg { color:#f87171; }
+  .pnl-sub-value.slip-zero { color:#cbd5e1; }
+  .pnl-pos #day-pnl, .pnl-neg #day-pnl { color:#f8fafc !important; }
+  .price-pill { background:#0f172a; border:1px solid #2d3148; border-radius:8px; padding:4px 12px; font-size:.85rem; font-family:monospace; }
+  .btn-ctrl  { border-radius:10px; font-weight:600; letter-spacing:.03em; padding:.5rem 1.2rem; }
+  .btn-start { background:#16a34a; border:none; color:#fff; }
+  .btn-start:hover { background:#15803d; color:#fff; }
+  .btn-stop  { background:#d97706; border:none; color:#fff; }
+  .btn-stop:hover  { background:#b45309; color:#fff; }
+  .btn-kill  { background:#dc2626; border:none; color:#fff; }
+  .btn-kill:hover  { background:#b91c1c; color:#fff; }
+  .btn-pause { background:#d97706; border:none; color:#fff; }
+  .btn-pause:hover { background:#b45309; color:#fff; }
+  .btn-token { background:#7c3aed; border:none; color:#fff; }
+  .btn-token:hover { background:#6d28d9; color:#fff; }
+  .status-dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px; }
+  .dot-green  { background:#22c55e; box-shadow:0 0 6px #22c55e; animation:pulse 2s infinite; }
+  .dot-red    { background:#ef4444; }
+  .dot-yellow { background:#eab308; box-shadow:0 0 4px #eab308; }
+  .dot-grey   { background:#4b5563; }
+  .dot-blue   { background:#3b82f6; box-shadow:0 0 4px #3b82f6; }
+  .dot-orange { background:#f97316; box-shadow:0 0 4px #f97316; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  .log-box { background:#0a0c13; border:1px solid #2d3148; border-radius:8px;
+             font-family:monospace; font-size:.72rem; color:#94a3b8;
+             height:180px; overflow-y:auto; padding:10px; white-space:pre-wrap; }
+  .section-title { font-size:.8rem; text-transform:uppercase; letter-spacing:.1em; color:#64748b; margin-bottom:.5rem; }
+  #toast-container { position:fixed; top:18px; right:18px; z-index:9999; }
+  .nav-tabs { border-bottom:1px solid #2d3148; }
+  .nav-tabs .nav-link { color:#94a3b8; border:none; border-bottom:2px solid transparent; border-radius:0; padding:.5rem 1.1rem; }
+  .nav-tabs .nav-link.active { color:#f8fafc; border-bottom-color:#6366f1; background:transparent; }
+  .nav-tabs .nav-link:hover  { color:#e2e8f0; }
+  .stat-card { background:#22263a; border:1px solid #2d3148; border-radius:12px; padding:1rem 1.2rem; text-align:center; }
+  .stat-val  { font-size:1.6rem; font-weight:700; }
+  .table-hover tbody tr:hover { background:#22263a!important; cursor:default; }
+  .del-btn { opacity:0; transition:opacity .15s; }
+  tr:hover .del-btn { opacity:1; }
+
+  /* Tranche grid */
+  .tranche-group { border:1px solid #2d3148; border-radius:10px; margin-bottom:2px; overflow:hidden; }
+  .tranche-group-header { background:#181b28; padding:4px 12px; font-size:.75rem; font-weight:700; color:#94a3b8; letter-spacing:.06em; }
+  #grid-tbody tr.grid-totals-row td {
+    background: #1a1f2e;
+    border-bottom: 2px solid #3b4061;
+    padding: 8px 10px;
+    vertical-align: middle;
+  }
+  #grid-tbody tr.grid-totals-row .grid-totals-label {
+    color: #94a3b8;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .tranche-row { font-size:.82rem; }
+  .tranche-row td { padding:5px 8px !important; vertical-align:middle; color:#e2e8f0; }
+  /* Bootstrap .text-muted is too dark on our #0f1117 grid rows */
+  .tranche-row .text-muted { color:#cbd5e1 !important; }
+  #tranche-grid-container .tranche-row .grid-cell { color:#f1f5f9; }
+  #tranche-grid-container .tranche-row .grid-dim { color:#cbd5e1 !important; }
+  #tranche-grid-container .tranche-row .font-monospace { color:#e2e8f0; }
+  #tranche-grid-container .tranche-group-header {
+    padding: 2px 8px;
+    font-size: .7rem;
+    line-height: 1.2;
+  }
+  @media (max-width: 768px) {
+    #tranche-grid-container .tranche-group-header {
+      padding: 1px 8px;
+      font-size: .68rem;
+      line-height: 1.1;
+    }
+    #tranche-grid-container .tranche-row td {
+      padding: 2px 5px !important;
+      font-size: .76rem;
+      line-height: 1.2;
+    }
+    #tranche-grid-container .grid-leg-badge {
+      font-size: .62rem;
+      padding: 1px 4px;
+    }
+    #tranche-grid-container .badge-lot {
+      font-size: .68rem;
+      padding: 1px 5px;
+    }
+    #tranche-grid-container thead th {
+      padding: 4px 5px;
+      font-size: .68rem;
+    }
+    #tranche-grid-container tr.grid-totals-row td {
+      padding: 4px 5px;
+    }
+    #tranche-grid-container .status-dot {
+      width: 7px;
+      height: 7px;
+      margin-right: 3px;
+    }
+  }
+  .setup-logs-panel-header { cursor: pointer; user-select: none; }
+  .pnl-strategy-row .stat-card { padding: 0.75rem 1rem; }
+  .pnl-strategy-row .stat-val { font-size: 1.35rem; }
+  .strategy-pill-meic { background: rgba(59,130,246,.2); color: #93c5fd; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+  .strategy-pill-manual { background: rgba(234,179,8,.15); color: #fcd34d; font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+  .state-pending  { color:#6b7280; }
+  .state-open     { color:#22c55e; }
+  .state-closing  { color:#3b82f6; }
+  .state-working  { color:#eab308; }
+  .state-closed   { color:#6b7280; }
+  .state-killed   { color:#ef4444; }
+  .state-paused   { color:#eab308; }
+  .state-breached { color:#f97316; }
+
+  .state-bg-pending  { }
+  .state-bg-open     { background:rgba(34,197,94,.06); }
+  .state-bg-closing  { background:rgba(59,130,246,.08); }
+  .state-bg-closed   { background:rgba(107,114,128,.06); }
+  .state-bg-killed   { background:rgba(239,68,68,.08); }
+  .state-bg-paused   { background:rgba(234,179,8,.06); }
+  .state-bg-breached { background:rgba(249,115,22,.08); }
+
+  /* Manual spread — scan candidates (Bootstrap text-muted is too dark on #1a1d27) */
+  #ms-candidates tr.ms-cand-row td {
+    color: #f1f5f9;
+    font-size: 0.88rem;
+    padding: 8px 10px !important;
+    vertical-align: middle;
+  }
+  #ms-candidates tr.ms-cand-row .font-monospace {
+    color: #e2e8f0;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+  #ms-candidates tr.ms-cand-row .ms-mkt-credit {
+    color: #4ade80;
+    font-weight: 700;
+    font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  }
+  #ms-candidates tr.ms-cand-row .ms-delta {
+    color: #93c5fd;
+    font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  }
+  #ms-candidates tr.ms-cand-row:hover { background: #22263a !important; cursor: pointer; }
+  #ms-candidates tr.ms-cand-row.ms-cand-selected {
+    background: rgba(99, 102, 241, 0.18) !important;
+    box-shadow: inset 3px 0 0 #6366f1;
+  }
+  #ms-candidates tr.ms-cand-warn td { color: #cbd5e1; }
+  #ms-candidates tr.ms-cand-warn .ms-warn-label { color: #fbbf24; font-weight: 600; }
+  #strategy-manual #ms-candidates .text-muted,
+  #strategy-manual #ms-active-tbody .text-muted { color: #94a3b8 !important; }
+  /* Active manual spreads — force readable cells on dark card */
+  #strategy-manual #ms-active-tbody tr.ms-active-row td {
+    color: #e2e8f0;
+    font-size: 0.88rem;
+    padding: 8px 10px !important;
+    vertical-align: middle;
+    border-bottom: 1px solid #2d3148;
+  }
+  #strategy-manual #ms-active-tbody tr.ms-active-row:hover td {
+    background: #22263a;
+  }
+  #strategy-manual #ms-active-tbody tr.ms-active-row.ms-active-selected td {
+    background: rgba(99, 102, 241, 0.18) !important;
+    box-shadow: inset 3px 0 0 #6366f1;
+  }
+  #strategy-manual #ms-active-tbody tr.ms-active-row { cursor: pointer; }
+  #strategy-manual #ms-active-tbody .ms-val {
+    color: #f1f5f9;
+    font-weight: 500;
+  }
+  #strategy-manual #ms-active-tbody .font-monospace,
+  #strategy-manual #ms-active-tbody .ms-mono {
+    color: #e2e8f0 !important;
+    font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  }
+  #strategy-manual #ms-active-tbody .ms-empty {
+    color: #94a3b8 !important;
+  }
+  #strategy-manual #ms-active-tbody .badge-lot {
+    background: #374151;
+    color: #f1f5f9;
+    font-weight: 600;
+  }
+  #strategy-manual #ms-active-tbody .ms-pnl-muted {
+    color: #94a3b8 !important;
+    font-weight: 600;
+  }
+  #strategy-manual #ms-active-tbody .ms-state {
+    color: #e2e8f0;
+    font-weight: 600;
+  }
+  #strategy-manual #ms-active-tbody .ms-state.state-working { color: #fbbf24; }
+  #strategy-manual #ms-active-tbody .ms-state.state-open { color: #4ade80; }
+  #strategy-manual #ms-active-tbody .ms-state.state-closing { color: #60a5fa; }
+  #strategy-manual #ms-active-tbody .ms-state.state-closed { color: #94a3b8; }
+
+  /* GEX tab */
+  .gex-regime-banner {
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+  }
+  .gex-regime-positive {
+    background: linear-gradient(135deg, rgba(22,163,74,.18), rgba(20,83,45,.35));
+    border-color: #16a34a;
+    color: #bbf7d0;
+  }
+  .gex-regime-negative {
+    background: linear-gradient(135deg, rgba(220,38,38,.15), rgba(127,29,29,.35));
+    border-color: #dc2626;
+    color: #fecaca;
+  }
+  .gex-kpi {
+    background: #22263a;
+    border: 1px solid #2d3148;
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+    height: 100%;
+  }
+  .gex-kpi .gex-kpi-val {
+    font-size: 1.35rem;
+    font-weight: 700;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+    margin-top: 0.25rem;
+  }
+  .gex-kpi .gex-kpi-sub {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 0.15rem;
+  }
+  .gex-level-call { color: #4ade80; }
+  .gex-level-put { color: #f87171; }
+  .gex-level-flip { color: #e2e8f0; }
+  .gex-guide {
+    background: #181b28;
+    border: 1px solid #2d3148;
+    border-radius: 12px;
+    padding: 1.1rem 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: #cbd5e1;
+  }
+  .gex-guide h6 { color: #f1f5f9; font-weight: 600; margin-bottom: 0.5rem; }
+  .gex-guide ul { margin-bottom: 0.75rem; padding-left: 1.2rem; }
+  .gex-guide li { margin-bottom: 0.35rem; }
+  #gex-strike-table tr.gex-spot-row td {
+    background: rgba(99,102,241,.12) !important;
+    border-top: 1px solid #6366f1;
+    border-bottom: 1px solid #6366f1;
+  }
+  #gex-strike-table tbody tr td {
+    color: #f1f5f9;
+    font-size: 0.88rem;
+    padding: 8px 10px !important;
+    vertical-align: middle;
+    border-bottom-color: #2d3148;
+  }
+  #gex-strike-table tbody tr:hover td {
+    background: #22263a !important;
+  }
+  #gex-strike-table .gex-strike-val {
+    color: #f8fafc;
+    font-weight: 600;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+  }
+  #gex-strike-table .gex-oi {
+    color: #cbd5e1 !important;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+  }
+  #gex-strike-table .text-muted { color: #94a3b8 !important; }
+  #gex-strike-scroll::-webkit-scrollbar { width: 8px; }
+  #gex-strike-scroll::-webkit-scrollbar-track { background: #181b28; }
+  #gex-strike-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+  #gex-strike-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  .gex-bar-pos { color: #4ade80; font-weight: 600; }
+  .gex-bar-neg { color: #f87171; font-weight: 600; }
+
+  /* GEX heatmap grid */
+  .gex-hm-wrap {
+    overflow: auto;
+    max-height: 72vh;
+    border-radius: 0 0 12px 12px;
+  }
+  .gex-hm-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
+  .gex-hm-wrap::-webkit-scrollbar-track { background: #181b28; }
+  .gex-hm-wrap::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+  .gex-hm-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.72rem;
+    width: max-content;
+    min-width: 100%;
+  }
+  .gex-hm-table th, .gex-hm-table td {
+    padding: 4px 8px;
+    text-align: right;
+    white-space: nowrap;
+    border: 1px solid #2d3148;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+  }
+  .gex-hm-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #22263a;
+    color: #94a3b8;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: center;
+  }
+  .gex-hm-table .gex-hm-strike {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #1a1d27;
+    color: #f1f5f9;
+    font-weight: 600;
+    text-align: right;
+    min-width: 52px;
+  }
+  .gex-hm-table thead .gex-hm-strike {
+    z-index: 4;
+    background: #22263a;
+  }
+  .gex-hm-table tr.gex-hm-spot .gex-hm-strike {
+    box-shadow: inset 0 0 0 2px #f8fafc;
+    color: #f8fafc;
+  }
+  .gex-hm-table tr.gex-hm-spot td {
+    box-shadow: inset 0 0 0 1px rgba(248,250,252,.35);
+  }
+  .gex-hm-cell { font-weight: 500; transition: background 0.15s; }
+  .gex-hm-cell.gex-hm-peak {
+    box-shadow: inset 0 0 0 2px #38bdf8;
+    font-weight: 700;
+  }
+  .gex-hm-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+    padding: 0.75rem 1rem;
+    background: #181b28;
+    border-bottom: 1px solid #2d3148;
+    font-size: 0.82rem;
+  }
+  .gex-hm-summary .hm-stat-label { color: #64748b; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  .gex-hm-summary .hm-stat-val { color: #f1f5f9; font-weight: 700; font-family: ui-monospace, monospace; }
+  #gexSubTabs .nav-link { font-size: 0.85rem; padding: 0.4rem 1rem; }
+  #strategy-manual #ms-active-tbody .ms-state.state-killed { color: #f87171; }
+  #strategy-manual #ms-cancel-btn {
+    background: #475569;
+    border: 1px solid #64748b;
+    color: #f8fafc;
+  }
+  #strategy-manual #ms-cancel-btn:hover {
+    background: #64748b;
+    color: #fff;
+  }
+  #strategy-manual .plan-input,
+  #strategy-manual .form-select.plan-input { background:#0f1117; color:#e2e8f0; border-color:#2d3148; }
+  #strategy-manual .ms-place-hint { color:#94a3b8; font-size:.78rem; line-height:1.4; }
+  #strategy-manual .ms-chase-fields.d-none { display:none !important; }
+  #ms-selected-label {
+    color: #a5b4fc !important;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .grid-leg-badge {
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    line-height: 1.12;
+    text-align: center;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .grid-leg-strikes {
+    display: inline-block;
+    white-space: nowrap;
+  }
+  @media (max-width: 768px) {
+    .grid-leg-strikes {
+      white-space: normal;
+      display: block;
+      font-size: .62rem;
+      line-height: 1.1;
+    }
+  }
+
+  /* Change 3 — strike columns on dark rows (MEIC tranche grid + Manual active) */
+  .grid-strike {
+    color: #e2e8f0 !important;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .plan-input { background:#0f1117; color:#e2e8f0; border:1px solid #2d3148; border-radius:4px;
+                font-size:.72rem; padding:2px 4px; min-width:0; }
+  .plan-input:disabled { opacity:.55; }
+  .plan-row-locked td { opacity:.85; }
+  .plan-row-draft td { box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.35); }
+  .plan-master-row td {
+    background: #1a1f2e;
+    border-bottom: 2px solid #3b4061;
+    padding: 6px 8px !important;
+    vertical-align: middle;
+  }
+  .plan-master-label {
+    color: #94a3b8;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .plan-save-btn { font-size:.65rem; padding:2px 6px; }
+
+  /* Health panel */
+  .health-bar { display:flex; gap:1.5rem; flex-wrap:wrap; font-size:.78rem; }
+  .health-item { display:flex; align-items:center; gap:4px; }
+
+  /* Trading Calendar Styles */
+  .trading-calendar { --cal-bg:#0d0d0d; --cell-bg:#1a1a1a; --cell-highlight:#1e3a2e; --cell-win:#2d6a4f; --accent-green:#00e676; --text-muted:#6b7280; }
+  .cal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+  .cal-title { font-size:1.25rem; font-weight:700; color:#fff; }
+  .cal-nav { display:flex; align-items:center; gap:1rem; }
+  .cal-month { font-size:1rem; font-weight:600; color:#fff; min-width:120px; text-align:center; }
+  .cal-toggle { display:flex; background:#1a1a1a; border-radius:8px; padding:4px; }
+  .cal-toggle-btn { padding:6px 14px; border:none; background:transparent; color:#94a3b8; font-size:.8rem; font-weight:600; cursor:pointer; border-radius:6px; transition:all .2s; }
+  .cal-toggle-btn.active { background:#2d6a4f; color:#fff; }
+  .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .cal-header-row { display:grid; grid-template-columns:repeat(7,1fr); text-align:center; margin-bottom:0.5rem; }
+  .cal-dow { font-size:.7rem; text-transform:uppercase; color:#6b7280; font-weight:600; letter-spacing:.05em; }
+  .cal-cell { background:var(--cell-bg); border-radius:8px; padding:8px; position:relative; min-height:80px; display:flex; flex-direction:column; transition:all .2s; }
+  .cal-cell:hover { transform:scale(1.03); z-index:1; box-shadow:0 4px 12px rgba(0,0,0,.3); }
+  .cal-cell.has-trading { background:var(--cell-highlight); }
+  .cal-cell.win-day { background:var(--cell-win); }
+  .cal-date { font-size:.85rem; font-weight:600; color:#fff; margin-bottom:4px; }
+  .cal-pnl { font-size:1rem; font-weight:700; color:var(--accent-green); margin-bottom:2px; }
+  .cal-pnl.loss { color:#ef4444; }
+  .cal-pnl-label { font-size:.55rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); margin-bottom:1px; }
+  .cal-split { font-size:.62rem; line-height:1.2; color:var(--text-muted); margin-bottom:2px; }
+  .cal-winrate { font-size:.7rem; color:var(--text-muted); }
+  .cal-empty { background:var(--cell-bg); border-radius:8px; }
+  .cal-footer { display:flex; justify-content:space-between; align-items:center; margin-top:1rem; }
+  .cal-btn { background:#2d3148; border:none; color:#e2e8f0; width:36px; height:36px; border-radius:8px; font-size:1.1rem; cursor:pointer; transition:all .2s; display:flex; align-items:center; justify-content:center; }
+  .cal-btn:hover { background:#3b4061; }
+  .cal-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .cal-tooltip { position:fixed; background:#1a1d27; border:1px solid #2d3148; border-radius:10px; padding:12px; font-size:.85rem; z-index:1000; box-shadow:0 8px 24px rgba(0,0,0,.5); display:none; max-width:220px; }
+  .cal-tooltip .tt-date { font-weight:700; color:#fff; margin-bottom:6px; }
+  .cal-tooltip .tt-row { display:flex; justify-content:space-between; margin-bottom:4px; }
+  .cal-tooltip .tt-label { color:#94a3b8; }
+  .cal-tooltip .tt-val { font-weight:600; }
+  .cal-tooltip .tt-val.win { color:#00e676; }
+  .cal-tooltip .tt-val.loss { color:#ef4444; }
+  .cal-tooltip .tt-val.total { color:#fff; font-size:1.1rem; margin-top:8px; padding-top:8px; border-top:1px solid #2d3148; }
+</style>
+</head>
+<body>
+
+<div id="toast-container"></div>
+
+<!-- Navbar -->
+<nav class="navbar px-4 py-2" style="background:#13162a;border-bottom:1px solid #2d3148;">
+  <span class="navbar-brand text-white fw-bold fs-5">MEIC Autotrader</span>
+  <div class="d-flex align-items-center gap-3">
+    <span class="price-pill">SPX <span id="spx-price">&ndash;</span></span>
+    <span class="price-pill text-muted" id="last-updated">&ndash;</span>
+    <span id="conn-status">
+      <span class="status-dot dot-grey" id="conn-dot"></span>
+      <small id="conn-label">Connecting&hellip;</small>
+    </span>
+  </div>
+</nav>
+
+<div class="container-fluid px-4 pt-3 pb-5">
+
+  <!-- Status Banner -->
+  <div id="status-banner" class="alert mb-3 d-none" role="alert" style="border-radius:10px;"></div>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs mb-3" id="mainTabs">
+    <li class="nav-item"><a class="nav-link active" href="#" onclick="showTab('today');return false;"><i class="bi bi-activity me-1"></i>Today</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('history');return false;"><i class="bi bi-clock-history me-1"></i>History</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('gex');return false;"><i class="bi bi-bar-chart-steps me-1"></i>GEX</a></li>
+  </ul>
+
+  <!-- ═══ TODAY TAB ═══ -->
+  <div id="tab-today">
+
+    <!-- Strategy sub-tabs -->
+    <div class="row g-2 mb-3 pnl-strategy-row" id="pnl-by-strategy-row">
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">MEIC P&amp;L</div>
+          <div class="stat-val" id="pnl-meic-today">$0.00</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">Manual P&amp;L</div>
+          <div class="stat-val" id="pnl-manual-today">$0.00</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">Combined</div>
+          <div class="stat-val" id="pnl-combined-today">$0.00</div>
+        </div>
+      </div>
+    </div>
+    <ul class="nav nav-tabs mb-3" id="strategyTabs" style="border-bottom-color:#2d3148;">
+      <li class="nav-item"><a class="nav-link active" href="#" onclick="showStrategy('meic');return false;">MEIC</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('manual');return false;">Manual Spread</a></li>
+    </ul>
+    <div id="manual-meic-banner" class="alert alert-warning mb-3 d-none" style="border-radius:10px;"></div>
+
+    <div id="strategy-meic">
+    <!-- Top Row: PnL + Bot Status + System Health -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-3">
+        <div id="pnl-card" class="pnl-card pnl-zero">
+          <div class="section-title">Day P&amp;L (realised + open)</div>
+          <div id="day-pnl" class="fs-2 fw-bold">$0.00</div>
+          <div class="pnl-sub-stat">
+            <span class="pnl-sub-label">Net slippage (theoretical stop vs brokerage)</span>
+            <span id="day-slippage" class="pnl-sub-value slip-zero">&ndash;</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+          <div class="section-title">Bot Status</div>
+          <div class="d-flex align-items-center gap-2 mt-1">
+            <span class="status-dot dot-grey" id="bot-dot"></span>
+            <span id="bot-label" class="fw-semibold">Stopped</span>
+          </div>
+          <small class="text-muted d-block mt-1" id="bot-reason"></small>
+          <small class="text-muted" id="open-count">0 open, 0 closed</small>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+          <div class="section-title">System Health</div>
+          <div class="health-bar mt-1" id="health-bar">
+            <div class="health-item"><span class="status-dot dot-grey"></span>Launcher</div>
+            <div class="health-item"><span class="status-dot dot-grey"></span>Streamer</div>
+            <div class="health-item"><span class="status-dot dot-grey"></span>Stop Monitor</div>
+            <div class="health-item"><span class="status-dot dot-grey"></span>MQTT SPX</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-joystick me-2"></i>Controls</div>
+      <div class="card-body d-flex flex-wrap gap-2 align-items-center">
+        <button class="btn btn-ctrl btn-kill btn-sm" onclick="killAll()"><i class="bi bi-exclamation-octagon-fill me-1"></i>Kill All Positions</button>
+        <button class="btn btn-ctrl btn-stop btn-sm" onclick="stopBot()"><i class="bi bi-stop-fill me-1"></i>Stop Bot</button>
+        <div class="vr mx-1" style="border-color:#2d3148;"></div>
+        <button class="btn btn-ctrl btn-kill btn-sm" onclick="killSelected()"><i class="bi bi-x-circle me-1"></i>Kill Selected</button>
+        <button class="btn btn-ctrl btn-pause btn-sm" onclick="pauseSelected()" title="Pause rows checked in Session Plan (Sel column)"><i class="bi bi-pause-circle me-1"></i>Pause Selected</button>
+        <button class="btn btn-ctrl btn-pause btn-sm" onclick="pauseAllMeic()" title="Pauses both Put and Call for every tranche lot"><i class="bi bi-pause-fill me-1"></i>Pause All MEIC</button>
+        <button class="btn btn-ctrl btn-sm" style="background:#16a34a;border:none;color:#fff;" onclick="unpauseAllMeic()" title="Unpauses both Put and Call for every tranche lot"><i class="bi bi-play-fill me-1"></i>Unpause All MEIC</button>
+        <button class="btn btn-ctrl btn-sm" style="background:#15803d;border:none;color:#fff;" onclick="unpauseSelected()" title="Unpause rows checked in Session Plan (Sel column)"><i class="bi bi-play-circle me-1"></i>Unpause Selected</button>
+      </div>
+    </div>
+
+    <!-- Tranche Grid -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-grid-3x3 me-2 text-info"></i>Tranche Grid</span>
+        <div class="d-flex align-items-center gap-2">
+          <label class="form-check-label small text-muted" for="select-all-cb">Select All</label>
+          <input class="form-check-input" type="checkbox" id="select-all-cb" onchange="toggleSelectAll(this.checked)" style="cursor:pointer;">
+        </div>
+      </div>
+      <div class="card-body p-0" id="tranche-grid-container">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr>
+              <th style="width:30px;"></th>
+              <th>Lot</th><th>Leg</th><th>State</th>
+              <th>Entry</th><th>Live P&amp;L</th>
+              <th title="Long with * = live mid while closing">Exit</th>
+              <th title="Theoretical set stop (stop× net credit) vs brokerage spread exit; + = at or better than stop">Slippage</th>
+              <th>Qty</th>
+              <th>Short $</th><th>Long $</th><th>Spread</th>
+              <th>Phase</th><th>Stop #</th><th title="Stop trigger / limit price">Stop/Limit $</th>
+              <th title="Software spread breach: threshold / gap (+ room, − at/past)">SW Breach</th>
+            </tr></thead>
+            <tbody id="grid-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session Plan + Logs (collapsed by default — no render/poll until opened) -->
+    <div class="card mb-3">
+      <div class="card-header setup-logs-panel-header d-flex justify-content-between align-items-center flex-wrap gap-2" onclick="toggleSetupLogsPanel()">
+        <span><i class="bi bi-sliders me-2 text-warning"></i>Session Plan &amp; Logs</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); toggleSetupLogsPanel()">
+          <i class="bi bi-chevron-down" id="setup-logs-chevron"></i> <span id="setup-logs-toggle-label">Show</span>
+        </button>
+      </div>
+      <div id="setup-logs-panel" class="d-none">
+        <div class="card-body p-0 border-bottom border-secondary">
+          <div class="px-3 py-2">
+            <small class="text-muted">Edit the <strong>All tranches</strong> row to set qty, width, credits, stop, and chase for every slot at once. Per-row window times and pause/skip stay on each tranche. Use <strong>Sel</strong> for Pause/Unpause Selected.</small>
+          </div>
+          <div class="table-responsive" id="session-plan-table-wrap">
+            <table class="table table-sm mb-0">
+              <thead><tr>
+                <th title="Select for Pause/Unpause Selected">Sel</th>
+                <th>Lot</th><th>Side</th><th>Window (CT)</th><th>Qty</th><th>Width</th>
+                <th>Cr Min</th><th>Cr Max</th><th>Stop×</th>
+                <th>Chase 1</th><th>Chase 2</th><th>Paused</th><th>Skip</th><th>State</th><th></th>
+              </tr></thead>
+              <tbody id="session-plan-tbody">
+                <tr><td colspan="15" class="text-center text-muted py-3">Open panel to load session plan…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="row g-3 p-3">
+          <div class="col-md-4">
+            <div class="card mb-0">
+              <div class="card-header py-2"><i class="bi bi-terminal me-2"></i>Launcher Log</div>
+              <div class="card-body p-2"><div class="log-box" id="launcher-log">(collapsed)</div></div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card mb-0">
+              <div class="card-header py-2"><i class="bi bi-shield-check me-2"></i>Stop Monitor Log</div>
+              <div class="card-body p-2"><div class="log-box" id="stop-monitor-log">(collapsed)</div></div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card mb-0">
+              <div class="card-header py-2"><i class="bi bi-broadcast me-2"></i>Stream Log</div>
+              <div class="card-body p-2"><div class="log-box" id="stream-log">(collapsed)</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div><!-- /strategy-meic -->
+
+    <!-- ═══ MANUAL SPREAD TAB ═══ -->
+    <div id="strategy-manual" style="display:none;">
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <div class="pnl-card pnl-zero">
+            <div class="section-title">Manual Spread P&amp;L</div>
+            <div class="fs-2 fw-bold" id="ms-day-pnl">$0.00</div>
+            <div class="pnl-sub-stat">
+              <span class="pnl-sub-label">Net slippage (theoretical stop vs brokerage)</span>
+              <span id="ms-day-slippage" class="pnl-sub-value slip-zero">&ndash;</span>
+            </div>
+            <small class="text-muted" id="ms-open-count">0 open</small>
+          </div>
+        </div>
+        <div class="col-md-8">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">System Health</div>
+            <div class="health-bar mt-1" id="ms-health-bar"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-search me-2"></i>1. Scan Parameters</div>
+        <div class="card-body">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-2"><label class="section-title">Underlying</label><input class="form-control form-control-sm" id="ms-underlying" value="SPX" readonly style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-2"><label class="section-title">Expiry</label><input type="date" class="form-control form-control-sm" id="ms-expiry" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-2"><label class="section-title">Side</label>
+              <select class="form-select form-select-sm" id="ms-side" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                <option value="P" selected>Put (PCS)</option><option value="C">Call (CCS)</option>
+              </select>
+            </div>
+            <div class="col-md-1"><label class="section-title">Width</label><input type="number" class="form-control form-control-sm" id="ms-width" value="25" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-2"><label class="section-title">Target $</label><input type="number" step="0.05" class="form-control form-control-sm" id="ms-target" value="0.60" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-1"><label class="section-title">Qty</label><input type="number" class="form-control form-control-sm" id="ms-qty" value="1" min="1" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#6366f1;border:none;color:#fff;" id="ms-scan-btn" onclick="msScan()"><i class="bi bi-search me-1"></i>Scan</button></div>
+          </div>
+          <div id="ms-scan-status" class="small text-muted mt-2 d-none">Scanning&hellip;</div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-list-ol me-2"></i>2. Candidates</div>
+        <div class="card-body p-0">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th></th><th>Strikes</th><th>Mkt $</th><th>&Delta; Target</th><th>Short</th><th>Long</th><th>Warn</th></tr></thead>
+            <tbody id="ms-candidates"><tr><td colspan="7" class="text-center text-muted py-3">Run Scan to find spreads</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-cart-check me-2"></i>3. Place Order</div>
+        <div class="card-body">
+          <div class="row g-2 align-items-end mb-2">
+            <div class="col-md-3"><label class="section-title">Selected</label><div id="ms-selected-label" class="font-monospace">&mdash;</div></div>
+            <div class="col-md-2"><label class="section-title">Limit credit</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-limit" value="0.60"></div>
+            <div class="col-md-1"><label class="section-title">Qty</label><input type="number" class="form-control form-control-sm plan-input" id="ms-place-qty" value="1" min="1"></div>
+            <div class="col-md-1"><label class="section-title">Stop&times;</label><input type="number" step="0.1" min="0.5" max="10" class="form-control form-control-sm plan-input" id="ms-place-stop" value="2" title="Stop multiplier (e.g. 1.5, 2, 3)"></div>
+            <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#16a34a;border:none;color:#fff;" id="ms-place-btn" onclick="msPlace()" disabled>Place Trade</button></div>
+          </div>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3"><label class="section-title">If unfilled after wait</label>
+              <select class="form-select form-select-sm plan-input" id="ms-place-unfilled" onchange="msToggleChaseFields()">
+                <option value="none" selected>Leave order working</option>
+                <option value="chase_same_trade">Reprice same spread (&minus;$0.05)</option>
+              </select>
+            </div>
+            <div class="col-md-2"><label class="section-title">Wait per try (s)</label><input type="number" min="1" max="120" class="form-control form-control-sm plan-input" id="ms-place-fill-wait" value="5" title="Seconds to wait for fill before next reprice"></div>
+            <div class="col-md-2 ms-chase-fields d-none"><label class="section-title">Chase floor $</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-place-chase-floor" value="0.45" title="Lowest limit credit when repricing"></div>
+            <div class="col-md-2 ms-chase-fields d-none"><label class="section-title">Max reprices</label><input type="number" min="1" max="20" class="form-control form-control-sm plan-input" id="ms-place-chase-max" value="3" title="Cancel and reprice at most this many times"></div>
+          </div>
+          <p class="ms-place-hint mt-2 mb-0" id="ms-place-hint">Stop&times; and fill settings are saved to session CSV and trade JSON. Width comes from scan (step 1).</p>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-table me-2"></i>4. Active Manual Spreads</span>
+          <div class="d-flex gap-2">
+            <button class="btn btn-ctrl btn-sm" style="background:#d97706;border:none;color:#fff;" onclick="msModifySelected()">Modify Price</button>
+            <button class="btn btn-ctrl btn-sm" id="ms-cancel-btn" onclick="msCancelSelected()">Cancel Order</button>
+            <button class="btn btn-ctrl btn-sm" style="background:#475569;border:none;color:#fff;" onclick="msCloseSelected()">Close Selected</button>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0">
+            <thead><tr>
+              <th style="width:30px;"></th>
+              <th>Lot</th><th>Leg</th><th>State</th>
+              <th>Entry</th><th>Live P&amp;L</th>
+              <th title="Long with * = live mid while closing">Exit</th>
+              <th title="Theoretical set stop (stop× net credit) vs brokerage spread exit; + = at or better than stop">Slippage</th>
+              <th>Qty</th>
+              <th>Short $</th><th>Long $</th><th>Spread</th>
+              <th>Phase</th><th>Stop #</th><th title="Stop trigger / limit price">Stop/Limit $</th>
+              <th title="Software spread breach: threshold / gap (+ room, − at/past)">SW Breach</th>
+            </tr></thead>
+            <tbody id="ms-active-tbody"><tr><td colspan="16" class="text-center text-muted py-3">No manual spreads</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /strategy-manual -->
+
+  </div><!-- /tab-today -->
+
+  <!-- ═══ HISTORY TAB ═══ -->
+  <div id="tab-history" style="display:none;">
+    <!-- Strategy P&L summary -->
+    <div class="row g-2 mb-3 pnl-strategy-row">
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">MEIC (all time)</div>
+          <div class="stat-val" id="hist-pnl-meic">&ndash;</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">Manual (all time)</div>
+          <div class="stat-val" id="hist-pnl-manual">&ndash;</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-card">
+          <div class="section-title">Combined</div>
+          <div class="stat-val" id="hist-pnl-combined">&ndash;</div>
+        </div>
+      </div>
+    </div>
+    <!-- Stats row -->
+    <div class="row g-3 mb-3" id="stats-row">
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Total P&L</div><div class="stat-val" id="s-pnl">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Win Rate</div><div class="stat-val" id="s-winrate">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Avg Win</div><div class="stat-val text-success" id="s-avgwin">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Avg Loss</div><div class="stat-val text-danger" id="s-avgloss">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Best Trade</div><div class="stat-val text-success" id="s-best">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Worst Trade</div><div class="stat-val text-danger" id="s-worst">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Total Trades</div><div class="stat-val" id="s-total">&ndash;</div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-card"><div class="section-title">Trading Days</div><div class="stat-val" id="s-days">&ndash;</div></div></div>
+    </div>
+
+    <!-- Trading Calendar -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-calendar3 me-2"></i>Trading Calendar</span>
+        <div class="d-flex align-items-center gap-2">
+          <select id="hist-strategy-filter-cal" class="form-select form-select-sm"
+            style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:140px;"
+            onchange="onHistoryStrategyChange(this.value)">
+            <option value="">All strategies</option>
+            <option value="MEIC_IC">MEIC only</option>
+            <option value="MANUAL_SPREAD">Manual only</option>
+          </select>
+          <div class="cal-toggle">
+            <button class="cal-toggle-btn active" id="cal-pnl-btn" onclick="setCalendarMode('pnl')">PNL</button>
+            <button class="cal-toggle-btn" id="cal-events-btn" onclick="setCalendarMode('events')">Events</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="trading-calendar">
+          <div class="cal-header">
+            <div class="cal-title">Trading Calendar</div>
+            <div class="cal-nav">
+              <button class="cal-btn" onclick="prevMonth()"><i class="bi bi-chevron-left"></i></button>
+              <span class="cal-month" id="cal-month">June 2026</span>
+              <button class="cal-btn" onclick="nextMonth()"><i class="bi bi-chevron-right"></i></button>
+            </div>
+          </div>
+          <div class="cal-header-row">
+            <div class="cal-dow">Sun</div><div class="cal-dow">Mon</div><div class="cal-dow">Tue</div>
+            <div class="cal-dow">Wed</div><div class="cal-dow">Thu</div><div class="cal-dow">Fri</div>
+            <div class="cal-dow">Sat</div>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+          <div class="cal-footer">
+            <button class="cal-btn" onclick="goToday()"><i class="bi bi-house-door-fill"></i></button>
+            <div class="text-muted small">Click a day for details</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Daily P&L Chart -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bar-chart-fill me-2"></i>Daily P&L (last 30 days)</span>
+        <div class="d-flex gap-2 align-items-center">
+          <select id="hist-strategy-filter" class="form-select form-select-sm"
+            style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:140px;"
+            onchange="onHistoryStrategyChange(this.value)">
+            <option value="">All strategies</option>
+            <option value="MEIC_IC">MEIC only</option>
+            <option value="MANUAL_SPREAD">Manual only</option>
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+      </div>
+      <div class="card-body" style="height:240px;">
+        <canvas id="pnlChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Trade History Table -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-table me-2"></i>All Trades</span>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="date" id="filter-date" class="form-control form-control-sm"
+            style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:160px;"
+            onchange="loadHistory()"/>
+          <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('filter-date').value=''; loadHistory()">Clear</button>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr>
+              <th>Date</th><th>Strategy</th><th>Lot</th><th>Side</th><th>Short</th><th>Long</th>
+              <th>Qty</th><th>Credit</th><th>Debit</th><th>P&amp;L</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="history-tbody">
+              <tr><td colspan="12" class="text-center text-muted py-3">Loading&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- /tab-history -->
+
+  <!-- ═══ GEX TAB ═══ -->
+  <div id="tab-gex" style="display:none;">
+
+    <!-- GEX sub-tabs -->
+    <ul class="nav nav-tabs mb-3" id="gexSubTabs" style="border-bottom-color:#2d3148;">
+      <li class="nav-item"><a class="nav-link active" href="#" onclick="showGexView('profile');return false;"><i class="bi bi-bar-chart me-1"></i>Profile</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showGexView('heatmap');return false;"><i class="bi bi-grid-3x3-gap me-1"></i>Heatmap</a></li>
+    </ul>
+
+    <!-- ── Profile view ── -->
+    <div id="gex-view-profile">
+
+    <!-- Controls -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span><i class="bi bi-lightning-charge me-2 text-warning"></i>Gamma Exposure Calculator</span>
+        <small class="text-muted">Dealer hedging profile from options open interest &amp; gamma</small>
+      </div>
+      <div class="card-body">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-2">
+            <label class="section-title">Ticker</label>
+            <select id="gex-ticker" class="form-select form-select-sm"
+              style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"
+              onchange="gexOnTickerChange()">
+              <option value="SPX" selected>SPX</option>
+              <option value="SPY">SPY</option>
+              <option value="QQQ">QQQ</option>
+              <option value="IWM">IWM</option>
+              <option value="NDX">NDX</option>
+              <option value="RUT">RUT</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="section-title">Expiration</label>
+            <select id="gex-expiry" class="form-select form-select-sm"
+              style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+              <option value="">Loading…</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="section-title">Strike range</label>
+            <select id="gex-range" class="form-select form-select-sm"
+              style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+              <option value="3">±3% of spot</option>
+              <option value="5" selected>±5% of spot</option>
+              <option value="8">±8% of spot</option>
+            </select>
+          </div>
+          <div class="col-md-3 d-flex gap-2">
+            <button class="btn btn-ctrl btn-sm flex-grow-1" style="background:#6366f1;border:none;color:#fff;"
+              onclick="loadGex()" id="gex-calc-btn">
+              <i class="bi bi-calculator me-1"></i>Calculate GEX
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadGex()" title="Refresh">
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+          </div>
+          <div class="col-md-2">
+            <small class="text-muted d-block" id="gex-updated">Not calculated yet</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Regime banner -->
+    <div id="gex-regime-banner" class="gex-regime-banner gex-regime-positive mb-3 d-none">
+      <i class="bi bi-shield-check me-2"></i><span id="gex-regime-text">—</span>
+    </div>
+
+    <!-- KPI row -->
+    <div class="row g-3 mb-3" id="gex-kpi-row">
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title">Net GEX</div>
+          <div class="gex-kpi-val" id="gex-kpi-net">&mdash;</div>
+          <div class="gex-kpi-sub">$/point move</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title">Spot</div>
+          <div class="gex-kpi-val" id="gex-kpi-spot">&mdash;</div>
+          <div class="gex-kpi-sub" id="gex-kpi-ticker-label">SPX</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title gex-level-call">Call Wall</div>
+          <div class="gex-kpi-val gex-level-call" id="gex-kpi-call">&mdash;</div>
+          <div class="gex-kpi-sub" id="gex-kpi-call-dist">&mdash;</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title gex-level-put">Put Wall</div>
+          <div class="gex-kpi-val gex-level-put" id="gex-kpi-put">&mdash;</div>
+          <div class="gex-kpi-sub" id="gex-kpi-put-dist">&mdash;</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title gex-level-flip">Gamma Flip</div>
+          <div class="gex-kpi-val" id="gex-kpi-flip">&mdash;</div>
+          <div class="gex-kpi-sub" id="gex-kpi-flip-dist">&mdash;</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <div class="gex-kpi">
+          <div class="section-title">Contracts</div>
+          <div class="gex-kpi-val" id="gex-kpi-contracts">&mdash;</div>
+          <div class="gex-kpi-sub" id="gex-kpi-strikes">&mdash;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-fill me-2"></i>GEX by Strike
+        <small class="text-muted ms-2">Green = call-dominated (dealers buy on rallies) · Red = put-dominated</small>
+      </div>
+      <div class="card-body" style="height:380px; position:relative;">
+        <canvas id="gexChart"></canvas>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+      <!-- Strike table -->
+      <div class="col-lg-7">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-table me-2"></i>Strike Profile</div>
+          <div class="card-body p-0">
+            <div class="table-responsive" id="gex-strike-scroll" style="max-height:420px; overflow-y:auto;">
+              <table class="table table-sm table-hover mb-0" id="gex-strike-table">
+                <thead style="position:sticky;top:0;background:#22263a;z-index:1;">
+                  <tr>
+                    <th>Strike <span class="text-muted fw-normal" style="font-size:.65rem">↑ low→high</span></th>
+                    <th class="text-end">Call GEX</th>
+                    <th class="text-end">Put GEX</th>
+                    <th class="text-end">Net GEX</th>
+                    <th class="text-end">Call OI</th>
+                    <th class="text-end">Put OI</th>
+                  </tr>
+                </thead>
+                <tbody id="gex-strike-tbody">
+                  <tr><td colspan="6" class="text-center text-muted py-4">Select ticker &amp; expiry, then Calculate GEX</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- How to read / trade -->
+      <div class="col-lg-5">
+        <div class="gex-guide h-100">
+          <h6><i class="bi bi-book me-1"></i>How to Read This Chart</h6>
+          <ul>
+            <li><strong>Net GEX</strong> shows dealer delta hedging per 1-point move. Positive net GEX means dealers are net long gamma — they <em>sell</em> into rallies and <em>buy</em> dips, dampening volatility.</li>
+            <li><strong>Green bars</strong> (positive GEX) = call-heavy strikes where dealer hedging creates upward pressure/resistance as price approaches.</li>
+            <li><strong>Red bars</strong> (negative GEX) = put-heavy strikes where dealer hedging amplifies downward moves.</li>
+            <li>The <strong>cumulative line</strong> (purple) tracks running net GEX. Where it crosses zero is the <strong>gamma flip</strong> — the pivot between dampening and amplifying regimes.</li>
+            <li><strong>Spot line</strong> (dashed) marks current price relative to walls and flip.</li>
+          </ul>
+          <h6><i class="bi bi-compass me-1"></i>Trading Implications</h6>
+          <ul>
+            <li><strong>Positive gamma regime</strong> (net GEX &gt; 0): Favor range-bound strategies — iron condors, mean-reversion scalps. Expect pinning near high-OI strikes. Breakouts may fade.</li>
+            <li><strong>Negative gamma regime</strong> (net GEX &lt; 0): Trend moves can accelerate as dealers hedge in the same direction. Wider stops, smaller size, or sit out until regime shifts.</li>
+            <li><strong>Call wall</strong> above spot acts as resistance; <strong>put wall</strong> below acts as support. Price often gravitates between them in positive gamma.</li>
+            <li>Approaching <strong>gamma flip</strong> from below: volatility may increase as you enter negative gamma territory.</li>
+            <li><strong>0DTE caveat:</strong> OI is an overnight snapshot; gamma explodes near ATM as expiry approaches. Recalculate every 15–30 min on expiry day.</li>
+          </ul>
+          <p class="mb-0 text-muted small"><i class="bi bi-info-circle me-1"></i>GEX assumes dealers are net short customer options. This breaks down around major events or unusual positioning.</p>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /gex-view-profile -->
+
+    <!-- ── Heatmap view ── -->
+    <div id="gex-view-heatmap" style="display:none;">
+
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span><i class="bi bi-grid-3x3-gap me-2 text-info"></i>GEX Heatmap</span>
+          <small class="text-muted">Multi-expiry grid · manual refresh only</small>
+        </div>
+        <div class="card-body">
+          <div class="row g-3 align-items-end">
+            <div class="col-md-2">
+              <label class="section-title">Ticker</label>
+              <select id="gex-hm-ticker" class="form-select form-select-sm"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                <option value="SPX" selected>SPX</option>
+                <option value="SPY">SPY</option>
+                <option value="QQQ">QQQ</option>
+                <option value="IWM">IWM</option>
+                <option value="NDX">NDX</option>
+                <option value="RUT">RUT</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="section-title">Strike range</label>
+              <select id="gex-hm-range" class="form-select form-select-sm"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                <option value="3">±3%</option>
+                <option value="5" selected>±5%</option>
+                <option value="8">±8%</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <button class="btn btn-ctrl btn-sm w-100" style="background:#6366f1;border:none;color:#fff;"
+                onclick="loadGexHeatmap()" id="gex-hm-btn">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Heatmap
+              </button>
+            </div>
+            <div class="col-md-5">
+              <small class="text-muted d-block" id="gex-hm-updated">Click Refresh to load — auto-discovers expirations from today</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="gex-hm-summary" id="gex-hm-summary">
+          <div><span class="hm-stat-label">Spot</span><div class="hm-stat-val" id="gex-hm-spot">&mdash;</div></div>
+          <div><span class="hm-stat-label">Gamma Flip</span><div class="hm-stat-val" id="gex-hm-flip">&mdash;</div></div>
+          <div><span class="hm-stat-label">Total Net GEX</span><div class="hm-stat-val" id="gex-hm-total">&mdash;</div></div>
+          <div><span class="hm-stat-label">Gamma Slope</span><div class="hm-stat-val" id="gex-hm-slope">&mdash;</div></div>
+          <div><span class="hm-stat-label">Max +GEX</span><div class="hm-stat-val gex-bar-pos" id="gex-hm-maxpos">&mdash;</div></div>
+          <div><span class="hm-stat-label">Max −GEX</span><div class="hm-stat-val gex-bar-neg" id="gex-hm-maxneg">&mdash;</div></div>
+        </div>
+        <div class="gex-hm-wrap" id="gex-hm-scroll">
+          <table class="gex-hm-table" id="gex-hm-table">
+            <thead><tr id="gex-hm-head"><th class="gex-hm-strike">Strike</th></tr></thead>
+            <tbody id="gex-hm-body">
+              <tr><td colspan="2" class="text-center text-muted py-5" style="color:#94a3b8!important">Click Refresh Heatmap to build the grid</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /gex-view-heatmap -->
+
+  </div><!-- /tab-gex -->
+
+</div><!-- /container -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.2/dist/socket.io.min.js"></script>
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const LOTS  = ['11-00','12-00','12-30','01-15','01-45','02-00'];
+const SIDES = ['C','P'];
+const STATE_DOT = {
+  pending:'dot-grey', open:'dot-green', closing:'dot-blue', working:'dot-yellow',
+  closed:'dot-grey', killed:'dot-red', paused:'dot-yellow', breached:'dot-orange'
+};
+const STATE_LABEL = {
+  pending:'Pending', open:'Open', closing:'Closing', working:'Working',
+  closed:'Closed', killed:'Killed', paused:'Paused', breached:'Breached'
+};
+
+let msSelected = null;
+let msCandidates = [];
+/** Persists manual active-grid checkbox selection across summary re-renders (3s poll + socket push). */
+let msCheckedFilenames = new Set();
+/** Session plan row selection for Pause/Unpause Selected (survives summary re-render). */
+let planSelectedSlots = new Set();
+/** Tranche grid checkbox selection (survives summary re-render). */
+let gridSelectedSlots = new Set();
+/** Unsaved session-plan field values — survives 2–3s summary poll / socket push. */
+let planDraftBySlot = {};
+/** Unsaved master-row values (shared across all tranches). */
+let planMasterDraft = null;
+const PLAN_MASTER_FIELDS = [
+  'quantity', 'width', 'credit_min', 'credit_max', 'stop_multiplier',
+  'chase1_mode', 'chase1_max', 'chase2_mode', 'chase2_max',
+];
+
+// ── Socket ────────────────────────────────────────────────────────────────────
+let socket;
+let pnlChart = null;
+let activeTab = 'today';
+let activeStrategy = 'meic';
+let lastData = null;
+const SUMMARY_POLL_MS = 3000;
+let summaryPollTimer = null;
+/** Session plan + logs panel — off by default; no plan render or log poll until opened. */
+let setupLogsPanelOpen = false;
+let logPollTimer = null;
+
+function startSummaryPolling() {
+  if (summaryPollTimer) return;
+  summaryPollTimer = setInterval(() => {
+    if (activeTab === 'today') refreshSummary();
+  }, SUMMARY_POLL_MS);
+}
+
+try {
+  socket = io();
+  socket.on('connect', () => {
+    document.getElementById('conn-dot').className = 'status-dot dot-green';
+    document.getElementById('conn-label').textContent = 'Live';
+  });
+  socket.on('disconnect', () => {
+    document.getElementById('conn-dot').className = 'status-dot dot-red';
+    document.getElementById('conn-label').textContent = 'Disconnected';
+  });
+  socket.on('update', data => { lastData = data; if (activeTab === 'today') render(data); });
+} catch(e) { console.error('socket init:', e); }
+
+document.addEventListener('DOMContentLoaded', () => {
+  const exp = document.getElementById('ms-expiry');
+  if (exp) exp.value = new Date().toISOString().slice(0, 10);
+  startSummaryPolling();
+  const planWrap = document.getElementById('session-plan-table-wrap');
+  if (planWrap) {
+    planWrap.addEventListener('input', onPlanFieldEdit);
+    planWrap.addEventListener('change', onPlanFieldEdit);
+  }
+});
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+const MAIN_TABS = ['today', 'history', 'gex'];
+
+function showTab(tab) {
+  activeTab = tab;
+  MAIN_TABS.forEach(t => {
+    const el = document.getElementById('tab-'+t);
+    if (el) el.style.display = (t === tab) ? '' : 'none';
+  });
+  document.querySelectorAll('#mainTabs .nav-item').forEach((li, i) => {
+    li.querySelector('.nav-link')?.classList.toggle('active', MAIN_TABS[i] === tab);
+  });
+  if (tab === 'history') loadHistory();
+  if (tab === 'gex') gexInit();
+}
+
+function showStrategy(s) {
+  activeStrategy = s;
+  document.getElementById('strategy-meic').style.display = (s === 'meic') ? '' : 'none';
+  document.getElementById('strategy-manual').style.display = (s === 'manual') ? '' : 'none';
+  document.querySelectorAll('#strategyTabs .nav-link').forEach((el, i) => {
+    el.classList.toggle('active', ['meic','manual'][i] === s);
+  });
+  if (lastData) render(lastData);
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+function fmtPnl(v) {
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}$${Number(v).toFixed(2)}`;
+}
+function fmtD(v) { return v != null ? `$${Number(v).toFixed(2)}` : '&ndash;'; }
+function fmtStrike(v) { return v ? v : '&ndash;'; }
+function fmtPrice(v) { return (v !== undefined && v !== '' && v !== 0) ? `$${Number(v).toFixed(2)}` : '&ndash;'; }
+function fmtTime(ts) {
+  if (!ts) return '&ndash;';
+  const m = ts.match(/(\d{2}:\d{2})/);
+  return m ? m[1] : ts.substring(11, 16);
+}
+function fmtHB(ts) {
+  if (!ts) return '&ndash;';
+  try {
+    const d = new Date(ts);
+    const diff = Math.round((Date.now() - d.getTime()) / 1000);
+    if (diff < 0 || isNaN(diff)) return '?';
+    if (diff < 60) return diff + 's';
+    return Math.round(diff / 60) + 'm';
+  } catch(e) { return '?'; }
+}
+function hbDotClass(ts) {
+  if (!ts) return 'dot-grey';
+  try {
+    const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+    if (diff < 15) return 'dot-green';
+    if (diff < 60) return 'dot-yellow';
+    return 'dot-red';
+  } catch(e) { return 'dot-grey'; }
+}
+
+// ── Render Today ──────────────────────────────────────────────────────────────
+function render(d) {
+  // Status banner
+  const banner = document.getElementById('status-banner');
+  const bs = d.bot_status || {};
+  if (bs.state === 'skipped') {
+    banner.className = 'alert alert-warning mb-3';
+    banner.style.borderRadius = '10px';
+    banner.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-2"></i><strong>No Trading Today</strong> &mdash; ${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
+    banner.classList.remove('d-none');
+  } else if (bs.state === 'stopped' && bs.reason) {
+    banner.className = 'alert alert-secondary mb-3';
+    banner.style.borderRadius = '10px';
+    banner.innerHTML = `<i class="bi bi-info-circle me-2"></i>${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
+    banner.classList.remove('d-none');
+  } else {
+    banner.classList.add('d-none');
+  }
+
+  document.getElementById('spx-price').textContent = d.spx !== undefined && d.spx !== '–' ? Number(d.spx).toFixed(2) : '–';
+  document.getElementById('last-updated').textContent = d.timestamp;
+
+  renderStrategyPnlToday(d);
+
+  // PnL card (active strategy detail)
+  const pnlEl   = document.getElementById('day-pnl');
+  const pnlCard = document.getElementById('pnl-card');
+  pnlEl.textContent = fmtPnl(d.day_pnl);
+  pnlEl.className   = 'fs-2 fw-bold ' + (d.day_pnl >= 0 ? 'text-success' : 'text-danger');
+  pnlCard.className = 'pnl-card ' + (d.day_pnl > 0 ? 'pnl-pos' : d.day_pnl < 0 ? 'pnl-neg' : 'pnl-zero');
+  renderSlippage('day-slippage', d.day_slippage);
+
+  // Bot / launcher status (bot_status.json when run.py started externally)
+  const dotEl = document.getElementById('bot-dot');
+  const reasonEl = document.getElementById('bot-reason');
+  let botLabel = 'Stopped';
+  let botDot = 'dot-grey';
+  if (bs.state === 'kill') {
+    botLabel = 'Stop requested';
+    botDot = 'dot-red';
+  } else if (d.bot_running) {
+    botLabel = 'Running';
+    botDot = 'dot-green';
+  } else if (bs.state === 'skipped') {
+    botLabel = 'Skipped';
+    botDot = 'dot-yellow';
+  }
+  document.getElementById('bot-label').textContent = botLabel;
+  dotEl.className = 'status-dot ' + botDot;
+  if (reasonEl) {
+    reasonEl.textContent = d.bot_running && bs.reason ? bs.reason : (bs.ts ? `Last update ${bs.ts}` : '');
+  }
+  document.getElementById('open-count').textContent = `${d.open_count} open, ${d.closed_count} closed`;
+
+  // System health
+  renderHealth(d.system_health || {});
+
+  // Tranche grid (+ session plan only when setup/logs panel is open)
+  renderGrid(d.grid || []);
+  if (setupLogsPanelOpen) renderSessionPlan(d.grid || []);
+  renderManualBanner(d);
+  renderManual(d);
+}
+
+function renderManualBanner(d) {
+  const banner = document.getElementById('manual-meic-banner');
+  if (!banner) return;
+  const unpaused = d.meic_unpaused_slots ?? 12;
+  const total = d.meic_slots_total ?? 12;
+  if (activeStrategy === 'manual' && unpaused > 0) {
+    banner.className = 'alert alert-warning mb-3';
+    banner.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>MEIC tranches still active — ${unpaused} of ${total} slots not paused. <button class="btn btn-sm btn-warning ms-2" onclick="pauseAllMeic()">Pause All MEIC</button>`;
+    banner.classList.remove('d-none');
+  } else {
+    banner.classList.add('d-none');
+  }
+}
+
+async function refreshSummary() {
+  try {
+    const r = await fetch('/api/summary');
+    const data = await r.json();
+    lastData = data;
+    if (activeTab === 'today') render(data);
+    return data;
+  } catch (e) {
+    console.error('Summary refresh failed:', e);
+    return null;
+  }
+}
+
+function renderSlippage(elId, value) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (value == null || Number.isNaN(value)) {
+    el.textContent = '–';
+    el.className = 'pnl-sub-value slip-zero';
+    return;
+  }
+  el.textContent = fmtPnl(value);
+  el.className = 'pnl-sub-value ' + (value > 0 ? 'slip-pos' : value < 0 ? 'slip-neg' : 'slip-zero');
+}
+
+function renderManual(d) {
+  const rows = d.manual_trades || [];
+  const pnlEl = document.getElementById('ms-day-pnl');
+  if (pnlEl) {
+    pnlEl.textContent = fmtPnl(d.manual_pnl || 0);
+    pnlEl.className = 'fs-2 fw-bold ' + ((d.manual_pnl || 0) >= 0 ? 'text-success' : 'text-danger');
+  }
+  renderSlippage('ms-day-slippage', d.manual_slippage);
+  const oc = document.getElementById('ms-open-count');
+  if (oc) oc.textContent = `${d.manual_open || 0} open`;
+  const msHealth = document.getElementById('ms-health-bar');
+  if (msHealth && d.system_health) renderHealthInto(d.system_health, msHealth);
+
+  const tbody = document.getElementById('ms-active-tbody');
+  if (!tbody) return;
+  syncMsCheckedFromDom();
+  const activeNames = new Set(rows.map(r => r._filename).filter(Boolean));
+  msCheckedFilenames = new Set([...msCheckedFilenames].filter(fn => activeNames.has(fn)));
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="16" class="text-center text-muted py-3">No manual spreads</td></tr>';
+    return;
+  }
+  let html = '';
+  let totalPnl = 0;
+  let totalSlippage = 0;
+  let slippageRows = 0;
+  for (const r of rows) {
+    if (!spreadRowHasData(r)) continue;
+    totalPnl += Number(r.live_pnl || 0);
+    if (r.slippage != null && !Number.isNaN(Number(r.slippage))) {
+      totalSlippage += Number(r.slippage);
+      slippageRows += 1;
+    }
+  }
+  if (rows.length > 0) {
+    const slipCls = slippageRows === 0 ? 'grid-dim'
+      : (totalSlippage >= 0 ? 'text-success' : 'text-danger');
+    const slipText = slippageRows === 0 ? '&ndash;' : fmtPnl(totalSlippage);
+    const pnlCls = totalPnl >= 0 ? 'text-success' : 'text-danger';
+    html += `<tr class="grid-totals-row">
+      <td colspan="5" class="text-end grid-totals-label">Totals</td>
+      <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(totalPnl)}</td>
+      <td></td>
+      <td class="font-monospace small fw-bold ${slipCls}">${slipText}</td>
+      <td colspan="9"></td>
+    </tr>`;
+  }
+  for (const r of rows) {
+    if (!spreadRowHasData(r)) continue;
+    const st = r.state || 'open';
+    const fn = r._filename || '';
+    const checked = fn && msCheckedFilenames.has(fn) ? ' checked' : '';
+    const selectedCls = fn && msCheckedFilenames.has(fn) ? ' ms-active-selected' : '';
+    const dotCls = STATE_DOT[st] || 'dot-grey';
+    const stateCls = 'state-' + st;
+    const bgCls = 'state-bg-' + st;
+    const hasData = spreadRowHasData(r);
+    const showLive = ['open','closing','breached'].includes(st) && !r.pnl_frozen;
+    const legBadge = gridLegBadge(r, hasData);
+    html += `<tr class="ms-active-row tranche-row ${bgCls}${selectedCls}" data-filename="${fn}" onclick="msActiveRowClick(event)">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="form-check-input ms-row-cb" data-filename="${fn}" data-state="${st}"${checked} onchange="msRowCheckboxChange(this)" style="cursor:pointer;"></td>
+      <td><span class="badge-lot">${r.lot}</span></td>
+      <td>${legBadge}</td>
+      <td><span class="status-dot ${dotCls}"></span><span class="ms-state ${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span></td>
+      ${spreadGridDataCells(r, hasData, showLive)}
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+function streamerHealthDot(h) {
+  const sh = h.streamer_health || {};
+  const priceTs = sh.last_spx_price_ts;
+  if (priceTs) {
+    try {
+      const diff = (Date.now() - new Date(priceTs).getTime()) / 1000;
+      if (diff < 30) return 'dot-green';
+      if (diff < 120) return 'dot-yellow';
+      return 'dot-red';
+    } catch(e) { return 'dot-grey'; }
+  }
+  const age = h.streamer_log_age;
+  if (age >= 0 && age < 30) return 'dot-green';
+  if (age >= 0 && age < 120) return 'dot-yellow';
+  return 'dot-grey';
+}
+
+function streamerHealthLabel(h) {
+  const sh = h.streamer_health || {};
+  if (sh.last_spx_price_ts) {
+    try {
+      const diff = Math.round((Date.now() - new Date(sh.last_spx_price_ts).getTime()) / 1000);
+      return `SPX tick ${diff >= 0 ? diff : '?'}s ago`;
+    } catch(e) { return 'SPX tick ?'; }
+  }
+  if (h.streamer_log_age >= 0) return `log ${h.streamer_log_age}s`;
+  return 'offline';
+}
+
+function pnlClass(v) {
+  return v >= 0 ? 'text-success' : 'text-danger';
+}
+
+function setPnlEl(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = fmtPnl(value || 0);
+  el.className = 'stat-val ' + pnlClass(value || 0);
+}
+
+function renderStrategyPnlToday(d) {
+  const meic = d.meic_pnl != null ? d.meic_pnl : (d.day_pnl || 0);
+  const manual = d.manual_pnl || 0;
+  const combined = d.combined_pnl != null ? d.combined_pnl : (meic + manual);
+  setPnlEl('pnl-meic-today', meic);
+  setPnlEl('pnl-manual-today', manual);
+  setPnlEl('pnl-combined-today', combined);
+}
+
+function strategyBadge(strategy) {
+  if (strategy === 'MANUAL_SPREAD') {
+    return '<span class="strategy-pill-manual">Manual</span>';
+  }
+  return '<span class="strategy-pill-meic">MEIC</span>';
+}
+
+function renderHealthInto(h, bar) {
+  const launcher = h.launcher || {};
+  const smHb = h.stop_monitor || {};
+  const streamerDot = streamerHealthDot(h);
+  const streamerDetail = streamerHealthLabel(h);
+  const spx = h.mqtt_spx_price;
+  const launcherDot = launcher.state === 'running' ? 'dot-green' : launcher.state === 'kill' ? 'dot-red' : 'dot-grey';
+  const smDot = smHb.ts ? hbDotClass(smHb.ts) : 'dot-grey';
+  const smLoops = smHb.loop_count ? ` #${smHb.loop_count}` : '';
+  const mqttDot = spx ? 'dot-green' : 'dot-grey';
+  const mqttVal = spx ? Number(spx).toFixed(0) : '–';
+  bar.innerHTML = `
+    <div class="health-item"><span class="status-dot ${launcherDot}"></span>Launcher</div>
+    <div class="health-item" title="${streamerDetail}"><span class="status-dot ${streamerDot}"></span>Streamer</div>
+    <div class="health-item"><span class="status-dot ${smDot}"></span>StopMon${smLoops}</div>
+    <div class="health-item"><span class="status-dot ${mqttDot}"></span>SPX ${mqttVal}</div>`;
+}
+
+function renderHealth(h) {
+  renderHealthInto(h, document.getElementById('health-bar'));
+}
+
+function spreadRowHasData(s) {
+  const st = s.state || 'pending';
+  return ['open', 'closing', 'breached', 'working', 'closed', 'killed'].includes(st);
+}
+
+function spreadGridDataCells(s, hasData, showLive) {
+  return `
+      <td class="text-info font-monospace small">${hasData ? (s.entry_label || fmtPrice(s.entry_credit)) : '&ndash;'}</td>
+      <td class="fw-bold ${hasData ? (s.pnl_class || '') : ''}">${hasData ? fmtPnl(s.live_pnl || 0) : '&ndash;'}</td>
+      <td class="text-warning font-monospace small">${s.exit_label || '&ndash;'}</td>
+      <td class="font-monospace small ${s.slippage != null ? (s.slippage >= 0 ? 'text-success' : 'text-danger') : 'grid-dim'}">${hasData && s.slippage_label ? s.slippage_label : '&ndash;'}</td>
+      <td class="grid-cell">${hasData ? (s.quantity || '&ndash;') : '&ndash;'}</td>
+      <td class="font-monospace grid-cell">${showLive ? fmtPrice(s.cur_short) : '&ndash;'}</td>
+      <td class="font-monospace grid-dim">${showLive ? fmtPrice(s.cur_long) : '&ndash;'}</td>
+      <td class="font-monospace grid-cell">${showLive ? fmtPrice(s.cur_spread) : (s.exit_label ? fmtPrice(s.cur_spread) : '&ndash;')}</td>
+      <td class="small grid-dim">${hasData && s.phase ? s.phase : '&ndash;'}</td>
+      <td class="small font-monospace grid-cell">${hasData && s.stop_order_id ? s.stop_order_id : '&ndash;'}</td>
+      <td class="small font-monospace grid-cell">${hasData && s.stop_label ? s.stop_label : '&ndash;'}</td>
+      <td class="small font-monospace ${showLive && s.breach_label ? (s.breach_class || 'grid-dim') : 'grid-dim'}">${showLive && s.breach_label ? s.breach_label : '&ndash;'}</td>`;
+}
+
+function gridRowHasData(s) {
+  return spreadRowHasData(s);
+}
+
+const GRID_COL_COUNT = 16;
+
+function gridLegBadge(s, hasData) {
+  const letter = s.side === 'P' ? 'P' : 'C';
+  const badgeCls = s.side === 'P'
+    ? 'badge bg-primary grid-leg-badge'
+    : 'badge bg-warning text-dark grid-leg-badge';
+  if (!hasData || !s.short_strike) {
+    return `<span class="${badgeCls}">${letter}</span>`;
+  }
+  const short = s.short_strike;
+  const long = s.long_strike || '–';
+  return `<span class="${badgeCls}">${letter}<span class="grid-leg-strikes">${short}/<br class="d-md-none">${long}</span></span>`;
+}
+
+function renderGrid(grid) {
+  const tbody = document.getElementById('grid-tbody');
+  syncGridSelFromDom();
+  const activeSlots = new Set(grid.map(s => s.slot_key).filter(Boolean));
+  gridSelectedSlots = new Set([...gridSelectedSlots].filter(sk => activeSlots.has(sk)));
+  let html = '';
+  let totalPnl = 0;
+  let totalSlippage = 0;
+  let slippageRows = 0;
+
+  for (const s of grid) {
+    if (!gridRowHasData(s)) continue;
+    totalPnl += Number(s.live_pnl || 0);
+    if (s.slippage != null && !Number.isNaN(Number(s.slippage))) {
+      totalSlippage += Number(s.slippage);
+      slippageRows += 1;
+    }
+  }
+
+  if (grid.length > 0) {
+    const slipCls = slippageRows === 0 ? 'grid-dim'
+      : (totalSlippage >= 0 ? 'text-success' : 'text-danger');
+    const slipText = slippageRows === 0 ? '&ndash;' : fmtPnl(totalSlippage);
+    const pnlCls = totalPnl >= 0 ? 'text-success' : 'text-danger';
+    html += `<tr class="grid-totals-row">
+      <td colspan="5" class="text-end grid-totals-label">Totals</td>
+      <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(totalPnl)}</td>
+      <td></td>
+      <td class="font-monospace small fw-bold ${slipCls}">${slipText}</td>
+      <td colspan="4"></td>
+      <td colspan="4"></td>
+    </tr>`;
+  }
+
+  let currentLot = '';
+
+  for (const s of grid) {
+    if (s.lot !== currentLot) {
+      currentLot = s.lot;
+      html += `<tr class="tranche-group-header"><td colspan="${GRID_COL_COUNT}">${s.lot} CT</td></tr>`;
+    }
+
+    const st = s.state || 'pending';
+    const dotCls = STATE_DOT[st] || 'dot-grey';
+    const stateCls = 'state-' + st;
+    const bgCls = 'state-bg-' + st;
+    const hasData = gridRowHasData(s);
+    const showLive = ['open','closing','breached'].includes(st) && !s.pnl_frozen;
+    const legBadge = gridLegBadge(s, hasData);
+    const gridChecked = gridSelectedSlots.has(s.slot_key) ? ' checked' : '';
+
+    html += `<tr class="tranche-row ${bgCls}">
+      <td><input type="checkbox" class="form-check-input slot-cb" data-slot="${s.slot_key}" data-state="${st}" data-filename="${s._filename || ''}"${gridChecked} onchange="gridSlotCheckboxChange(this)" style="cursor:pointer;"></td>
+      <td><span class="badge-lot">${s.lot}</span></td>
+      <td>${legBadge}</td>
+      <td><span class="status-dot ${dotCls}"></span><span class="${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span></td>
+      ${spreadGridDataCells(s, hasData, showLive)}
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+function planChaseOpts(val) {
+  return ['chase_same_trade', 'build_new_strikes', 'none'].map(m =>
+    `<option value="${m}"${m === val ? ' selected' : ''}>${m.replace(/_/g, ' ')}</option>`
+  ).join('');
+}
+
+function planEditable(s) {
+  const st = s.session_state || 'pending';
+  return st === 'pending' || st === 'entering';
+}
+
+function planInput(disabled, extraCls = '') {
+  const dis = disabled ? ' disabled' : '';
+  return `class="plan-input ${extraCls}"${dis}`;
+}
+
+function isSessionPlanFocused() {
+  const ae = document.activeElement;
+  return ae && ae.closest && ae.closest('#session-plan-tbody');
+}
+
+function capturePlanDraftsFromDom() {
+  const masterRow = document.querySelector('#session-plan-tbody tr[data-plan-master]');
+  if (masterRow) {
+    const fields = {};
+    masterRow.querySelectorAll('[data-field]').forEach(el => {
+      const key = el.dataset.field;
+      if (el.type === 'checkbox') fields[key] = el.checked;
+      else if (el.type === 'number') fields[key] = el.value === '' ? '' : Number(el.value);
+      else fields[key] = el.value;
+    });
+    if (Object.keys(fields).length) {
+      planMasterDraft = { ...(planMasterDraft || {}), ...fields };
+    }
+  }
+  document.querySelectorAll('#session-plan-tbody tr[data-plan-slot]').forEach(row => {
+    const sk = row.dataset.planSlot;
+    if (!sk) return;
+    const fields = {};
+    row.querySelectorAll('[data-field]').forEach(el => {
+      const key = el.dataset.field;
+      if (el.type === 'checkbox') fields[key] = el.checked;
+      else if (el.type === 'number') fields[key] = el.value === '' ? '' : Number(el.value);
+      else fields[key] = el.value;
+    });
+    if (Object.keys(fields).length) {
+      planDraftBySlot[sk] = { ...(planDraftBySlot[sk] || {}), ...fields };
+    }
+  });
+}
+
+function onPlanFieldEdit(ev) {
+  const el = ev.target;
+  if (!el.dataset || !el.dataset.field) return;
+  const masterRow = el.closest('tr[data-plan-master]');
+  if (masterRow) {
+    if (!planMasterDraft) planMasterDraft = {};
+    const key = el.dataset.field;
+    if (el.type === 'checkbox') planMasterDraft[key] = el.checked;
+    else if (el.type === 'number') planMasterDraft[key] = el.value === '' ? '' : Number(el.value);
+    else planMasterDraft[key] = el.value;
+    return;
+  }
+  const row = el.closest('tr[data-plan-slot]');
+  if (!row) return;
+  const sk = row.dataset.planSlot;
+  if (!sk) return;
+  if (!planDraftBySlot[sk]) planDraftBySlot[sk] = {};
+  const key = el.dataset.field;
+  if (el.type === 'checkbox') planDraftBySlot[sk][key] = el.checked;
+  else if (el.type === 'number') planDraftBySlot[sk][key] = el.value === '' ? '' : Number(el.value);
+  else planDraftBySlot[sk][key] = el.value;
+}
+
+function planFieldValue(slotKey, field, serverVal) {
+  const d = planDraftBySlot[slotKey];
+  return (d && d[field] !== undefined) ? d[field] : serverVal;
+}
+
+function clearPlanDraft(slotKey) {
+  delete planDraftBySlot[slotKey];
+}
+
+function planMasterSeed(grid) {
+  const s = grid[0] || {};
+  return {
+    quantity: s.plan_quantity ?? 1,
+    width: s.width || '25-35',
+    credit_min: s.credit_min ?? 0.9,
+    credit_max: s.credit_max ?? 1.85,
+    stop_multiplier: s.stop_multiplier ?? 2,
+    chase1_mode: s.chase1_mode || 'chase_same_trade',
+    chase1_max: s.chase1_max ?? 3,
+    chase2_mode: s.chase2_mode || 'build_new_strikes',
+    chase2_max: s.chase2_max ?? 7,
+  };
+}
+
+function planMasterFieldValue(field, serverVal) {
+  return (planMasterDraft && planMasterDraft[field] !== undefined)
+    ? planMasterDraft[field]
+    : serverVal;
+}
+
+function renderPlanMasterRow(grid) {
+  const seed = planMasterSeed(grid);
+  const qty = planMasterFieldValue('quantity', seed.quantity);
+  const width = planMasterFieldValue('width', seed.width);
+  const creditMin = planMasterFieldValue('credit_min', seed.credit_min);
+  const creditMax = planMasterFieldValue('credit_max', seed.credit_max);
+  const stopMult = planMasterFieldValue('stop_multiplier', seed.stop_multiplier);
+  const chase1Mode = planMasterFieldValue('chase1_mode', seed.chase1_mode);
+  const chase1Max = planMasterFieldValue('chase1_max', seed.chase1_max);
+  const chase2Mode = planMasterFieldValue('chase2_mode', seed.chase2_mode);
+  const chase2Max = planMasterFieldValue('chase2_max', seed.chase2_max);
+  const draftMark = planMasterDraft ? ' plan-row-draft' : '';
+  return `<tr class="plan-master-row${draftMark}" data-plan-master="1">
+    <td></td>
+    <td colspan="2"><span class="plan-master-label">All tranches</span></td>
+    <td class="text-muted small">—</td>
+    <td><input type="number" min="1" max="99" ${planInput(false)} data-field="quantity" value="${qty}" style="width:3rem;"></td>
+    <td><input type="text" ${planInput(false)} data-field="width" value="${width}" style="width:4rem;" title="e.g. 25 or 25-35"></td>
+    <td><input type="number" step="0.05" ${planInput(false)} data-field="credit_min" value="${Number(creditMin).toFixed(2)}" style="width:3.5rem;"></td>
+    <td><input type="number" step="0.05" ${planInput(false)} data-field="credit_max" value="${Number(creditMax).toFixed(2)}" style="width:3.5rem;"></td>
+    <td><input type="number" step="0.1" min="0.5" max="10" ${planInput(false)} data-field="stop_multiplier" value="${stopMult}" style="width:3rem;" title="Stop multiplier (e.g. 1.5)"></td>
+    <td class="small">
+      <select ${planInput(false)} data-field="chase1_mode" style="width:5.5rem;margin-bottom:2px;">${planChaseOpts(chase1Mode)}</select>
+      <input type="number" min="0" max="20" ${planInput(false)} data-field="chase1_max" value="${chase1Max}" style="width:2.5rem;" title="max attempts">
+    </td>
+    <td class="small">
+      <select ${planInput(false)} data-field="chase2_mode" style="width:5.5rem;margin-bottom:2px;">${planChaseOpts(chase2Mode)}</select>
+      <input type="number" min="0" max="20" ${planInput(false)} data-field="chase2_max" value="${chase2Max}" style="width:2.5rem;">
+    </td>
+    <td colspan="3" class="text-muted small">Window / pause / skip per row below</td>
+    <td><button class="btn btn-sm btn-warning plan-save-btn" onclick="savePlanMaster()" title="Apply to all pending/entering rows">Save all</button></td>
+  </tr>`;
+}
+
+function collectPlanMasterFields() {
+  const row = document.querySelector('#session-plan-tbody tr[data-plan-master]');
+  if (!row) return null;
+  const fields = {};
+  row.querySelectorAll('[data-field]').forEach(el => {
+    const key = el.dataset.field;
+    if (el.type === 'checkbox') fields[key] = el.checked;
+    else if (el.type === 'number') fields[key] = Number(el.value);
+    else fields[key] = el.value;
+  });
+  return fields;
+}
+
+async function savePlanMaster() {
+  const fields = collectPlanMasterFields();
+  if (!fields) return;
+  if (!confirm('Apply qty, width, credits, stop, and chase from this row to all pending/entering tranche slots?')) return;
+  try {
+    const r = await fetch('/api/session/bulk', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({strategy: 'MEIC_IC', fields}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Bulk save failed', 'error'); return; }
+    const skipped = (d.skipped || []).length;
+    const msg = skipped
+      ? `Updated ${d.updated.length} row(s); ${skipped} entered row(s) unchanged`
+      : `Updated ${d.updated.length} row(s)`;
+    toast(msg, 'success');
+    planDraftBySlot = {};
+    planMasterDraft = null;
+    await refreshSummary();
+  } catch (e) {
+    toast('Bulk save error: ' + e.message, 'error');
+  }
+}
+
+function syncPlanSelFromDom() {
+  document.querySelectorAll('.plan-sel-cb:checked').forEach(cb => {
+    if (cb.dataset.slot) planSelectedSlots.add(cb.dataset.slot);
+  });
+  document.querySelectorAll('.plan-sel-cb:not(:checked)').forEach(cb => {
+    if (cb.dataset.slot) planSelectedSlots.delete(cb.dataset.slot);
+  });
+}
+
+function planSelCheckboxChange(cb) {
+  const sk = cb.dataset.slot;
+  if (!sk) return;
+  if (cb.checked) planSelectedSlots.add(sk);
+  else planSelectedSlots.delete(sk);
+}
+
+function getSelectedPlanSlots() {
+  syncPlanSelFromDom();
+  const slots = new Set(planSelectedSlots);
+  getSelectedSlots().forEach(s => { if (s.slot_key) slots.add(s.slot_key); });
+  return [...slots];
+}
+
+function renderSessionPlan(grid) {
+  const tbody = document.getElementById('session-plan-tbody');
+  if (!tbody) return;
+  // Do not rebuild while operator is typing — poll/socket would steal focus and reset values.
+  if (isSessionPlanFocused()) return;
+  capturePlanDraftsFromDom();
+  syncPlanSelFromDom();
+  const activeSlots = new Set(grid.map(s => s.slot_key).filter(Boolean));
+  planSelectedSlots = new Set([...planSelectedSlots].filter(sk => activeSlots.has(sk)));
+  if (!grid.length) {
+    tbody.innerHTML = '<tr><td colspan="15" class="text-center text-muted py-3">No session plan (bootstrap on launcher start)</td></tr>';
+    return;
+  }
+  let html = renderPlanMasterRow(grid);
+  let currentLot = '';
+  for (const s of grid) {
+    if (s.lot !== currentLot) {
+      currentLot = s.lot;
+      html += `<tr class="tranche-group-header"><td colspan="15">${s.lot} CT</td></tr>`;
+    }
+    const editable = planEditable(s);
+    const locked = !editable && (s.session_state || '') !== 'entered';
+    const rowCls = locked ? 'plan-row-locked' : '';
+    const st = s.session_state || 'pending';
+    const sk = s.slot_key;
+    const winStart = planFieldValue(sk, 'entry_window_start', s.entry_window_start || '');
+    const winEnd = planFieldValue(sk, 'entry_window_end', s.entry_window_end || '');
+    const qty = planFieldValue(sk, 'quantity', s.plan_quantity ?? 1);
+    const width = planFieldValue(sk, 'width', s.width || '25-35');
+    const creditMin = planFieldValue(sk, 'credit_min', s.credit_min ?? 0.9);
+    const creditMax = planFieldValue(sk, 'credit_max', s.credit_max ?? 1.85);
+    const stopMult = planFieldValue(sk, 'stop_multiplier', s.stop_multiplier ?? 2);
+    const chase1Mode = planFieldValue(sk, 'chase1_mode', s.chase1_mode || 'chase_same_trade');
+    const chase1Max = planFieldValue(sk, 'chase1_max', s.chase1_max ?? 3);
+    const chase2Mode = planFieldValue(sk, 'chase2_mode', s.chase2_mode || 'build_new_strikes');
+    const chase2Max = planFieldValue(sk, 'chase2_max', s.chase2_max ?? 7);
+    const paused = planFieldValue(sk, 'paused', !!s.paused);
+    const skip = planFieldValue(sk, 'skip', !!s.skip);
+    const sideBadge = s.side === 'P'
+      ? '<span class="badge bg-primary" style="font-size:.7rem;">PUT</span>'
+      : '<span class="badge bg-warning text-dark" style="font-size:.7rem;">CALL</span>';
+    const chaseOpts = planChaseOpts;
+    let action = '';
+    if (editable) {
+      action = `<button class="btn btn-sm btn-outline-info plan-save-btn" onclick="savePlanRow('${sk}')">Save</button>`;
+    } else if (st === 'entered' || s.state === 'open') {
+      action = `<button class="btn btn-sm btn-outline-warning plan-save-btn" onclick="applyPlanStop('${sk}')" title="Update stop on open trade (Q6)">Apply Stop</button>`;
+    } else {
+      action = '<span class="text-muted small">—</span>';
+    }
+    const planChecked = planSelectedSlots.has(sk) ? ' checked' : '';
+    const draftMark = planDraftBySlot[sk] ? ' plan-row-draft' : '';
+    html += `<tr class="tranche-row ${rowCls}${draftMark}" data-plan-slot="${sk}">
+      <td class="text-center"><input type="checkbox" class="form-check-input plan-sel-cb" data-slot="${sk}"${planChecked} onchange="planSelCheckboxChange(this)" style="cursor:pointer;" title="Select for Pause/Unpause"></td>
+      <td><span class="badge-lot">${s.lot}</span></td>
+      <td>${sideBadge}</td>
+      <td class="font-monospace small">
+        <input type="time" ${planInput(!editable)} data-field="entry_window_start" value="${winStart}" style="width:5.5rem;display:inline-block;">
+        <span class="text-muted mx-1">–</span>
+        <input type="time" ${planInput(!editable)} data-field="entry_window_end" value="${winEnd}" style="width:5.5rem;display:inline-block;">
+      </td>
+      <td><input type="number" min="1" max="99" ${planInput(!editable)} data-field="quantity" value="${qty}" style="width:3rem;"></td>
+      <td><input type="text" ${planInput(!editable)} data-field="width" value="${width}" style="width:4rem;" title="e.g. 25 or 25-35"></td>
+      <td><input type="number" step="0.05" ${planInput(!editable)} data-field="credit_min" value="${Number(creditMin).toFixed(2)}" style="width:3.5rem;"></td>
+      <td><input type="number" step="0.05" ${planInput(!editable)} data-field="credit_max" value="${Number(creditMax).toFixed(2)}" style="width:3.5rem;"></td>
+      <td><input type="number" step="0.1" min="0.5" max="10" ${planInput(false)} data-field="stop_multiplier" value="${stopMult}" style="width:3rem;" title="Stop multiplier (e.g. 1.5)"></td>
+      <td class="small">
+        <select ${planInput(!editable)} data-field="chase1_mode" style="width:5.5rem;margin-bottom:2px;">${chaseOpts(chase1Mode)}</select>
+        <input type="number" min="0" max="20" ${planInput(!editable)} data-field="chase1_max" value="${chase1Max}" style="width:2.5rem;" title="max attempts">
+      </td>
+      <td class="small">
+        <select ${planInput(!editable)} data-field="chase2_mode" style="width:5.5rem;margin-bottom:2px;">${chaseOpts(chase2Mode)}</select>
+        <input type="number" min="0" max="20" ${planInput(!editable)} data-field="chase2_max" value="${chase2Max}" style="width:2.5rem;">
+      </td>
+      <td class="text-center"><input type="checkbox" class="form-check-input" data-field="paused" ${paused ? 'checked' : ''} title="Pause this slot (save row or use Pause Selected)"></td>
+      <td class="text-center"><input type="checkbox" class="form-check-input" data-field="skip" ${skip ? 'checked' : ''} ${editable ? '' : 'disabled'}></td>
+      <td><span class="state-${st} small fw-semibold">${STATE_LABEL[st] || st}</span>${paused ? ' <span class="badge bg-secondary" style="font-size:.6rem;">paused</span>' : ''}</td>
+      <td>${action}</td>
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+function collectPlanFields(slotKey) {
+  const row = document.querySelector(`tr[data-plan-slot="${slotKey}"]`);
+  if (!row) return null;
+  const fields = {};
+  row.querySelectorAll('[data-field]').forEach(el => {
+    const key = el.dataset.field;
+    if (el.type === 'checkbox') fields[key] = el.checked;
+    else if (el.type === 'number') fields[key] = Number(el.value);
+    else fields[key] = el.value;
+  });
+  return fields;
+}
+
+async function savePlanRow(slotKey) {
+  const fields = collectPlanFields(slotKey);
+  if (!fields) return;
+  try {
+    const r = await fetch('/api/session/row', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({strategy: 'MEIC_IC', slot_key: slotKey, fields}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Save failed', 'error'); return; }
+    toast(`Saved ${slotKey}`, 'success');
+    clearPlanDraft(slotKey);
+    await refreshSummary();
+  } catch (e) {
+    toast('Save error: ' + e.message, 'error');
+  }
+}
+
+async function applyPlanStop(slotKey) {
+  const row = document.querySelector(`tr[data-plan-slot="${slotKey}"]`);
+  const stopEl = row?.querySelector('[data-field="stop_multiplier"]');
+  const stop_multiplier = stopEl ? parseFloat(stopEl.value) : 2;
+  if (!Number.isFinite(stop_multiplier) || stop_multiplier <= 0) {
+    toast('Invalid stop multiplier', 'error');
+    return;
+  }
+  if (!confirm(`Update stop to ${stop_multiplier}× for ${slotKey}?`)) return;
+  try {
+    const r = await fetch('/api/session/row/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({strategy: 'MEIC_IC', slot_key: slotKey, stop_multiplier, stop_mode: 'multiplier'}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Stop update failed', 'error'); return; }
+    toast(d.trade_updated ? `Stop ${stop_multiplier}× queued for ${slotKey}` : `Saved ${stop_multiplier}× (no open trade yet)`, 'success');
+  } catch (e) {
+    toast('Stop update error: ' + e.message, 'error');
+  }
+}
+
+// ── Selection helpers ─────────────────────────────────────────────────────────
+function syncGridSelFromDom() {
+  document.querySelectorAll('.slot-cb:checked').forEach(cb => {
+    if (cb.dataset.slot) gridSelectedSlots.add(cb.dataset.slot);
+  });
+  document.querySelectorAll('.slot-cb:not(:checked)').forEach(cb => {
+    if (cb.dataset.slot) gridSelectedSlots.delete(cb.dataset.slot);
+  });
+}
+
+function gridSlotCheckboxChange(cb) {
+  const sk = cb.dataset.slot;
+  if (!sk) return;
+  if (cb.checked) gridSelectedSlots.add(sk);
+  else gridSelectedSlots.delete(sk);
+}
+
+function toggleSelectAll(checked) {
+  if (checked) {
+    (lastData?.grid || []).forEach(s => {
+      if (s.slot_key) gridSelectedSlots.add(s.slot_key);
+    });
+  } else {
+    gridSelectedSlots.clear();
+  }
+  document.querySelectorAll('.slot-cb').forEach(cb => { cb.checked = checked; });
+}
+
+function getSelectedSlots() {
+  syncGridSelFromDom();
+  const bySlot = new Map((lastData?.grid || []).map(s => [s.slot_key, s]));
+  const selected = [];
+  for (const sk of gridSelectedSlots) {
+    const s = bySlot.get(sk);
+    if (s) {
+      selected.push({
+        slot_key: sk,
+        state: s.state || 'pending',
+        filename: s._filename || '',
+      });
+    }
+  }
+  return selected;
+}
+
+// ── Control actions ───────────────────────────────────────────────────────────
+function toast(msg, type='success') {
+  const id = 'toast-' + Date.now();
+  const colors = {success:'#16a34a', error:'#dc2626', info:'#0284c7', warning:'#d97706'};
+  document.getElementById('toast-container').insertAdjacentHTML('beforeend',
+    `<div id="${id}" style="background:${colors[type]||colors.info};color:#fff;padding:10px 18px;border-radius:10px;margin-bottom:8px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.4);">${msg}</div>`);
+  setTimeout(() => document.getElementById(id)?.remove(), 3500);
+}
+
+async function killAll() {
+  if (!confirm('KILL ALL: Force-close ALL active trades immediately?')) return;
+  await fetch('/api/killswitch', {method:'POST'});
+  toast('Kill switch written — all trades will be force-closed', 'error');
+}
+
+async function stopBot() {
+  if (!confirm('STOP BOT: Terminate the launcher process? Positions stay open with exchange stops.')) return;
+  await fetch('/api/stop_bot', {method:'POST'});
+  toast('Stop bot signal sent', 'warning');
+}
+
+async function killSelected() {
+  const sel = getSelectedSlots();
+  const active = sel.filter(s => ['open','closing'].includes(s.state) && s.filename);
+  const future = sel.filter(s => ['pending'].includes(s.state));
+  if (active.length === 0 && future.length === 0) { toast('Nothing selected to kill', 'warning'); return; }
+  if (!confirm(`Kill ${active.length} active trade(s) and pause ${future.length} pending slot(s)?`)) return;
+  for (const s of active) {
+    await fetch('/api/close_trade', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename: s.filename})});
+  }
+  if (future.length > 0) {
+    await fetch('/api/pause_tranches', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({slots: future.map(s => s.slot_key), action:'pause'})});
+  }
+  toast(`Killed ${active.length}, paused ${future.length}`, 'error');
+}
+
+async function pauseAllMeic() {
+  if (!confirm('Pause all 12 MEIC tranche slots (both Put and Call for each lot)?')) return;
+  await fetch('/api/pause_all_meic', {method:'POST'});
+  planDraftBySlot = {};
+  toast('All MEIC slots paused', 'warning');
+  await refreshSummary();
+}
+
+async function unpauseAllMeic() {
+  if (!confirm('Unpause all 12 MEIC tranche slots (both Put and Call for each lot)?')) return;
+  await fetch('/api/unpause_all_meic', {method:'POST'});
+  planDraftBySlot = {};
+  toast('All MEIC slots unpaused', 'success');
+  await refreshSummary();
+}
+
+async function pauseSelected() {
+  const slots = getSelectedPlanSlots();
+  if (slots.length === 0) { toast('Check Sel in Session Plan (or Tranche Grid) to pick slots', 'warning'); return; }
+  await fetch('/api/pause_tranches', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({slots, action:'pause'})});
+  slots.forEach(sk => { if (planDraftBySlot[sk]) delete planDraftBySlot[sk].paused; });
+  toast(`Paused ${slots.length} slot(s)`, 'warning');
+  await refreshSummary();
+}
+
+async function unpauseSelected() {
+  const slots = getSelectedPlanSlots();
+  if (slots.length === 0) { toast('Check Sel in Session Plan to pick slots to unpause', 'warning'); return; }
+  await fetch('/api/pause_tranches', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({slots, action:'unpause'})});
+  slots.forEach(sk => { if (planDraftBySlot[sk]) delete planDraftBySlot[sk].paused; });
+  toast(`Unpaused ${slots.length} slot(s)`, 'success');
+  await refreshSummary();
+}
+
+// ── Manual Spread ─────────────────────────────────────────────────────────────
+function msScanPayload() {
+  return {
+    underlying: document.getElementById('ms-underlying').value,
+    expiry: document.getElementById('ms-expiry').value,
+    side: document.getElementById('ms-side').value,
+    spread_width: parseInt(document.getElementById('ms-width').value, 10),
+    target_credit: parseFloat(document.getElementById('ms-target').value),
+    quantity: parseInt(document.getElementById('ms-qty').value, 10),
+  };
+}
+
+function msToggleChaseFields() {
+  const chase = document.getElementById('ms-place-unfilled').value === 'chase_same_trade';
+  document.querySelectorAll('.ms-chase-fields').forEach(el => el.classList.toggle('d-none', !chase));
+  const hint = document.getElementById('ms-place-hint');
+  if (hint) {
+    hint.textContent = chase
+      ? 'If not filled after each wait period, cancel and reprice the same strikes down $0.05 until floor or max reprices. Stop× saved to CSV/JSON.'
+      : 'Order stays working at your limit until filled or you cancel. Stop× saved to session CSV and trade JSON. Width is from scan (step 1).';
+  }
+}
+
+function msSelectCandidate(c) {
+  msSelected = c;
+  document.getElementById('ms-selected-label').textContent = `${c.short_strike} / ${c.long_strike} (${c.market_credit.toFixed(2)} mkt)`;
+  document.getElementById('ms-limit').value = c.market_credit.toFixed(2);
+  document.getElementById('ms-place-qty').value = document.getElementById('ms-qty').value;
+  const limit = c.market_credit;
+  document.getElementById('ms-place-chase-floor').value = Math.max(0.05, limit - 0.20).toFixed(2);
+  document.getElementById('ms-place-btn').disabled = !!c.overlap_warning;
+  document.querySelectorAll('.ms-cand-cb').forEach(cb => {
+    cb.checked = cb.dataset.rank === String(c.rank);
+  });
+  document.querySelectorAll('#ms-candidates tr.ms-cand-row').forEach(tr => {
+    tr.classList.toggle('ms-cand-selected', tr.dataset.rank === String(c.rank));
+  });
+}
+
+function msSelectByIndex(i) {
+  if (msCandidates[i]) msSelectCandidate(msCandidates[i]);
+}
+
+async function msScan() {
+  const btn = document.getElementById('ms-scan-btn');
+  const status = document.getElementById('ms-scan-status');
+  btn.disabled = true;
+  status.classList.remove('d-none');
+  status.textContent = 'Scanning… (TastyTrade API)';
+  msSelected = null;
+  document.getElementById('ms-place-btn').disabled = true;
+  document.getElementById('ms-selected-label').textContent = '—';
+  try {
+    const r = await fetch('/api/manual_spread/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(msScanPayload())});
+    const d = await r.json();
+    if (d.status !== 'ok') { toast(d.error || 'Scan failed', 'error'); return; }
+    const tbody = document.getElementById('ms-candidates');
+    if (!d.candidates || d.candidates.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No candidates near target — try a different credit or width</td></tr>';
+      msCandidates = [];
+      toast('No spreads found near $' + document.getElementById('ms-target').value + ' credit (API scan)', 'warning');
+      return;
+    }
+    msCandidates = d.candidates;
+    tbody.innerHTML = d.candidates.map((c, i) => `
+      <tr class="ms-cand-row${c.overlap_warning ? ' ms-cand-warn' : ''}" data-rank="${c.rank}" onclick="msSelectByIndex(${i})">
+        <td onclick="event.stopPropagation()"><input type="radio" name="ms-cand" class="form-check-input ms-cand-cb" data-rank="${c.rank}" onclick="msSelectByIndex(${i})"></td>
+        <td class="font-monospace">${c.short_strike} / ${c.long_strike}</td>
+        <td class="ms-mkt-credit">${c.market_credit.toFixed(2)}</td>
+        <td class="ms-delta">${c.distance_from_target >= 0 ? '+' : ''}${c.distance_from_target.toFixed(2)}</td>
+        <td class="font-monospace">${c.short_mid.toFixed(2)}</td>
+        <td class="font-monospace">${c.long_mid.toFixed(2)}</td>
+        <td class="small">${c.overlap_warning ? '<span class="ms-warn-label">flip conflict</span>' : ''}</td>
+      </tr>`).join('');
+    msSelectCandidate(d.candidates[0]);
+    toast(`Scan done (${d.scan_ms}ms)`, 'success');
+  } catch(e) {
+    toast('Scan error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    status.classList.add('d-none');
+  }
+}
+
+function msPlacePlanFields() {
+  const unfilled = document.getElementById('ms-place-unfilled').value || 'none';
+  const chase = unfilled === 'chase_same_trade';
+  const chaseMax = chase ? parseInt(document.getElementById('ms-place-chase-max').value, 10) || 0 : 0;
+  return {
+    stop_multiplier: parseFloat(document.getElementById('ms-place-stop').value) || 2,
+    on_unfilled: unfilled,
+    fill_wait_sec: parseInt(document.getElementById('ms-place-fill-wait').value, 10) || 5,
+    chase_floor: chase ? parseFloat(document.getElementById('ms-place-chase-floor').value) || 0 : 0,
+    chase_max_attempts: chaseMax,
+    max_attempts: chase ? 1 + chaseMax : 1,
+  };
+}
+
+async function msPlace() {
+  if (!msSelected) { toast('Select a candidate first', 'warning'); return; }
+  const payload = {...msScanPayload(), ...msPlacePlanFields()};
+  payload.short_strike = msSelected.short_strike;
+  payload.long_strike = msSelected.long_strike;
+  payload.limit_credit = parseFloat(document.getElementById('ms-limit').value);
+  payload.quantity = parseInt(document.getElementById('ms-place-qty').value, 10);
+  const btn = document.getElementById('ms-place-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/manual_spread/place', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const d = await r.json();
+    if (!r.ok || d.status === 'error') { toast(d.error || 'Place failed', 'error'); return; }
+    const lot = d.lot || 'manual';
+    if (d.status === 'entering') {
+      toast(`Submitted ${lot} — entry in progress`, 'success');
+    } else {
+      toast(`Placed ${lot} — order ${d.order_id || 'pending'}`, 'success');
+    }
+    msSelected = null;
+    document.getElementById('ms-selected-label').textContent = '—';
+    document.getElementById('ms-place-btn').disabled = true;
+    await refreshSummary();
+    if (lot && !(lastData?.manual_trades || []).some(t => t.lot === lot)) {
+      for (let i = 0; i < 8; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await refreshSummary();
+        if ((lastData?.manual_trades || []).some(t => t.lot === lot)) break;
+      }
+    }
+  } catch(e) {
+    toast('Place error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function syncMsCheckedFromDom() {
+  document.querySelectorAll('.ms-row-cb:checked').forEach(cb => {
+    if (cb.dataset.filename) msCheckedFilenames.add(cb.dataset.filename);
+  });
+  document.querySelectorAll('.ms-row-cb:not(:checked)').forEach(cb => {
+    if (cb.dataset.filename) msCheckedFilenames.delete(cb.dataset.filename);
+  });
+}
+
+function msRowCheckboxChange(cb) {
+  const fn = cb.dataset.filename;
+  if (!fn) return;
+  if (cb.checked) msCheckedFilenames.add(fn);
+  else msCheckedFilenames.delete(fn);
+  const tr = cb.closest('tr.ms-active-row');
+  if (tr) tr.classList.toggle('ms-active-selected', cb.checked);
+}
+
+function msActiveRowClick(ev) {
+  const tr = ev.currentTarget;
+  const cb = tr.querySelector('.ms-row-cb');
+  if (!cb) return;
+  cb.checked = !cb.checked;
+  msRowCheckboxChange(cb);
+}
+
+function getMsSelectedRows() {
+  syncMsCheckedFromDom();
+  const byFile = new Map((lastData?.manual_trades || []).map(r => [r._filename, r]));
+  const rows = [];
+  for (const fn of msCheckedFilenames) {
+    const r = byFile.get(fn);
+    if (r) rows.push({filename: fn, state: r.state || 'open'});
+  }
+  return rows;
+}
+
+async function msModifySelected() {
+  const sel = getMsSelectedRows().filter(r => r.state === 'working');
+  if (sel.length !== 1) { toast('Select exactly one WORKING row', 'warning'); return; }
+  const val = prompt('New limit credit:', document.getElementById('ms-limit').value);
+  if (val === null) return;
+  const r = await fetch('/api/manual_spread/modify', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({filename: sel[0].filename, new_limit_credit: parseFloat(val)})});
+  const d = await r.json();
+  toast(d.status === 'modified' ? 'Order modified' : (d.error || 'Modify failed'), d.status === 'modified' ? 'success' : 'error');
+  if (d.status === 'modified') await refreshSummary();
+}
+
+async function msCancelSelected() {
+  const sel = getMsSelectedRows().filter(r => r.state === 'working');
+  if (sel.length === 0) { toast('Select WORKING row(s) to cancel', 'warning'); return; }
+  if (!confirm(`Cancel ${sel.length} working order(s)?`)) return;
+  for (const s of sel) {
+    await fetch('/api/manual_spread/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: s.filename})});
+  }
+  toast(`Cancelled ${sel.length} order(s)`, 'warning');
+  await refreshSummary();
+}
+
+async function msCloseSelected() {
+  const all = getMsSelectedRows();
+  const sel = all.filter(r => ['open','closing'].includes(r.state));
+  if (sel.length === 0) {
+    if (all.length === 0) {
+      toast('Select row(s) in the active grid (click row or checkbox)', 'warning');
+    } else if (all.every(r => r.state === 'working')) {
+      toast('Working orders: use Cancel Order. Close applies to Open/Closing only.', 'warning');
+    } else if (all.every(r => r.state === 'closed')) {
+      toast('Selected spread(s) are already closed', 'warning');
+    } else {
+      toast('Select open/closing row(s)', 'warning');
+    }
+    return;
+  }
+  if (!confirm(`Close ${sel.length} manual spread(s) at the market?`)) return;
+  for (const s of sel) {
+    await fetch('/api/manual_spread/close', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: s.filename})});
+    msCheckedFilenames.delete(s.filename);
+  }
+  toast(`Close sent for ${sel.length} spread(s)`, 'success');
+  await refreshSummary();
+}
+
+// ── Setup / logs panel ────────────────────────────────────────────────────────
+function toggleSetupLogsPanel() {
+  setupLogsPanelOpen = !setupLogsPanelOpen;
+  const panel = document.getElementById('setup-logs-panel');
+  const chevron = document.getElementById('setup-logs-chevron');
+  const label = document.getElementById('setup-logs-toggle-label');
+  if (!panel) return;
+  if (setupLogsPanelOpen) {
+    panel.classList.remove('d-none');
+    if (chevron) chevron.className = 'bi bi-chevron-up';
+    if (label) label.textContent = 'Hide';
+    startLogPolling();
+    if (lastData) renderSessionPlan(lastData.grid || []);
+  } else {
+    panel.classList.add('d-none');
+    if (chevron) chevron.className = 'bi bi-chevron-down';
+    if (label) label.textContent = 'Show';
+    stopLogPolling();
+  }
+}
+
+function startLogPolling() {
+  if (logPollTimer) return;
+  refreshLogs();
+  logPollTimer = setInterval(refreshLogs, 5000);
+}
+
+function stopLogPolling() {
+  if (logPollTimer) {
+    clearInterval(logPollTimer);
+    logPollTimer = null;
+  }
+}
+
+// ── Log polling ───────────────────────────────────────────────────────────────
+function refreshLogs() {
+  if (!setupLogsPanelOpen) return;
+  fetch('/api/log/launcher').then(r=>r.json()).then(d=>{
+    const el = document.getElementById('launcher-log');
+    el.textContent = d.log; el.scrollTop = el.scrollHeight;
+  }).catch(()=>{});
+  fetch('/api/log/stream').then(r=>r.json()).then(d=>{
+    const el = document.getElementById('stream-log');
+    el.textContent = d.log; el.scrollTop = el.scrollHeight;
+  }).catch(()=>{});
+  fetch('/api/log/stop_monitor').then(r=>r.json()).then(d=>{
+    const el = document.getElementById('stop-monitor-log');
+    if (el) { el.textContent = d.log; el.scrollTop = el.scrollHeight; }
+  }).catch(()=>{});
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
+function getHistoryStrategyFilter() {
+  return document.getElementById('hist-strategy-filter')?.value
+    || document.getElementById('hist-strategy-filter-cal')?.value
+    || '';
+}
+
+function syncHistoryStrategyFilters(value) {
+  ['hist-strategy-filter', 'hist-strategy-filter-cal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+}
+
+function onHistoryStrategyChange(value) {
+  syncHistoryStrategyFilters(value);
+  loadHistory();
+}
+
+async function loadHistory() {
+  const stratFilter = getHistoryStrategyFilter();
+  syncHistoryStrategyFilters(stratFilter);
+  const statsUrl = '/api/stats' + (stratFilter ? `?strategy=${encodeURIComponent(stratFilter)}` : '');
+  const [stats, allTimeStats] = await Promise.all([
+    fetch(statsUrl).then(r => r.json()),
+    stratFilter ? fetch('/api/stats').then(r => r.json()) : Promise.resolve(null),
+  ]);
+  const breakdown = allTimeStats || stats;
+  const meicStats = breakdown.MEIC_IC || (stratFilter === 'MEIC_IC' ? stats : {});
+  const manualStats = breakdown.MANUAL_SPREAD || (stratFilter === 'MANUAL_SPREAD' ? stats : {});
+  const allStats = breakdown.all || breakdown;
+  const rowStats = stratFilter ? stats : allStats;
+
+  setPnlEl('hist-pnl-meic', meicStats.total_pnl || 0);
+  setPnlEl('hist-pnl-manual', manualStats.total_pnl || 0);
+  setPnlEl('hist-pnl-combined', allStats.total_pnl || stats.total_pnl || 0);
+
+  document.getElementById('s-pnl').textContent     = fmtPnl(rowStats.total_pnl ?? 0);
+  document.getElementById('s-pnl').className       = 'stat-val ' + pnlClass(rowStats.total_pnl ?? 0);
+  document.getElementById('s-winrate').textContent = (rowStats.win_rate ?? 0) + '%';
+  document.getElementById('s-avgwin').textContent  = fmtD(rowStats.avg_win);
+  document.getElementById('s-avgloss').textContent = fmtD(rowStats.avg_loss);
+  document.getElementById('s-best').textContent    = fmtD(rowStats.best_trade);
+  document.getElementById('s-worst').textContent   = fmtD(rowStats.worst_trade);
+  document.getElementById('s-total').textContent   = rowStats.total_trades ?? 0;
+  document.getElementById('s-days').textContent    = rowStats.trading_days ?? 0;
+
+  const chartUrl = '/api/daily_calendar?days=30' + (stratFilter ? `&strategy=${encodeURIComponent(stratFilter)}` : '');
+  const chartRes = await fetch(chartUrl);
+  let daily = [];
+  if (chartRes.ok) {
+    const parsed = await chartRes.json();
+    if (Array.isArray(parsed)) daily = parsed;
+    else toast('Daily P&L chart returned invalid data', 'danger');
+  } else {
+    toast('Daily P&L chart failed to load — restart dashboard server', 'danger');
+  }
+  const labels = daily.map(d => d.date).reverse();
+  const vals   = daily.map(d => Number(d.pnl ?? d.total_pnl ?? 0)).reverse();
+  const colors = vals.map(v => v >= 0 ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.75)');
+  if (pnlChart) pnlChart.destroy();
+  pnlChart = new Chart(document.getElementById('pnlChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Daily P&L', data: vals, backgroundColor: colors, borderRadius: 5 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color:'#64748b', font:{size:10} }, grid: { color:'#1e2235' } },
+        y: { ticks: { color:'#64748b', callback: v => '$'+v }, grid: { color:'#1e2235' } }
+      }
+    }
+  });
+
+  const dateFilter = document.getElementById('filter-date').value;
+  let url = '/api/history';
+  const params = [];
+  if (dateFilter) params.push(`date=${dateFilter}`);
+  if (stratFilter) params.push(`strategy=${encodeURIComponent(stratFilter)}`);
+  if (params.length) url += '?' + params.join('&');
+  const trades = await fetch(url).then(r=>r.json());
+  const tbody = document.getElementById('history-tbody');
+  if (trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">No trades found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = trades.map(t => {
+    const pnlCls = t.pnl == null ? '' : pnlClass(t.pnl);
+    const statusBadge = t.status === 'CLOSED'
+      ? '<span class="badge bg-success">Closed</span>'
+      : '<span class="badge bg-warning text-dark">Open</span>';
+    return `<tr>
+      <td class="small">${t.date_opened}</td>
+      <td>${strategyBadge(t.strategy)}</td>
+      <td><span class="badge-lot">${t.lot}</span></td>
+      <td><span class="badge ${t.side==='P'?'bg-primary':'bg-warning text-dark'}">${t.side}</span></td>
+      <td class="font-monospace small">${t.short_symbol||''}</td>
+      <td class="font-monospace small text-muted">${t.long_symbol||''}</td>
+      <td>${t.quantity}</td>
+      <td class="text-info">${fmtD(t.open_credit)}</td>
+      <td class="text-warning">${fmtD(t.close_debit)}</td>
+      <td class="fw-bold ${pnlCls}">${t.pnl != null ? fmtPnl(t.pnl) : '&ndash;'}</td>
+      <td>${statusBadge}</td>
+      <td><button class="btn btn-sm del-btn" style="color:#ef4444;padding:1px 6px;"
+            onclick="deleteTrade(${t.id})"><i class="bi bi-trash"></i></button></td>
+    </tr>`;
+  }).join('');
+  loadCalendarData(stratFilter);
+}
+
+async function deleteTrade(id) {
+  if (!confirm('Delete this trade record?')) return;
+  await fetch(`/api/trade/${id}`, {method:'DELETE'});
+  toast('Trade deleted', 'warning');
+  loadHistory();
+}
+
+// ── Trading Calendar ────────────────────────────────────────────────────────────
+let calendarData = [];
+let currentMonth = new Date();
+let calendarMode = 'pnl';
+
+function setCalendarMode(mode) {
+  calendarMode = mode;
+  document.getElementById('cal-pnl-btn').classList.toggle('active', mode === 'pnl');
+  document.getElementById('cal-events-btn').classList.toggle('active', mode === 'events');
+  renderCalendar();
+}
+
+async function loadCalendarData(strategyFilter) {
+  try {
+    const strat = strategyFilter != null ? strategyFilter : getHistoryStrategyFilter();
+    const url = '/api/daily_calendar?days=60' + (strat ? `&strategy=${encodeURIComponent(strat)}` : '');
+    const response = await fetch(url);
+    calendarData = await response.json();
+    renderCalendar();
+  } catch (e) { console.error('Calendar load error:', e); }
+}
+
+function renderCalendar() {
+  const grid = document.getElementById('cal-grid');
+  const monthEl = document.getElementById('cal-month');
+  const stratFilter = getHistoryStrategyFilter();
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startDay = firstDay.getDay();
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  monthEl.textContent = `${monthNames[month]} ${year}`;
+  let html = '';
+  for (let i = 0; i < startDay; i++) html += '<div class="cal-empty"></div>';
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const dayData = calendarData.find(d => d.date === dateStr);
+    let cellClass = 'cal-cell';
+    if (dayData) { cellClass += ' has-trading'; if (dayData.pnl > 0) cellClass += ' win-day'; }
+    let content = '';
+    if (dayData) {
+      const pnlClass = dayData.pnl >= 0 ? '' : 'loss';
+      const pnlText = dayData.pnl >= 0 ? `$${Math.abs(dayData.pnl).toFixed(2)}` : `-$${Math.abs(dayData.pnl).toFixed(2)}`;
+      const hasManual = !stratFilter && dayData.manual_trades > 0 && dayData.meic_trades > 0;
+      const combLabel = hasManual ? '<div class="cal-pnl-label">Comb.</div>' : '';
+      const splitLine = hasManual
+        ? `<div class="cal-split">M ${fmtPnl(dayData.meic_pnl)} · Man ${fmtPnl(dayData.manual_pnl)}</div>`
+        : '';
+      content = `<div class="cal-date">${day}</div>${combLabel}<div class="cal-pnl ${pnlClass}">${pnlText}</div>${splitLine}<div class="cal-winrate">${dayData.winRate > 0 ? dayData.winRate+'%' : '0%'}</div>`;
+    } else {
+      content = `<div class="cal-date">${day}</div>`;
+    }
+    html += `<div class="${cellClass}" data-date="${dateStr}" onclick="showDayDetails('${dateStr}')">${content}</div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function prevMonth() { currentMonth.setMonth(currentMonth.getMonth() - 1); renderCalendar(); }
+function nextMonth() { currentMonth.setMonth(currentMonth.getMonth() + 1); renderCalendar(); }
+function goToday() { currentMonth = new Date(); renderCalendar(); }
+
+function showDayDetails(dateStr) {
+  const dayData = calendarData.find(d => d.date === dateStr);
+  if (!dayData) return;
+  const tooltip = document.getElementById('cal-tooltip');
+  if (!tooltip) return;
+  const stratFilter = getHistoryStrategyFilter();
+  const dateObj = new Date(dateStr + 'T12:00:00');
+  const dateStrFull = dateObj.toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  const pnlClass = dayData.pnl >= 0 ? 'win' : 'loss';
+  const pnlSign = dayData.pnl >= 0 ? '+' : '';
+  const pnlText = `${pnlSign}$${Math.abs(dayData.pnl).toFixed(2)}`;
+  const pnlLabel = stratFilter === 'MEIC_IC' ? 'MEIC P&amp;L'
+    : stratFilter === 'MANUAL_SPREAD' ? 'Manual P&amp;L'
+    : 'Combined P&amp;L';
+  const breakdown = !stratFilter && dayData.meic_pnl != null ? `
+    <div class="tt-row"><span class="tt-label">MEIC</span><span class="tt-val">${fmtPnl(dayData.meic_pnl)}</span></div>
+    <div class="tt-row"><span class="tt-label">Manual</span><span class="tt-val">${fmtPnl(dayData.manual_pnl)}</span></div>
+  ` : '';
+  tooltip.innerHTML = `
+    <div class="tt-date">${dateStrFull}</div>
+    <div class="tt-row"><span class="tt-label">${pnlLabel}</span><span class="tt-val ${pnlClass}">${pnlText}</span></div>
+    ${breakdown}
+    <div class="tt-row"><span class="tt-label">Trades</span><span class="tt-val">${dayData.numTrades}</span></div>
+    <div class="tt-row"><span class="tt-label">Win Rate</span><span class="tt-val">${dayData.winRate}%</span></div>
+  `;
+  tooltip.style.display = 'block';
+}
+
+const tooltip = document.createElement('div');
+tooltip.id = 'cal-tooltip';
+tooltip.className = 'cal-tooltip';
+document.body.appendChild(tooltip);
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.cal-cell') || e.target.closest('.cal-tooltip')) return;
+  document.getElementById('cal-tooltip').style.display = 'none';
+});
+
+// Calendar loads when History tab opens (loadHistory → loadCalendarData)
+
+// ── GEX tab ───────────────────────────────────────────────────────────────────
+let gexChart = null;
+let gexData = null;
+let gexInitialized = false;
+let activeGexView = 'profile';
+
+function showGexView(view) {
+  activeGexView = view;
+  document.getElementById('gex-view-profile').style.display = (view === 'profile') ? '' : 'none';
+  document.getElementById('gex-view-heatmap').style.display = (view === 'heatmap') ? '' : 'none';
+  document.querySelectorAll('#gexSubTabs .nav-link').forEach((el, i) => {
+    el.classList.toggle('active', ['profile', 'heatmap'][i] === view);
+  });
+  if (view === 'profile' && !gexInitialized) gexInit();
+}
+
+function fmtGexDollars(v) {
+  if (v == null || isNaN(v)) return '—';
+  const sign = v >= 0 ? '+' : '';
+  const av = Math.abs(v);
+  if (av >= 1e9) return sign + '$' + (av / 1e9).toFixed(2) + 'B';
+  if (av >= 1e6) return sign + '$' + (av / 1e6).toFixed(1) + 'M';
+  if (av >= 1e3) return sign + '$' + (av / 1e3).toFixed(0) + 'K';
+  return sign + '$' + av.toFixed(0);
+}
+
+function fmtGexDist(d) {
+  if (d == null) return '—';
+  const sign = d >= 0 ? '+' : '';
+  return sign + d.toFixed(1) + ' pts from spot';
+}
+
+async function gexLoadExpiries() {
+  const ticker = document.getElementById('gex-ticker')?.value || 'SPX';
+  const sel = document.getElementById('gex-expiry');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const r = await fetch('/api/gex/expirations?ticker=' + encodeURIComponent(ticker));
+    if (!r.ok) {
+      const hint = r.status === 404
+        ? 'GEX API not found — restart the dashboard server (python dashboard/server.py)'
+        : 'HTTP ' + r.status;
+      throw new Error(hint);
+    }
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const today = new Date().toISOString().slice(0, 10);
+    const exps = data.expiries || [];
+    if (!exps.length) {
+      sel.innerHTML = '<option value="">No expirations</option>';
+      return;
+    }
+    sel.innerHTML = exps.map(e => {
+      const label = e === today ? e + ' (0DTE)' : e;
+      return `<option value="${e}"${e === today ? ' selected' : ''}>${label}</option>`;
+    }).join('');
+    if (!exps.includes(today) && exps[0]) sel.value = exps[0];
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error loading</option>';
+    toast('GEX expirations: ' + e.message, 'danger');
+  }
+}
+
+function gexOnTickerChange() {
+  gexLoadExpiries();
+}
+
+async function gexInit() {
+  if (!gexInitialized) {
+    gexInitialized = true;
+    await gexLoadExpiries();
+  }
+}
+
+async function loadGex() {
+  const ticker = document.getElementById('gex-ticker')?.value || 'SPX';
+  const expiry = document.getElementById('gex-expiry')?.value;
+  const strikePct = document.getElementById('gex-range')?.value || '5';
+  const btn = document.getElementById('gex-calc-btn');
+  if (!expiry) {
+    toast('Select an expiration date', 'warning');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Calculating…'; }
+  try {
+    const url = `/api/gex/calculate?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(expiry)}&strike_pct=${strikePct}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    gexData = data;
+    renderGex(data);
+    document.getElementById('gex-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    toast('GEX calculated for ' + ticker + ' ' + expiry, 'success');
+  } catch (e) {
+    toast('GEX failed: ' + e.message, 'danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-calculator me-1"></i>Calculate GEX'; }
+  }
+}
+
+function renderGex(d) {
+  const banner = document.getElementById('gex-regime-banner');
+  const regimeText = document.getElementById('gex-regime-text');
+  const isPos = d.regime === 'positive';
+  banner.className = 'gex-regime-banner mb-3 ' + (isPos ? 'gex-regime-positive' : 'gex-regime-negative');
+  regimeText.textContent = isPos
+    ? 'POSITIVE GAMMA REGIME — Dealers dampen moves. Range-bound / pinning bias.'
+    : 'NEGATIVE GAMMA REGIME — Dealers amplify moves. Trending / volatile bias.';
+  banner.classList.remove('d-none');
+
+  const netEl = document.getElementById('gex-kpi-net');
+  netEl.textContent = d.net_gex_fmt || fmtGexDollars(d.net_gex);
+  netEl.className = 'gex-kpi-val ' + (isPos ? 'gex-bar-pos' : 'gex-bar-neg');
+
+  document.getElementById('gex-kpi-spot').textContent = d.spot?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) || '—';
+  document.getElementById('gex-kpi-ticker-label').textContent = d.ticker || '';
+
+  const lv = d.levels || {};
+  document.getElementById('gex-kpi-call').textContent = lv.call_wall ?? '—';
+  document.getElementById('gex-kpi-call-dist').textContent = fmtGexDist(lv.call_wall_dist);
+  document.getElementById('gex-kpi-put').textContent = lv.put_wall ?? '—';
+  document.getElementById('gex-kpi-put-dist').textContent = fmtGexDist(lv.put_wall_dist);
+  document.getElementById('gex-kpi-flip').textContent = lv.gamma_flip ?? '—';
+  document.getElementById('gex-kpi-flip-dist').textContent = fmtGexDist(lv.gamma_flip_dist);
+  document.getElementById('gex-kpi-contracts').textContent = d.contract_count ?? '—';
+  document.getElementById('gex-kpi-strikes').textContent = (d.strike_count ?? 0) + ' strikes';
+
+  renderGexTable(d);
+  renderGexChart(d);
+}
+
+function renderGexTable(d) {
+  const tbody = document.getElementById('gex-strike-tbody');
+  const strikes = [...(d.strikes || [])].sort((a, b) => a.strike - b.strike);
+  const spot = d.spot;
+  const spotStrike = strikes.length
+    ? strikes.reduce((best, s) =>
+        Math.abs(s.strike - spot) < Math.abs(best.strike - spot) ? s : best
+      ).strike
+    : null;
+  if (!strikes.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No data</td></tr>';
+    return;
+  }
+  tbody.innerHTML = strikes.map(s => {
+    const isSpot = s.strike === spotStrike;
+    const rowCls = isSpot ? 'gex-spot-row' : '';
+    const netCls = s.net_gex >= 0 ? 'gex-bar-pos' : 'gex-bar-neg';
+    return `<tr class="${rowCls}">
+      <td class="gex-strike-val">${s.strike}${isSpot ? ' <span class="badge bg-primary" style="font-size:.65rem">SPOT</span>' : ''}</td>
+      <td class="text-end font-monospace gex-bar-pos">${fmtGexDollars(s.call_gex)}</td>
+      <td class="text-end font-monospace gex-bar-neg">${fmtGexDollars(s.put_gex)}</td>
+      <td class="text-end font-monospace ${netCls}">${fmtGexDollars(s.net_gex)}</td>
+      <td class="text-end gex-oi">${(s.call_oi || 0).toLocaleString()}</td>
+      <td class="text-end gex-oi">${(s.put_oi || 0).toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderGexChart(d) {
+  const canvas = document.getElementById('gexChart');
+  if (!canvas) return;
+  const strikes = [...(d.strikes || [])].sort((a, b) => a.strike - b.strike);
+  const labels = strikes.map(s => s.strike);
+  const netGex = strikes.map(s => s.net_gex / 1e6);
+  const cumulative = strikes.map(s => s.cumulative / 1e6);
+  const colors = strikes.map(s => s.net_gex >= 0 ? 'rgba(74,222,128,0.75)' : 'rgba(248,113,113,0.75)');
+  const borders = strikes.map(s => s.net_gex >= 0 ? '#4ade80' : '#f87171');
+
+  const spot = d.spot;
+  const lv = d.levels || {};
+  const annotations = [];
+  if (lv.call_wall) annotations.push({ strike: lv.call_wall, label: 'Call Wall', color: '#4ade80' });
+  if (lv.put_wall) annotations.push({ strike: lv.put_wall, label: 'Put Wall', color: '#f87171' });
+  if (lv.gamma_flip) annotations.push({ strike: lv.gamma_flip, label: 'Gamma Flip', color: '#e2e8f0' });
+
+  if (gexChart) gexChart.destroy();
+
+  const spotIdx = strikes.findIndex(s => s.strike >= spot);
+  const spotLabel = spot?.toFixed(2);
+
+  gexChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Net GEX ($M)',
+          data: netGex,
+          backgroundColor: colors,
+          borderColor: borders,
+          borderWidth: 1,
+          yAxisID: 'y',
+          order: 2,
+        },
+        {
+          label: 'Cumulative GEX ($M)',
+          data: cumulative,
+          type: 'line',
+          borderColor: '#a78bfa',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.2,
+          yAxisID: 'y1',
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: '#94a3b8', boxWidth: 12, font: { size: 11 } },
+        },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              const v = ctx.raw;
+              const sign = v >= 0 ? '+' : '';
+              return ctx.dataset.label + ': ' + sign + '$' + Math.abs(v).toFixed(2) + 'M';
+            },
+          },
+        },
+        annotation: undefined,
+      },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', maxRotation: 45, font: { size: 10 } },
+          grid: { color: 'rgba(45,49,72,0.5)' },
+          title: { display: true, text: 'Strike', color: '#64748b', font: { size: 11 } },
+        },
+        y: {
+          position: 'left',
+          ticks: {
+            color: '#94a3b8',
+            callback: v => (v >= 0 ? '+' : '') + '$' + v + 'M',
+          },
+          grid: { color: 'rgba(45,49,72,0.5)' },
+          title: { display: true, text: 'Net GEX ($M)', color: '#64748b', font: { size: 11 } },
+        },
+        y1: {
+          position: 'right',
+          ticks: { color: '#a78bfa', callback: v => '$' + v + 'M' },
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Cumulative ($M)', color: '#a78bfa', font: { size: 11 } },
+        },
+      },
+    },
+    plugins: [{
+      id: 'gexSpotLine',
+      afterDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        const xScale = scales.x;
+        if (!xScale || spotIdx < 0) return;
+        const x = xScale.getPixelForValue(spotIdx >= 0 ? spotIdx : 0);
+        ctx.save();
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+        ctx.fillStyle = '#6366f1';
+        ctx.font = 'bold 11px Segoe UI, sans-serif';
+        ctx.fillText('Spot ' + spotLabel, x + 4, chartArea.top + 14);
+        annotations.forEach(ann => {
+          const idx = strikes.findIndex(s => s.strike === ann.strike);
+          if (idx < 0) return;
+          const ax = xScale.getPixelForValue(idx);
+          ctx.strokeStyle = ann.color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(ax, chartArea.top);
+          ctx.lineTo(ax, chartArea.bottom);
+          ctx.stroke();
+        });
+        ctx.restore();
+      },
+    }],
+  });
+}
+
+function fmtGexCompact(v) {
+  if (v == null || isNaN(v) || v === 0) return '0';
+  const sign = v < 0 ? '-' : '';
+  const av = Math.abs(v);
+  if (av >= 1e9) return sign + (av / 1e9).toFixed(1) + 'B';
+  if (av >= 1e6) return sign + (av / 1e6).toFixed(1) + 'M';
+  if (av >= 1e3) return sign + (av / 1e3).toFixed(1) + 'K';
+  return sign + av.toFixed(0);
+}
+
+/** Multi-stop RGB interpolation for heatmap gradients. */
+function gexHmLerp(stops, t) {
+  const x = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < stops.length; i++) {
+    if (x <= stops[i].t) {
+      const a = stops[i - 1], b = stops[i];
+      const f = (x - a.t) / (b.t - a.t);
+      const r = Math.round(a.c[0] + (b.c[0] - a.c[0]) * f);
+      const g = Math.round(a.c[1] + (b.c[1] - a.c[1]) * f);
+      const b_ = Math.round(a.c[2] + (b.c[2] - a.c[2]) * f);
+      return `rgb(${r},${g},${b_})`;
+    }
+  }
+  const last = stops[stops.length - 1].c;
+  return `rgb(${last[0]},${last[1]},${last[2]})`;
+}
+
+const GEX_HM_GREEN = [
+  { t: 0.00, c: [15,  18,  22] },
+  { t: 0.12, c: [12,  32,  22] },
+  { t: 0.28, c: [16,  58,  36] },
+  { t: 0.45, c: [22,  90,  50] },
+  { t: 0.62, c: [34, 140,  62] },
+  { t: 0.78, c: [56, 185,  80] },
+  { t: 0.90, c: [96, 215, 100] },
+  { t: 1.00, c: [134, 239, 120] },
+];
+const GEX_HM_RED = [
+  { t: 0.00, c: [15,  18,  22] },
+  { t: 0.12, c: [38,  16,  18] },
+  { t: 0.28, c: [72,  18,  22] },
+  { t: 0.45, c: [120, 28,  30] },
+  { t: 0.62, c: [175, 40,  38] },
+  { t: 0.78, c: [220, 65,  55] },
+  { t: 0.90, c: [245, 100,  85] },
+  { t: 1.00, c: [252, 140, 120] },
+];
+
+function gexHmScaleStats(cells, strikes, exps) {
+  const pos = [], neg = [];
+  let peakVal = 0, peakStrike = null, peakExp = null;
+  for (const s of strikes) {
+    const row = cells[String(s)] || {};
+    for (const e of exps) {
+      const v = row[e] || 0;
+      if (v > 0) pos.push(v);
+      else if (v < 0) neg.push(-v);
+      if (Math.abs(v) > Math.abs(peakVal)) {
+        peakVal = v;
+        peakStrike = s;
+        peakExp = e;
+      }
+    }
+  }
+  const pct = (arr, p) => {
+    if (!arr.length) return 1;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
+    return sorted[idx] || 1;
+  };
+  return {
+    scalePos: Math.max(pct(pos, 0.90), 1),
+    scaleNeg: Math.max(pct(neg, 0.90), 1),
+    peakVal,
+    peakStrike,
+    peakExp,
+  };
+}
+
+function gexHmColor(val, stats) {
+  if (!val) return { bg: '#0f1218', color: '#4b5563' };
+  const curve = 0.52;
+  if (val > 0) {
+    const t = Math.pow(Math.min(val / stats.scalePos, 1), curve);
+    const bg = gexHmLerp(GEX_HM_GREEN, t);
+    const color = t >= 0.72 ? '#052e16' : (t >= 0.35 ? '#ecfdf5' : '#9ca3af');
+    return { bg, color };
+  }
+  const t = Math.pow(Math.min(-val / stats.scaleNeg, 1), curve);
+  const bg = gexHmLerp(GEX_HM_RED, t);
+  const color = t >= 0.72 ? '#450a0a' : (t >= 0.35 ? '#fef2f2' : '#9ca3af');
+  return { bg, color };
+}
+
+async function loadGexHeatmap() {
+  const ticker = document.getElementById('gex-hm-ticker')?.value || 'SPX';
+  const strikePct = document.getElementById('gex-hm-range')?.value || '5';
+  const btn = document.getElementById('gex-hm-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Loading…'; }
+  try {
+    const url = `/api/gex/heatmap?ticker=${encodeURIComponent(ticker)}&strike_pct=${strikePct}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const hint = r.status === 404
+        ? 'Heatmap API not found — restart dashboard server'
+        : 'HTTP ' + r.status;
+      throw new Error(hint);
+    }
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    renderGexHeatmap(data);
+    document.getElementById('gex-hm-updated').textContent =
+      `${ticker} · ${data.expiries?.length || 0} expirations · ${data.strikes?.length || 0} strikes · ${new Date().toLocaleTimeString()}`;
+    toast('Heatmap loaded for ' + ticker, 'success');
+  } catch (e) {
+    toast('Heatmap failed: ' + e.message, 'danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh Heatmap'; }
+  }
+}
+
+function renderGexHeatmap(d) {
+  const spot = d.spot;
+  const spotStrike = (d.strikes || []).reduce((best, s) =>
+    Math.abs(s - spot) < Math.abs(best - spot) ? s : best, d.strikes[0]);
+
+  document.getElementById('gex-hm-spot').textContent = '$' + spot?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+  document.getElementById('gex-hm-flip').textContent = d.gamma_flip != null ? '$' + d.gamma_flip : '—';
+  document.getElementById('gex-hm-total').textContent = d.total_net_gex_fmt || fmtGexDollars(d.total_net_gex);
+  document.getElementById('gex-hm-slope').textContent = d.gamma_slope_fmt ? d.gamma_slope_fmt + '/pt' : '—';
+  const mp = d.max_pos || {};
+  const mn = d.max_neg || {};
+  document.getElementById('gex-hm-maxpos').textContent = mp.gex_fmt
+    ? `${mp.gex_fmt} @ $${mp.strike}` : '—';
+  document.getElementById('gex-hm-maxneg').textContent = mn.gex_fmt
+    ? `${mn.gex_fmt} @ $${mn.strike}` : '—';
+
+  const labels = d.expiry_labels || d.expiries || [];
+  const exps = d.expiries || [];
+  const strikes = d.strikes || [];
+  const cells = d.cells || {};
+  const hmStats = gexHmScaleStats(cells, strikes, exps);
+
+  document.getElementById('gex-hm-head').innerHTML =
+    '<th class="gex-hm-strike">Strike</th>' +
+    labels.map(l => `<th>${l}</th>`).join('');
+
+  const tbody = document.getElementById('gex-hm-body');
+  if (!strikes.length) {
+    tbody.innerHTML = '<tr><td colspan="99" class="text-center py-4" style="color:#94a3b8">No data</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = strikes.map(strike => {
+    const sk = String(strike);
+    const row = cells[sk] || {};
+    const isSpot = strike === spotStrike;
+    const tds = exps.map(exp => {
+      const val = row[exp] || 0;
+      const isPeak = strike === hmStats.peakStrike && exp === hmStats.peakExp && val !== 0;
+      const { bg, color } = gexHmColor(val, hmStats);
+      const peakCls = isPeak ? ' gex-hm-peak' : '';
+      return `<td class="gex-hm-cell${peakCls}" style="background:${bg};color:${color}">${fmtGexCompact(val)}</td>`;
+    }).join('');
+    return `<tr class="${isSpot ? 'gex-hm-spot' : ''}"><td class="gex-hm-strike">${strike}</td>${tds}</tr>`;
+  }).join('');
+
+  // Scroll spot row into view after render
+  requestAnimationFrame(() => {
+    const spotRow = document.querySelector('#gex-hm-body tr.gex-hm-spot');
+    if (spotRow) spotRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+}
+
+// Initial render on page load — don't wait for SocketIO first push
+fetch('/api/summary').then(r => r.json()).then(data => {
+  lastData = data;
+  if (activeTab === 'today') render(data);
+}).catch(e => console.error('Initial load failed:', e));
+</script>
+</body>
+</html>

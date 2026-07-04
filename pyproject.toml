@@ -1,0 +1,21 @@
+[project]
+name = "meic-autotrader"
+version = "0.1.0"
+description = "SPX 0DTE MEIC autotrader with Schwab and TastyTrade support"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "rauth",
+    "paho-mqtt",
+    "openpyxl",
+    "pandas",
+    "schwab-py",
+    "python-dotenv",
+    "flask",
+    "flask-socketio",
+    "pandas-market-calendars",
+    "beautifulsoup4",
+    "tastytrade>=12.4.0",
+    "pyyaml>=6.0",
+]

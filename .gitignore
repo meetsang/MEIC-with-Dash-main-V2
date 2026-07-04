@@ -1,0 +1,52 @@
+# Credentials & tokens - NEVER commit these
+common/auth/token.json
+common/auth/bearer.json
+common/auth/bearer.py
+auth/token.json
+auth/bearer.json
+auth/bearer.py
+auth/token
+
+# Personal trade data & runtime state
+dashboard/meic_trades.db
+dashboard/bot_status.json
+trades/active/
+trades/history/
+trades/session/
+trades/settlement/
+trades/closed/
+trades/*.json
+manual_spread/trades/
+meic0dte/trades/
+CHANGES-pavi.md
+implenment.md
+
+# Market data (MQTT recorder output)
+data/
+
+# Logs
+logs/
+launcher.log
+stream_pub_tt.log
+meic0dte/logs/
+streaming/spx_tick_data.csv
+streaming/vix_tick_data.csv
+streaming/optsymbols.json
+*.log
+
+# Cache
+common/fomc_cache.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+.uv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
