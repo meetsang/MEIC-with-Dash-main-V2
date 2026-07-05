@@ -14,12 +14,17 @@ log = logging.getLogger(__name__)
 
 
 class ExitWorkerPool:
+    """One active exit job per trade path; concurrency capped by semaphore.
+
+    Note: manual-kill jobs start immediately like other jobs. The semaphore
+    bounds concurrent broker work; there is no separate priority queue yet
+    (see changes/STOP_MONITOR_V3_REVIEW_FIXES.md §T-4).
+    """
+
     def __init__(self, max_jobs: Optional[int] = None):
         self._max = max_jobs if max_jobs is not None else v3_config.STOP_MAX_EXIT_JOBS
         self._lock = threading.Lock()
         self._active: Dict[str, str] = {}  # path -> job_id
-        self._manual_priority: list[tuple[str, Callable[[], None]]] = []
-        self._fifo: list[tuple[str, Callable[[], None]]] = []
         self._sem = threading.Semaphore(self._max)
 
     @property

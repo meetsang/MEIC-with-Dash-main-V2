@@ -95,6 +95,37 @@ class TestV2RollbackCloseOnly(unittest.TestCase):
 class TestRestartMidClose(unittest.TestCase):
     """§12.5 #16 — supervisor resumes closing handler after restart."""
 
+    def test_supervisor_resumes_manual_kill_on_open_close_only_restart(self):
+        """Fix F-1: open + close_only_mode must re-enqueue ManualKillHandler."""
+        broker = MockBroker()
+        broker.orders['9001'] = OrderResult(True, '9001', 'working')
+        prices = _mock_prices()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 't.json')
+            st = _open_state(
+                status='open',
+                close_only_mode=True,
+                exit_handler='manual_close',
+                exit_started_at=state_mod.now_iso(),
+                close_mechanism='manual_close',
+            )
+            state_mod.save_state(path, st)
+            slot = TradeSlot.from_path(path)
+
+            sup = StopSupervisor(broker, prices)
+            with patch('blocks.stop.v3.command_claim._trades_root_for_path', return_value=tmp), \
+                 patch('blocks.stop.monitor._trades_root_for_path', return_value=tmp), \
+                 patch.object(sup, '_discover_slots', return_value=[slot]), \
+                 patch.object(sup, '_sync_pending_fills'), \
+                 patch.object(sup, '_write_heartbeat'):
+                sup._cycle()
+                time.sleep(1.0)
+
+            spread_closes = [p for p in broker.placed if p[0] == 'spread_close']
+            self.assertGreaterEqual(len(spread_closes), 1)
+            self.assertTrue(slot.state.get('close_only_mode'))
+
     def test_supervisor_polls_spread_close_on_restart(self):
         broker = MockBroker()
         broker.orders['8800'] = OrderResult(

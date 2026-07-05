@@ -959,6 +959,7 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 | `blocks/stop/v3/handlers/monitor_adapter.py` | Shared `StopMonitor` adapter for handlers |
 | `scripts/v3_broker_spike.py` | V3-0 read-only TT parallelism probe |
 | `scripts/seed_dual_manual_kill_fixture.py` | Offline dual-kill fixture (sandbox or `--apply`) |
+| `changes/STOP_MONITOR_V3_REVIEW_FIXES.md` | Post-ship review findings + fix tracker |
 
 ### 14.3 V3 tests (253 total in suite)
 
@@ -1109,6 +1110,7 @@ V3 does **not** fully replace `StopMonitor` yet. The supervisor delegates these 
 3. **Stall policy** — `exit_stalled=true` triggers broker reconcile + critical log; does **not** auto-spawn a second exit worker (operator review).
 4. **Restart mid-close** — supervisor resumes spread-close poll or long chase from persisted JSON fields; no restart required for operator JSON edits (mtime merge).
 5. **`.env` is gitignored** — set `STOP_MONITOR_ENGINE=v3` locally only.
+6. **Restart during manual kill (before `closing`)** — fixed 2026-07-05 (F-1); supervisor re-enqueues `ManualKillHandler`. See [STOP_MONITOR_V3_REVIEW_FIXES.md](STOP_MONITOR_V3_REVIEW_FIXES.md).
 
 ### 16.8 Monday checklist (first live V3 session)
 

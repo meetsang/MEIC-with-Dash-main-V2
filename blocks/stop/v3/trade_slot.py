@@ -31,8 +31,11 @@ class TradeSlot:
     @classmethod
     def from_path(cls, path: str) -> 'TradeSlot':
         st = state_mod.load_state(path)
-        mtime = _path_mtime(path)
-        return cls(path=path, state=st, disk_mtime=mtime)
+        return cls.from_loaded(path, st)
+
+    @classmethod
+    def from_loaded(cls, path: str, state: Dict[str, Any]) -> 'TradeSlot':
+        return cls(path=path, state=state, disk_mtime=_path_mtime(path))
 
 
 def _path_mtime(path: str) -> float:

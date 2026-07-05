@@ -66,6 +66,7 @@ class StopSupervisor:
         self._killswitch_claimed = False
         self._loop_count = 0
         self._alert_order_paths: Dict[str, str] = {}
+        self._last_pending_sync = 0.0
 
     def run_forever(self) -> None:
         self.prices.start()
@@ -129,10 +130,25 @@ class StopSupervisor:
             pass
 
     def _sync_pending_fills(self) -> None:
+        now = time.time()
+        if now - self._last_pending_sync < SLOW_INTERVAL:
+            return
+        self._last_pending_sync = now
         try:
             sync_pending_fills(self.broker)
         except Exception:
             log.exception('Pending fill sync failed')
+
+    @staticmethod
+    def _slot_eligible(st: dict) -> bool:
+        status = st.get('status')
+        if status not in ('open', 'closing'):
+            return False
+        filled = int(st.get('filled_quantity') or 0)
+        target = int(st.get('quantity') or 0)
+        if status == 'open' and target and filled < target:
+            return False
+        return True
 
     def _discover_slots(self) -> List[TradeSlot]:
         self._sync_pending_fills()
@@ -142,37 +158,35 @@ class StopSupervisor:
 
         for path in paths:
             seen.add(path)
+
+            if path in self._slots:
+                slot = self._slots[path]
+                merge_disk_state(slot)
+                self._sync_alert_registration(slot)
+                if not self._slot_eligible(slot.state):
+                    del self._slots[path]
+                    continue
+                slots.append(slot)
+                continue
+
             try:
                 st = state_mod.load_state(path)
             except Exception as exc:
                 log.warning('Skip slot %s — load failed: %s', path, exc)
                 continue
 
-            status = st.get('status')
-            if status not in ('open', 'closing'):
-                if path in self._slots:
-                    del self._slots[path]
+            if not self._slot_eligible(st):
                 continue
 
-            filled = int(st.get('filled_quantity') or 0)
-            target = int(st.get('quantity') or 0)
-            if status == 'open' and target and filled < target:
-                continue
-
-            if path in self._slots:
-                slot = self._slots[path]
-                merge_disk_state(slot)
-                self._sync_alert_registration(slot)
-            else:
-                slot = TradeSlot.from_path(path)
-                ensure_v3_exit_fields(slot.state)
-                lot = slot.state.get('lot', 'stop-monitor')
-                register_spread_symbols(slot.state, lot, log)
-                route = recover_route(slot)
-                if route:
-                    log.info('V3 startup recovery path=%s route=%s', path, route)
-                self._sync_alert_registration(slot)
-                self._slots[path] = slot
+            slot = TradeSlot.from_loaded(path, st)
+            ensure_v3_exit_fields(slot.state)
+            lot = slot.state.get('lot', 'stop-monitor')
+            register_spread_symbols(slot.state, lot, log)
+            route = recover_route(slot)
+            if route:
+                log.info('V3 startup recovery path=%s route=%s', path, route)
+            self._sync_alert_registration(slot)
+            self._slots[path] = slot
             slots.append(slot)
 
         for path in list(self._slots.keys()):
@@ -428,9 +442,23 @@ class StopSupervisor:
             return
 
         manual_handlers = ('manual_close', 'admin_killswitch')
-        if slot.close_only_mode or slot.state.get('exit_handler') in manual_handlers:
+        exit_handler = str(slot.state.get('exit_handler') or '')
+        if slot.close_only_mode or exit_handler in manual_handlers:
             if slot.status == 'closing':
                 self._poll_closing(slot)
+                return
+            if slot.status == 'open' and not self.exit_pool.has_job(slot.path):
+                reason = (
+                    slot.state.get('close_mechanism')
+                    or exit_handler
+                    or 'manual_close'
+                )
+                log.info(
+                    'Resuming manual kill on restart path=%s reason=%s',
+                    slot.path,
+                    reason,
+                )
+                self._enqueue_manual_kill(slot, reason=str(reason))
             return
 
         if slot.status == 'closing':
