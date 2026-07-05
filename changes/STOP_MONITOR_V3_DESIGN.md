@@ -1,7 +1,7 @@
 # Stop Monitor V3 — Design Document
 
-**Status:** Implementation-ready — design complete; proceed per §11 migration order  
-**Date:** 2026-07-04 (implementation-gate pass — rollback flag, required fields, atomic I/O)  
+**Status:** **Implemented** (2026-07-05) — V2.9 + full V3 code shipped locally; **live C1/C2 validation pending** first market session. V2 rollback retained per §10.  
+**Date:** 2026-07-04 design; 2026-07-05 implementation pass  
 **Motivation:** [LIVE_SESSION_2026-07-02.md](LIVE_SESSION_2026-07-02.md) (Kill Selected on 3 MEIC CCS ~14:40 CT felt sequential)  
 **Related:** [GAP_ANALYSIS.md](GAP_ANALYSIS.md) GAP-22, [STALE_PENDING_TRADE_JSON.md](STALE_PENDING_TRADE_JSON.md) Change 2 (spread kill), [LIVE_SESSION_2026-06-26.md](LIVE_SESSION_2026-06-26.md) (ms-50 long-chase vs spread-close)
 
@@ -841,15 +841,17 @@ Step 11 — First live V3 session (conservative caps §3.6); v2 rollback on stan
 
 ### 11.2 Phase table
 
+> **Implementation note (2026-07-05):** All phases through V3-4 are shipped locally. See **§16.1** for status. Live C1/C2 validation is the only remaining rollout gate.
+
 | Phase | Deliverable | Risk | When |
 |-------|-------------|------|------|
-| **V2.9** | **Urgent exit correctness patch** — `close_fills.py` null-long → `0.0` (§8.6); tests for `manual_close` / `admin_killswitch`; **optional:** thread current manual kill on existing per-trade threads (`_threaded_spread_close` + `close_only_mode`) **only if live trading requires non-blocking kill before V3 ships** | Low | **Immediate** |
-| **V3-0** | Paper spike: broker parallelism P1 vs P3 (§7.3) | Low | After V2.9 + feature flag |
-| **V3-1** | `BrokerLane` + configurable limits; paper caps (§3.6) | Medium | After V3-0 clean |
-| **V3-2a** | `StopSupervisor` + `ManualKillHandler` only (behind `v3` flag) | Medium | After V3-1 |
-| **V3-2b** | `ExchangeStopFilledHandler` + `SoftwareBreachHandler` + phases | High | After V3-2a paper pass |
-| **V3-3** | Idempotency hardening, command claiming, stuck-job policy | Medium | With V3-2 |
-| **V3-4** | Broker leg-parse fix; observability; **live rollout caps** | Low–Medium | After V3-2 paper tests |
+| **V2.9** | **Urgent exit correctness patch** — `close_fills.py` null-long → `0.0` (§8.6); tests for `manual_close` / `admin_killswitch` | Low | **Shipped** |
+| **V3-0** | Paper spike: broker parallelism P1 vs P3 (§7.3) | Low | **Done** |
+| **V3-1** | `BrokerLane` + configurable limits; paper caps (§3.6) | Medium | **Shipped** |
+| **V3-2a** | `StopSupervisor` + `ManualKillHandler` only (behind `v3` flag) | Medium | **Shipped** — live C3 Jul 4 |
+| **V3-2b** | `ExchangeStopFilledHandler` + `SoftwareBreachHandler` + phases | High | **Shipped** — live C1/C2 pending |
+| **V3-3** | Idempotency hardening, command claiming, stuck-job policy | Medium | **Shipped** |
+| **V3-4** | Broker leg-parse fix; observability; **live rollout caps** | Low–Medium | **Shipped** |
 
 ---
 
@@ -916,7 +918,9 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 
 ---
 
-## 14. Reference — key files today
+## 14. Reference — key files
+
+### 14.1 V2 (rollback path)
 
 | File | Role |
 |------|------|
@@ -927,13 +931,48 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 | `blocks/stop/profiles/meic.py` | MEIC stop profile — registers all three phases |
 | `blocks/stop/stop_profile.py` | `StopProfile` dataclass + profile registry |
 | `blocks/stop/alerts.py` | TT fill websocket |
-| `blocks/stop/run.py` | CLI entry, logging path |
-| `brokers/tastytrade_broker.py` | Serialized asyncio broker |
+| `blocks/stop/run.py` | CLI entry, `STOP_MONITOR_ENGINE` flag, logging path |
+| `brokers/tastytrade_broker.py` | Asyncio broker wrapper; spread-close leg parse (V3-4) |
 | `blocks/stop/close_fills.py` | Slippage + `_resolved_long_close_price` (**V2.9** null→0 fix) |
 | `tests/test_close_fills.py` | V2.9 tests for manual_close null-long policy |
 | `blocks/stop/breach.py` | `spread_mark_price`, breach threshold helpers |
 | `dashboard/server.py` | `/api/close_trade`, `/api/killswitch` |
 | `changes/GAP_ANALYSIS.md` | GAP-22 round-robin discussion |
+
+### 14.2 V3 (implemented)
+
+| File | Role |
+|------|------|
+| `blocks/stop/v3/supervisor.py` | `StopSupervisor` — single scan loop, handler dispatch, heartbeat |
+| `blocks/stop/v3/trade_slot.py` | `TradeSlot` cache + mtime-gated `merge_disk_state()` |
+| `blocks/stop/v3/broker_lane.py` | Per-trade lock + global semaphore (`in_flight` metric) |
+| `blocks/stop/v3/exit_pool.py` | One exit job per trade path; manual-kill priority |
+| `blocks/stop/v3/command_claim.py` | Atomic `.close.json` / killswitch claiming |
+| `blocks/stop/v3/recovery.py` | V3 field backfill, stall detection, startup routes, broker reconcile |
+| `blocks/stop/v3/quotes.py` | Manual kill pricing: MQTT → REST → emergency offset |
+| `blocks/stop/v3/observability.py` | Structured `v3_exit` JSON log lines |
+| `blocks/stop/v3/config.py` | Env tunables (`TARGET_CYCLE_SEC`, lane size, stall sec) |
+| `blocks/stop/v3/handlers/manual_kill.py` | **Condition 3** — cancel stop, spread close |
+| `blocks/stop/v3/handlers/exchange_stop_filled.py` | **Condition 2** — record short fill, schedule long chase |
+| `blocks/stop/v3/handlers/software_breach.py` | **Condition 1** — phase.execute via exit pool |
+| `blocks/stop/v3/handlers/long_chase.py` | Long-leg STC chase after stop fill |
+| `blocks/stop/v3/handlers/monitor_adapter.py` | Shared `StopMonitor` adapter for handlers |
+| `scripts/v3_broker_spike.py` | V3-0 read-only TT parallelism probe |
+| `scripts/seed_dual_manual_kill_fixture.py` | Offline dual-kill fixture (sandbox or `--apply`) |
+
+### 14.3 V3 tests (253 total in suite)
+
+| File | Covers |
+|------|--------|
+| `tests/test_v3_manual_kill.py` | Quote fallback, ManualKillHandler, command claim |
+| `tests/test_v3_exchange_stop.py` | C2 handler, long chase |
+| `tests/test_v3_software_breach.py` | C1 phase execution |
+| `tests/test_v3_recovery.py` | Stall detection |
+| `tests/test_v3_paper_scenarios.py` | §12.5 paper: rollback, restart, idempotency, dual kill |
+| `tests/test_v3_remaining.py` | Startup routes, stall reconcile, broker lane metrics |
+| `tests/test_stop_monitor_engine.py` | `STOP_MONITOR_ENGINE` flag |
+| `tests/test_dual_manual_kill_simulation.py` | V2-style dual kill baseline (mock) |
+| `tests/test_tastytrade_leg_actions.py` | Spread-close BTC/STC leg fill extraction |
 
 ---
 
@@ -941,14 +980,141 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 
 V3 converges on: **StopSupervisor** + **mtime-gated JSON cache** + **atomic writes** + **three exit handlers** (Option A) + **exit idempotency** + **command claiming** + **V2/V3 feature flag**. Kill-during-stop-fill → Condition 2. Manual kill wins over breach. **`close_only_mode` persisted to disk** (required field).
 
-**Ship order:** **V2.9** (`close_fills.py`) immediately → **feature flag shell** → **ManualKillHandler first** → other handlers → paper scenarios → live with conservative caps and **v2 rollback on standby**.
+**Ship order (completed):** V2.9 → feature flag → V3-0 spike → V3-1 BrokerLane → V3-2a ManualKill → V3-2b C1/C2 handlers → V3-3 idempotency/stall/recovery → V3-4 observability/leg parse → paper scenarios.
 
-**Implementation gates before coding:** §10 rollback, §8.3 atomic writes, §8.5 required fields, §6.6 command claiming, §5.3 quote fallback, §6.3.2 stuck jobs, §13.1 success metrics.
+**Remaining gate:** Live market validation of **Condition 1** (software breach) and **Condition 2** (exchange stop fill) on first V3 session with market open. Condition 3 (manual kill) live-validated 2026-07-04.
 
-**Next steps:**
+See **§16** for operator commands, env vars, and operational notes.
 
-1. **Ship V2.9** — `close_fills.py` per §8.6 + tests.
-2. Add **`STOP_MONITOR_ENGINE`** feature flag (§10); default `v2`.
-3. **V3-0** broker spike → **V3-2a ManualKillHandler** (§11.1) — do not big-bang all handlers.
-4. Paper scenarios §12.5 before first live `v3` session.
-5. Operator sign-off on `TARGET_CYCLE_SEC` and live cap defaults (§3.6).
+---
+
+## 16. Implementation status and operator notes
+
+*Added 2026-07-05 after offline implementation and paper test pass.*
+
+### 16.1 Phase completion
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| **V2.9** | `close_fills.py` null-long → `0.0` | **Shipped** |
+| **V3-0** | Broker parallelism spike (`scripts/v3_broker_spike.py`) | **Done** — ~2.7× speedup vs serial at lane=6 (Jul 4 after-hours probe) |
+| **V3-1** | `BrokerLane` + env caps | **Shipped** |
+| **V3-2a** | `StopSupervisor` + `ManualKillHandler` | **Shipped** — live dual-kill tested Jul 4 |
+| **V3-2b** | `ExchangeStopFilledHandler` + `SoftwareBreachHandler` + `LongChaseHandler` | **Shipped** — paper/fake-broker only |
+| **V3-3** | Command claiming, exit idempotency, stall policy, startup recovery | **Shipped** |
+| **V3-4** | Observability, heartbeat, spread-close leg parse | **Shipped** |
+| **Live C1/C2** | Breach + exchange stop fill on real positions | **Pending** — requires market hours |
+| **V2 rollback** | `MonitorRunner` path retained | **Kept** — do not delete until post-live sign-off |
+
+### 16.2 Enabling V3
+
+Add to `.env` (do **not** commit — contains TT credentials):
+
+```
+STOP_MONITOR_ENGINE=v3
+```
+
+Rollback: set `STOP_MONITOR_ENGINE=v2` or unset (defaults to `v2`), restart stop_monitor. V2 honors persisted `close_only_mode` / `exit_handler` on trade JSON.
+
+Optional tunables (defaults in `blocks/stop/v3/config.py`):
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `TARGET_CYCLE_SEC` | `0.25` | Supervisor scan interval |
+| `STOP_BROKER_LANE_SIZE` | `6` | Max concurrent TT HTTP ops across trades |
+| `STOP_MAX_EXIT_JOBS` | `12` | Max parallel exit worker threads |
+| `STOP_EXIT_STALL_SEC` | `120` | No progress → `exit_stalled=true` + critical log |
+| `MANUAL_KILL_EMERGENCY_OFFSET` | `0.50` | Debit cap when MQTT + REST quotes missing |
+
+### 16.3 Useful commands
+
+**Start stop monitor (from repo root):**
+
+```powershell
+cd MEIC-with-Dash-main-V2
+python -m blocks.stop.run
+# or with explicit poll (V3 ignores per-trade poll; uses TARGET_CYCLE_SEC):
+python -m blocks.stop.run --poll 5
+```
+
+**Run V3 test suite:**
+
+```powershell
+python -m pytest tests/test_v3_manual_kill.py tests/test_v3_exchange_stop.py `
+  tests/test_v3_software_breach.py tests/test_v3_recovery.py `
+  tests/test_v3_paper_scenarios.py tests/test_v3_remaining.py -v
+
+python -m pytest tests/ -q   # full suite (253 tests)
+```
+
+**Broker parallelism spike (read-only — no orders placed):**
+
+```powershell
+python scripts/v3_broker_spike.py --mock-only
+python scripts/v3_broker_spike.py --order-ids 480934535 480934537
+```
+
+**Seed offline dual-kill fixtures (safe sandbox — stop_monitor does not watch):**
+
+```powershell
+python scripts/seed_dual_manual_kill_fixture.py
+```
+
+**Seed into active dir (stop_monitor WILL manage — use only for intentional live tests):**
+
+```powershell
+python scripts/seed_dual_manual_kill_fixture.py --apply --write-kill-commands
+```
+
+### 16.4 Logs and heartbeat
+
+| Artifact | Location | Contents |
+|----------|----------|----------|
+| Stop monitor log | `meic0dte/logs/stop_monitor.log` | All supervisor/handler activity |
+| Structured exit events | Same log, prefix `v3_exit` | JSON: `{trade, handler, step, wait_ms, queue_depth}` |
+| Heartbeat | `trades/heartbeat.json` | `engine`, `loop_count`, `active_slots`, `active_exit_jobs`, `broker_in_flight`, `broker_lane_max`, `target_cycle_sec` |
+
+**Example log grep (PowerShell):**
+
+```powershell
+Select-String -Path meic0dte/logs/stop_monitor.log -Pattern "v3_exit|Exit job started|Claimed manual close"
+Get-Content trades/heartbeat.json | ConvertFrom-Json
+```
+
+### 16.5 Live validation summary (Jul 4, 2026)
+
+| Path | Result |
+|------|--------|
+| **C3 Manual kill** | **Validated** — dual CCS kill: stops cancelled, spread closes placed (~3s), `close_only_mode` + `exit_handler` persisted. Requires **only one** stop_monitor process. |
+| **C2 Exchange stop fill** | Code + paper tests pass; **not live-tested** (market closed / positions already in manual-kill close path) |
+| **C1 Software breach** | Code + paper tests pass; **not live-tested** (requires open position + breach during market hours) |
+| **Quote fallback** | Validated — `broker_rest` mids when MQTT absent after hours |
+| **V3-0 spike** | Validated — parallel `get_order_status` ~2.7× vs serial, no 429 observed at lane=6 |
+
+### 16.6 Hybrid architecture note (intentional)
+
+V3 does **not** fully replace `StopMonitor` yet. The supervisor delegates these to existing monitor methods:
+
+- Breach watch refresh (`_refresh_breach_watch`) — MQTT every cycle
+- Stop placement / resize (`_ensure_stop_for_filled_qty`)
+- Spread-close poll (`_poll_spread_close`) on `closing` trades with `spread_close_order_id`
+- 0DTE freeze (`_broker_actions_frozen`)
+
+**Exit execution** (cancel, place close, phase.execute, long chase) runs through V3 **ExitWorkerPool + BrokerLane + handlers**. This is the intended V3-2b hybrid; full monitor excision is a future cleanup, not a rollout blocker.
+
+### 16.7 Operational warnings
+
+1. **One stop_monitor at a time** — a lingering V2 instance can steal kill commands from V3.
+2. **Do not re-kill the same spreads** to test C2 — manual kill sets `close_only_mode`; use fresh open test spreads for breach/stop-fill proof.
+3. **Stall policy** — `exit_stalled=true` triggers broker reconcile + critical log; does **not** auto-spawn a second exit worker (operator review).
+4. **Restart mid-close** — supervisor resumes spread-close poll or long chase from persisted JSON fields; no restart required for operator JSON edits (mtime merge).
+5. **`.env` is gitignored** — set `STOP_MONITOR_ENGINE=v3` locally only.
+
+### 16.8 Monday checklist (first live V3 session)
+
+1. Confirm no stale stop_monitor processes running.
+2. Start stop_monitor with `STOP_MONITOR_ENGINE=v3`.
+3. Let any `closing` trades from prior tests finish (spread poll / long chase).
+4. Monitor `heartbeat.json` and `v3_exit` log lines during session.
+5. C1/C2 will validate naturally when breach or exchange stop fill occurs — no forced test required on production CCS.
+6. Keep `STOP_MONITOR_ENGINE=v2` rollback ready if heartbeat goes stale or unexpected double-close attempts appear.

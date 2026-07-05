@@ -92,6 +92,7 @@ class StopMonitor:
         self._breach_stale_logged = False
         self._breach_last_near_log = 0.0
         self._breach_last_near_spread: Optional[float] = None
+        self._skip_dashboard_commands = False
 
     def _0dte_past_market_close(self) -> bool:
         return trade_past_0dte_close(
@@ -155,6 +156,11 @@ class StopMonitor:
         register_spread_symbols(self.state, lot, log)
 
         if self._broker_actions_frozen():
+            state_mod.save_state(self.json_path, self.state)
+            return
+
+        if self.state.get('close_only_mode'):
+            self._recover_closing_on_load()
             state_mod.save_state(self.json_path, self.state)
             return
 
@@ -471,13 +477,28 @@ class StopMonitor:
         now = time.time()
 
         # Check dashboard kill switch or per-trade close commands first
-        if self._check_dashboard_commands():
+        if not self._skip_dashboard_commands and self._check_dashboard_commands():
             return
 
         if self._check_stop_update_command():
             return
 
         if self._poll_spread_close():
+            return
+
+        if self.state.get('close_only_mode'):
+            if self.state.get('status') == 'closing':
+                close_started = self.state.get('short_closed_at')
+                if close_started is not None and now - float(close_started) >= self.long_close_delay_sec and not self._long_chase_active:
+                    self._long_chase_active = True
+                    t = threading.Thread(
+                        target=self._threaded_long_chase,
+                        name=f'long-chase-{self.state.get("lot","?")}',
+                        daemon=True,
+                    )
+                    t.start()
+            self._maybe_merge_disk_stop_state()
+            state_mod.save_state(self.json_path, self.state)
             return
 
         if self.state.get('status') == 'open':

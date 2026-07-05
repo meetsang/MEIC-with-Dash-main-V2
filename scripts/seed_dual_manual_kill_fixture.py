@@ -2,8 +2,8 @@
 """Seed open manual-spread JSON fixtures for dual kill / close testing.
 
 Models two live CCS positions (different expiries) from operator screenshot:
-  - Jul 6 7600/7625  stop #480934203
-  - Jul 7 7585/7610  stop #480934208
+  - Jul 6 7600/7625  stop #480934535
+  - Jul 7 7585/7610  stop #480934537
 
 Default: writes to trades/sandbox/dual_kill/ (safe — stop_monitor does not watch there).
 Use --apply to write under trades/active/MANUAL_SPREAD/ (stop_monitor WILL pick them up).
@@ -46,9 +46,9 @@ FIXTURES: Tuple[Dict[str, Any], ...] = (
         'net_credit': 0.55,
         'quantity': 3,
         'open_order_id': '480934100',
-        'stop_order_id': '480934203',
-        'stop_price': 1.70,
-        'limit_price': 1.80,
+        'stop_order_id': '480934535',
+        'stop_price': 1.60,
+        'limit_price': 1.70,
         # Approx mids for spread-close pricing if MQTT absent in test
         'short_mid': 0.22,
         'long_mid': 0.10,
@@ -64,7 +64,7 @@ FIXTURES: Tuple[Dict[str, Any], ...] = (
         'net_credit': 0.50,
         'quantity': 3,
         'open_order_id': '480934150',
-        'stop_order_id': '480934208',
+        'stop_order_id': '480934537',
         'stop_price': 1.60,
         'limit_price': 1.70,
         'short_mid': 1.82,

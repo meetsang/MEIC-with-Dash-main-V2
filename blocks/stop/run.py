@@ -20,7 +20,7 @@ VALID_ENGINES = frozenset({'v2', 'v3'})
 
 
 def stop_monitor_engine() -> str:
-    """v2 = MonitorRunner (default); v3 = StopSupervisor (stub until V3-2a)."""
+    """v2 = MonitorRunner (default); v3 = StopSupervisor + exit handlers."""
     engine = os.environ.get('STOP_MONITOR_ENGINE', 'v2').strip().lower()
     if engine not in VALID_ENGINES:
         raise SystemExit(
@@ -39,11 +39,16 @@ def _run_v2(*, broker, poll_interval: float, alert_listener) -> None:
 
 
 def _run_v3(*, broker, poll_interval: float, alert_listener) -> None:
-    raise SystemExit(
-        'STOP_MONITOR_ENGINE=v3 is not implemented yet (V3-2a StopSupervisor). '
-        'Unset STOP_MONITOR_ENGINE or set STOP_MONITOR_ENGINE=v2. '
-        'See changes/STOP_MONITOR_V3_DESIGN.md §11.',
+    from blocks.stop.mqtt_prices import get_shared_cache
+    from blocks.stop.v3.supervisor import StopSupervisor
+
+    supervisor = StopSupervisor(
+        broker=broker,
+        prices=get_shared_cache(),
+        alert_listener=alert_listener,
+        poll_interval=poll_interval,
     )
+    supervisor.run_forever()
 
 
 def main():

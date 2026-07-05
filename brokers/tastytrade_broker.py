@@ -169,6 +169,14 @@ def _order_result_from_placed_order(order) -> OrderResult:
         single_leg_fill = sell_to_close_fill
         filled_qty = sell_to_close_filled or filled_qty
 
+    # Full spread close: BTC closes short, STC closes long.
+    if buy_to_close_filled > 0 and sell_to_close_filled > 0:
+        if buy_to_close_fill is not None:
+            short_fill = buy_to_close_fill
+        if sell_to_close_fill is not None:
+            long_fill = sell_to_close_fill
+        filled_qty = min(buy_to_close_filled, sell_to_close_filled)
+
     if status == 'filled' and order_qty and not single_leg_fill:
         filled_qty = order_qty
     elif status == 'filled' and order_qty and single_leg_fill:

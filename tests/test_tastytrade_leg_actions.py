@@ -81,6 +81,35 @@ class TestTastytradeLegActions(unittest.TestCase):
         self.assertEqual(result.filled_price, 3.3)
         self.assertEqual(result.filled_quantity, 1)
 
+    def test_spread_close_extracts_both_leg_fills(self):
+        """V3-4: BTC short + STC long on spread-close order."""
+        order = SimpleNamespace(
+            id=480934549,
+            status='Filled',
+            size='3',
+            price='-0.20',
+            legs=[
+                SimpleNamespace(
+                    action='Buy to Close',
+                    quantity=3,
+                    remaining_quantity='0',
+                    fills=[SimpleNamespace(fill_price='0.22', quantity='3')],
+                ),
+                SimpleNamespace(
+                    action='Sell to Close',
+                    quantity=3,
+                    remaining_quantity='0',
+                    fills=[SimpleNamespace(fill_price='0.10', quantity='3')],
+                ),
+            ],
+        )
+        result = _order_result_from_placed_order(order)
+        self.assertEqual(result.short_fill_price, 0.22)
+        self.assertEqual(result.long_fill_price, 0.10)
+        self.assertEqual(result.filled_price, 0.12)
+        self.assertEqual(result.filled_quantity, 3)
+        self.assertEqual(result.status, 'filled')
+
     def test_spread_close_debit_requires_negative_neworder_price(self):
         """Documents Tasty SDK sign convention — spread close must use negative price."""
         from decimal import Decimal

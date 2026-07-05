@@ -272,6 +272,11 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
         for attempt in range(8):
             try:
                 os.replace(tmp, path)
