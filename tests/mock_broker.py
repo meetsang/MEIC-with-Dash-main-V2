@@ -14,6 +14,7 @@ class MockBroker(BrokerBase):
     self.orders: Dict[str, OrderResult] = {}
     self.prices: Dict[str, float] = {'SPX': 5500.0}
     self.placed: list = []
+    self.spread_position_flat: bool = False
 
   def connect(self) -> bool:
     self._connected = True
@@ -52,6 +53,12 @@ class MockBroker(BrokerBase):
     return r
 
   def place_spread_close_order(self, short_symbol, long_symbol, qty, debit_limit) -> OrderResult:
+    if self.spread_position_flat:
+      return OrderResult(
+          False, None, 'rejected_preflight',
+          message='spread_not_closable_flat',
+          transmitted=False,
+      )
     oid = self._next_id()
     r = OrderResult(
         True, oid, 'filled',
@@ -77,6 +84,12 @@ class MockBroker(BrokerBase):
       return OrderResult(False, order_id, 'unknown')
     return self.orders[order_id]
 
+  def find_working_close_orders(self, symbol) -> list:
+    return []
+
+  def find_working_close_order(self, symbol):
+    return None
+
   def get_option_price(self, symbol) -> Optional[float]:
     return self.prices.get(symbol, 0.50)
 
@@ -94,3 +107,8 @@ class MockBroker(BrokerBase):
       if price is not None:
         out[tt] = price
     return out
+
+  def inspect_spread_position(self, short_symbol, long_symbol, *, expected_qty) -> str:
+    if self.spread_position_flat:
+      return 'flat'
+    return 'closable'

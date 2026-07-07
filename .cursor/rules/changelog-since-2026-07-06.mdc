@@ -1,0 +1,37 @@
+---
+description: Living changelog — document every implementation in CHANGES_SINCE_2026-07-06.md
+alwaysApply: true
+---
+
+# Living changelog (since 2026-07-06)
+
+After **any meaningful implementation, fix, live finding, or operator decision** in MEIC-with-Dash-main-V2, update:
+
+`changes/CHANGES_SINCE_2026-07-06.md`
+
+Do **not** create separate root-level summary docs. Deep specs stay in `changes/` (incident/design docs); the changelog is the dated index of what shipped and what we learned.
+
+## When to update
+
+- Code merged or behavior changed
+- Live session issue or finding
+- Operator decision (engine choice, rollback, deferral)
+- Validation result (pytest, paper/live smoke)
+
+## How to update
+
+1. Add `## YYYY-MM-DD — Short title` **above** the previous entry (newest first).
+2. Include: **What changed**, **Why**, **Findings/learnings**, **Tests/validation**, **Deferred**.
+3. Update the **Open items** table at the bottom if status changed.
+4. Link deeper docs when they exist (e.g. `STOP_MONITOR_V3_INCIDENT_*.md`, `LIVE_SESSION_*.md`).
+
+Use the entry template at the top of the changelog file.
+
+## Scope
+
+- **In changelog:** everything from 2026-07-06 onward.
+- **Out of changelog:** V2 rewrite history and pre-Jul-6 design — link only, do not duplicate.
+
+## README link
+
+`V2_README.md` links to this changelog; keep that link if the file is ever renamed (update both).

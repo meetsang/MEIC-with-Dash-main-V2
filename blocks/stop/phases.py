@@ -15,6 +15,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+class PhaseAction:
+    """Supervisor routing — not an exit signal by itself."""
+
+    NONE = 'none'
+    MAINTENANCE = 'maintenance'
+    EXIT_REQUIRED = 'exit_required'
+
+
 class PhaseBase(ABC):
     priority: int = 100
     name: str = 'base'
@@ -27,6 +35,15 @@ class PhaseBase(ABC):
     def execute(self, monitor: 'StopMonitor') -> None:
         ...
 
+    def evaluate(self, monitor: 'StopMonitor') -> str:
+        """Return PhaseAction — only EXIT_REQUIRED may start an exit pipeline."""
+        if not self.should_activate(monitor):
+            return PhaseAction.NONE
+        return self._evaluate_active(monitor)
+
+    def _evaluate_active(self, monitor: 'StopMonitor') -> str:
+        return PhaseAction.MAINTENANCE
+
 
 class Phase1InitialStop(PhaseBase):
     """Monitor initial 2x short stop; handle breach and unexpected states."""
@@ -36,6 +53,45 @@ class Phase1InitialStop(PhaseBase):
 
     def should_activate(self, monitor: 'StopMonitor') -> bool:
         return monitor.state.get('status') == 'open'
+
+    def _evaluate_active(self, monitor: 'StopMonitor') -> str:
+        if self._exit_required(monitor):
+            return PhaseAction.EXIT_REQUIRED
+        if self._maintenance_needed(monitor):
+            return PhaseAction.MAINTENANCE
+        return PhaseAction.NONE
+
+    def _exit_required(self, monitor: 'StopMonitor') -> bool:
+        from blocks.stop import state as state_mod
+
+        state = monitor.state
+        active = state.get('active_stop') or {}
+        if active.get('type') == 'LIMIT' and active.get('order_id'):
+            return False
+        if not active.get('order_id') or active.get('type') != 'STOP_LIMIT':
+            return False
+        short_p = monitor.prices.get(state['short_leg']['symbol'])
+        long_p = monitor.prices.get(state['long_leg']['symbol'])
+        if short_p is None or long_p is None:
+            return False
+        spread_price = spread_mark_price(short_p, long_p)
+        stop_price = monitor.current_stop_price()
+        return bool(
+            spread_breach_triggered(spread_price, stop_price) or monitor.kill_switch
+        )
+
+    def _maintenance_needed(self, monitor: 'StopMonitor') -> bool:
+        from blocks.stop import state as state_mod
+
+        state = monitor.state
+        stop = state.get('active_stop') or {}
+        if stop.get('status') in ('filled', 'cancelled', 'rejected'):
+            return True
+        if stop.get('type') == 'LIMIT' and stop.get('order_id'):
+            return True
+        if not state_mod.section(state, 'active_stop').get('order_id'):
+            return True
+        return False
 
     def execute(self, monitor: 'StopMonitor') -> None:
         from blocks.stop import state as state_mod
@@ -92,6 +148,9 @@ class Phase2NetCreditUpgrade(PhaseBase):
         long_p = monitor.prices.get(monitor.state['long_leg']['symbol'])
         return long_p is not None and long_p <= 0.05
 
+    def _evaluate_active(self, monitor: 'StopMonitor') -> str:
+        return PhaseAction.MAINTENANCE
+
     def execute(self, monitor: 'StopMonitor') -> None:
         monitor.upgrade_to_spread_stop()
 
@@ -110,6 +169,24 @@ class Phase3SpxProximityClose(PhaseBase):
         now = central_time()
         trigger = datetime.time(14, app_config.STRK_CHK_MIN, 0)
         return now >= trigger
+
+    def _evaluate_active(self, monitor: 'StopMonitor') -> str:
+        if self._proximity_triggered(monitor):
+            return PhaseAction.EXIT_REQUIRED
+        return PhaseAction.NONE
+
+    def _proximity_triggered(self, monitor: 'StopMonitor') -> bool:
+        spx = monitor.prices.get_spx()
+        if spx is None:
+            return False
+        short_strike = monitor.state['short_leg']['strike']
+        side = monitor.state['entry']['side']
+        diff = app_config.STRK_IDX_DIFF
+        if side == 'C' and short_strike - spx <= diff:
+            return True
+        if side == 'P' and spx - short_strike <= diff:
+            return True
+        return False
 
     def execute(self, monitor: 'StopMonitor') -> None:
         monitor.execute_spx_proximity_close()

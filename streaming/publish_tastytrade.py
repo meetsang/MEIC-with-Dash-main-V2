@@ -183,4 +183,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from common.process_lock import process_lock
+    from common import tt_config
+
+    with process_lock('streamer', command='publish_tastytrade.py'):
+        main()

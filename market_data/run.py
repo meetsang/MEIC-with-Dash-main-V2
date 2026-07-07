@@ -3,4 +3,7 @@
 from market_data.recorder import main
 
 if __name__ == '__main__':
-    main()
+    from common.process_lock import process_lock
+
+    with process_lock('market_data', command='market_data.run'):
+        main()

@@ -24,7 +24,7 @@ from common.session_cleanup import run_session_cleanup
 from common.trades_layout import ops_path
 from blocks.entry.runner import EntryMonitorRunner
 from blocks.stop.pending_fill_sync import sync_pending_fills
-from common.broker_factory import get_broker
+from common.broker_factory import get_shared_broker
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
 from strategies.loader import load_enabled_strategies
 from strategies.validate import StrategyConfigError, validate_startup_config
@@ -385,7 +385,7 @@ def main(
     bootstrap_meic_session_if_missing(ROOT)
     entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
     try:
-        fill_sync_broker = get_broker()
+        fill_sync_broker = get_shared_broker()
     except Exception as exc:
         fill_sync_broker = None
         log.warning('Pending fill sync disabled — broker unavailable: %s', exc)
@@ -503,6 +503,13 @@ if __name__ == "__main__":
         args.no_stop_monitor = True
         if not args.lot:
             args.lot = 'test-offhours'
+
+    import atexit
+    from common.process_lock import acquire_lock, release_lock
+
+    if not acquire_lock('launcher', paper=tt_config.PAPER_MODE, command='run.py'):
+        raise SystemExit('Launcher already running — exit to avoid duplicate broker traffic')
+    atexit.register(release_lock, 'launcher')
 
     # Start dashboard server once — stays running all week
     dash = subprocess.Popen(

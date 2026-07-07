@@ -1152,7 +1152,15 @@ class StopMonitor:
         if not self.state.get('close_mechanism'):
             self.state['close_mechanism'] = 'exchange_stop'
         self.state['status'] = 'closing'
-        self.state['short_closed_at'] = time.time()
+        fill_ts = time.time()
+        if broker_result is not None and broker_result.filled_at is not None:
+            fill_ts = float(broker_result.filled_at)
+        elif broker_result is not None and broker_result.raw is not None:
+            from blocks.stop.v3.recovery import fill_timestamp_from_broker_result
+            parsed = fill_timestamp_from_broker_result(broker_result)
+            if parsed is not None:
+                fill_ts = parsed
+        self.state['short_closed_at'] = fill_ts
         state_mod.save_state(self.json_path, self.state)
         log.info(
             'Short leg closed — status=closing, long close in %ss',
@@ -1215,6 +1223,7 @@ class StopMonitor:
 
     def _finalize_close(self, reason: str, spx_price: Optional[float] = None) -> None:
         from blocks.stop.close_fills import apply_close_slippage_fields
+        from blocks.stop.v3.recovery import finalize_v3_exit_state
 
         short_fill = self.state['short_leg']['fill_price']
         long_fill = self.state['long_leg']['fill_price']
@@ -1234,6 +1243,7 @@ class StopMonitor:
             'spx_at_close': spx_price,
         }
         apply_close_slippage_fields(self.state)
+        finalize_v3_exit_state(self.state)
         state_mod.move_to_closed(self.json_path, self.state)
         log.info('Spread closed: %s (%s)', self.json_path, reason)
 

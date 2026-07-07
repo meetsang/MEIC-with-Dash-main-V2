@@ -8,20 +8,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from brokers.base import BrokerBase, OrderResult
 from common import tt_config
+from common.broker_cooldown import set_cooldown, should_skip_priority
+from common.rest_limiter import get_rest_limiter
 from common.mqtt_prices import ensure_cache_started
 from common.option_ticks import round_spx_option_price
 from common.symbols import symbols_equivalent, to_schwab, to_tastytrade
+from brokers.base import BrokerBase, OrderResult
 
 log = logging.getLogger(__name__)
 
 _NON_RETRYABLE = ('margin', 'insufficient', 'invalid', 'rejected', 'not found')
+
+
+class BrokerCooldownActive(Exception):
+    """REST call skipped — broker cooldown circuit breaker is active."""
+
+
+class BrokerRateLimited(Exception):
+    """REST call rejected by rate limiter or remote throttle."""
 
 
 def _retry_on_transient(func, max_retries=3, base_delay=2.0):
@@ -194,6 +206,24 @@ def _order_result_from_placed_order(order) -> OrderResult:
     if filled_qty > 0 and status == 'working':
         status = 'partial'
 
+    filled_at = None
+    try:
+        latest = None
+        for leg in legs:
+            for fill in getattr(leg, 'fills', None) or []:
+                ts = getattr(fill, 'filled_at', None) or getattr(fill, 'fill_time', None)
+                if ts is None:
+                    continue
+                if hasattr(ts, 'timestamp'):
+                    val = float(ts.timestamp())
+                else:
+                    val = float(datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp())
+                if latest is None or val > latest:
+                    latest = val
+        filled_at = latest
+    except (TypeError, ValueError, AttributeError):
+        filled_at = None
+
     return OrderResult(
         success=True,
         order_id=order_id,
@@ -204,6 +234,7 @@ def _order_result_from_placed_order(order) -> OrderResult:
         remaining_quantity=remaining,
         short_fill_price=short_fill,
         long_fill_price=long_fill,
+        filled_at=filled_at,
         raw=order,
     )
 
@@ -230,16 +261,59 @@ class TastyTradeBroker(BrokerBase):
             self.account = account
         self._connected = True
         self._prices = ensure_cache_started()
+        self._live_orders_cache: Optional[list] = None
+        self._live_orders_ts: float = 0.0
+        self._live_orders_ttl = float(os.environ.get('TT_LIVE_ORDERS_CACHE_TTL_SEC', '2'))
+        self._last_broker_error: Optional[str] = None
 
     def _loop_worker(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._loop_ready.set()
         self._loop.run_forever()
 
-    def _run(self, coro, timeout: float = 120):
+    def _run(self, coro, timeout: float = 120, *, priority: str = 'NORMAL', op: str = ''):
         """Thread-safe: monitors call broker from parallel threads."""
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=timeout)
+        if should_skip_priority(priority):
+            raise BrokerCooldownActive(f'cooldown active — skipped {op or "broker_call"}')
+        get_rest_limiter().acquire(priority=priority, name=op or 'broker')
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return future.result(timeout=timeout)
+        except Exception as exc:
+            self._maybe_enter_cooldown(exc, op=op)
+            raise
+
+    def _maybe_enter_cooldown(self, exc: Exception, *, op: str = '') -> None:
+        err = str(exc).lower()
+        self._last_broker_error = str(exc)
+        if any(tok in err for tok in ('401', '429', 'unauthorized', 'timeout', 'rate limit', 'blocked', 'forbidden')):
+            set_cooldown(str(exc), source=op or 'tastytrade_broker')
+
+    def broker_health(self) -> dict:
+        from common.broker_cooldown import cooldown_snapshot
+        from common.broker_factory import shared_broker_stats
+        from common.rest_limiter import get_rest_limiter
+
+        return {
+            'last_error': self._last_broker_error,
+            'rest': get_rest_limiter().stats(),
+            'cooldown': cooldown_snapshot(),
+            'shared_broker': shared_broker_stats(),
+        }
+
+    def get_live_orders_cached(self, ttl_sec: Optional[float] = None):
+        ttl = self._live_orders_ttl if ttl_sec is None else ttl_sec
+        now = time.time()
+        if self._live_orders_cache is not None and now - self._live_orders_ts < ttl:
+            return self._live_orders_cache
+        orders = self._run(
+            self.account.get_live_orders(self.session),
+            priority='LOW',
+            op='get_live_orders',
+        )
+        self._live_orders_cache = list(orders or [])
+        self._live_orders_ts = now
+        return self._live_orders_cache
 
     async def _bootstrap_account(self) -> Any:
         from tastytrade import Account
@@ -346,7 +420,9 @@ class TastyTradeBroker(BrokerBase):
             return await self.account.place_order(self.session, order, dry_run=False)
 
         try:
-            resp = _retry_on_transient(lambda: self._run(_build_and_place()))
+            resp = _retry_on_transient(
+                lambda: self._run(_build_and_place(), priority='HIGH', op='place_spread_order'),
+            )
             result = _order_result_from_response(resp)
             if not result.order_id:
                 return OrderResult(
@@ -363,6 +439,25 @@ class TastyTradeBroker(BrokerBase):
     def place_spread_close_order(
         self, short_symbol: str, long_symbol: str, qty: int, debit_limit: float
     ) -> OrderResult:
+        pos_state = self.inspect_spread_position(
+            short_symbol, long_symbol, expected_qty=qty,
+        )
+        if pos_state in ('flat', 'not_closable', 'mismatch'):
+            log.error(
+                'BROKER_PREFLIGHT_BLOCKED_SPREAD_CLOSE short=%s long=%s qty=%s reason=%s',
+                short_symbol,
+                long_symbol,
+                qty,
+                pos_state,
+            )
+            return OrderResult(
+                False,
+                None,
+                'rejected_preflight',
+                message=f'spread_not_closable_{pos_state}',
+                transmitted=False,
+            )
+
         from tastytrade.order import (
             NewOrder,
             OrderAction,
@@ -391,7 +486,9 @@ class TastyTradeBroker(BrokerBase):
             return await self.account.place_order(self.session, order, dry_run=False)
 
         try:
-            resp = _retry_on_transient(lambda: self._run(_build_and_place()))
+            resp = _retry_on_transient(
+                lambda: self._run(_build_and_place(), priority='HIGH', op='place_spread_close_order'),
+            )
             result = _order_result_from_response(resp)
             if not result.order_id:
                 return OrderResult(
@@ -470,7 +567,9 @@ class TastyTradeBroker(BrokerBase):
             return await self.account.place_order(self.session, order, dry_run=False)
 
         try:
-            resp = _retry_on_transient(lambda: self._run(_place()))
+            resp = _retry_on_transient(
+                lambda: self._run(_place(), priority='HIGH', op='place_order'),
+            )
             result = _order_result_from_response(resp)
             if not result.order_id:
                 return OrderResult(
@@ -509,8 +608,13 @@ class TastyTradeBroker(BrokerBase):
     def cancel_order(self, order_id: str) -> OrderResult:
         try:
             _retry_on_transient(
-                lambda: self._run(self.account.delete_order(self.session, int(order_id)))
+                lambda: self._run(
+                    self.account.delete_order(self.session, int(order_id)),
+                    priority='HIGH',
+                    op='cancel_order',
+                )
             )
+            self._live_orders_cache = None
             return OrderResult(True, order_id, 'cancelled', message='Cancelled')
         except Exception as exc:
             msg = str(exc)
@@ -522,12 +626,14 @@ class TastyTradeBroker(BrokerBase):
 
     def get_order_status(self, order_id: str) -> OrderResult:
         try:
-            orders = self._run(self.account.get_live_orders(self.session))
-            for o in orders:
+            for o in self.get_live_orders_cached():
                 if str(o.id) == str(order_id):
                     return _order_result_from_placed_order(o)
-            # Filled/cancelled stops leave the live book — fetch by id.
-            order = self._run(self.account.get_order(self.session, int(order_id)))
+            order = self._run(
+                self.account.get_order(self.session, int(order_id)),
+                priority='NORMAL',
+                op='get_order',
+            )
             return _order_result_from_placed_order(order)
         except Exception as exc:
             return OrderResult(False, order_id, 'rejected', message=str(exc))
@@ -539,7 +645,7 @@ class TastyTradeBroker(BrokerBase):
     def find_working_close_orders(self, symbol: str) -> List[OrderResult]:
         """Live BUY_TO_CLOSE orders on the short leg (stop, limit, or market)."""
         try:
-            orders = self._run(self.account.get_live_orders(self.session))
+            orders = self.get_live_orders_cached()
         except Exception as exc:
             log.warning('find_working_close_orders failed: %s', exc)
             return []
@@ -562,6 +668,47 @@ class TastyTradeBroker(BrokerBase):
     def find_working_close_order(self, symbol: str) -> Optional[OrderResult]:
         orders = self.find_working_close_orders(symbol)
         return orders[0] if orders else None
+
+    def inspect_spread_position(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        *,
+        expected_qty: int,
+    ) -> str:
+        """F-9 — block spread close when account has no closable vertical."""
+        try:
+            positions = self._run(
+                self.account.get_positions(self.session),
+                priority='NORMAL',
+                op='get_positions',
+            )
+        except Exception as exc:
+            log.warning('inspect_spread_position unavailable: %s', exc)
+            return 'unknown'
+
+        short_tt = to_tastytrade(short_symbol)
+        long_tt = to_tastytrade(long_symbol)
+        short_qty = long_qty = 0
+        for pos in positions or []:
+            sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
+            sym_s = str(sym)
+            qty = int(getattr(pos, 'quantity', 0) or 0)
+            if symbols_equivalent(sym_s, short_tt):
+                short_qty = qty
+            elif symbols_equivalent(sym_s, long_tt):
+                long_qty = qty
+
+        if short_qty == 0 and long_qty == 0:
+            return 'flat'
+        # Short leg of credit spread is short (negative qty at TT for short options)
+        short_closable = abs(short_qty) >= expected_qty and short_qty < 0
+        long_closable = long_qty >= expected_qty and long_qty > 0
+        if short_closable and long_closable:
+            return 'closable'
+        if short_qty == 0 and long_qty == 0:
+            return 'flat'
+        return 'mismatch'
 
     @staticmethod
     def _mid_from_market_data(md) -> Optional[float]:

@@ -277,3 +277,19 @@ def apply_close_slippage_fields(state: Dict[str, Any]) -> None:
             close['short_close_limit_price'] = state['short_close_limit_price']
         if state.get('long_close_limit_price') is not None:
             close['long_close_limit_price'] = state['long_close_limit_price']
+
+
+def display_close_prices(state: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """F-10 — dashboard PnL uses finalized close legs, not duplicate attempt fills."""
+    close = state.get('close') or {}
+    if state.get('status') == 'closed' and close:
+        sc = close.get('short_close_price')
+        if sc is None:
+            sc = state.get('short_close_price')
+        lc = close.get('long_close_price')
+        if lc is None:
+            lc = _resolved_long_close_price(state)
+        return sc, lc
+    sc = state.get('short_close_price')
+    lc = _resolved_long_close_price(state) if sc is not None else state.get('long_close_price')
+    return sc, lc

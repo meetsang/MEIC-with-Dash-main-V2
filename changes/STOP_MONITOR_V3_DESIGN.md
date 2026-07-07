@@ -1120,3 +1120,5 @@ V3 does **not** fully replace `StopMonitor` yet. The supervisor delegates these 
 4. Monitor `heartbeat.json` and `v3_exit` log lines during session.
 5. C1/C2 will validate naturally when breach or exchange stop fill occurs — no forced test required on production CCS.
 6. Keep `STOP_MONITOR_ENGINE=v2` rollback ready if heartbeat goes stale or unexpected double-close attempts appear.
+
+**End-of-day (quiet session):** If nothing looked abnormal intraday, run the passive audit in [STOP_MONITOR_V3_REVIEW_FIXES.md](STOP_MONITOR_V3_REVIEW_FIXES.md) (§ End-of-day passive audit) — heartbeat, log grep, active JSON scan (~2 min).

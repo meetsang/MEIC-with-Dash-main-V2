@@ -7,7 +7,7 @@ import os
 
 from flask import jsonify, request
 
-from common.broker_factory import get_broker
+from common.broker_factory import get_shared_broker
 from manual_spread import config as ms_config
 from manual_spread import entry as ms_entry
 from blocks.stop import state as state_mod
@@ -62,7 +62,7 @@ def build_manual_trades(
 ):
     """Return (rows, day_pnl, open_count, day_slippage) for Manual Spread active trades."""
     try:
-        sync_pending_fills(get_broker())
+        sync_pending_fills(get_shared_broker())
     except Exception:
         log.exception('Manual trade fill sync failed')
 
@@ -266,7 +266,7 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
     def manual_spread_scan():
         data = request.get_json(force=True) or {}
         try:
-            broker = get_broker()
+            broker = get_shared_broker()
             result = ms_entry.scan_spreads(
                 broker,
                 side=data.get('side', 'P'),
@@ -323,7 +323,7 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
         if not filename:
             return jsonify({'status': 'error', 'error': 'filename required'}), 400
         try:
-            broker = get_broker()
+            broker = get_shared_broker()
             result = ms_entry.modify_spread(
                 broker,
                 filename=filename,
@@ -346,7 +346,7 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
         if not filename:
             return jsonify({'status': 'error', 'error': 'filename required'}), 400
         try:
-            broker = get_broker()
+            broker = get_shared_broker()
             result = ms_entry.cancel_spread(broker, filename=filename)
             code = 200 if result.get('status') == 'cancelled' else 400
             if code == 200:

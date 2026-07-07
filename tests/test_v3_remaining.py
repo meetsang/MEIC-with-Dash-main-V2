@@ -23,7 +23,7 @@ class TestV3RecoverRoute(unittest.TestCase):
             'recovery': {},
         }
         slot = TradeSlot(path='/tmp/t.json', state=st)
-        self.assertEqual(recover_route(slot), 'resume_spread_close_poll')
+        self.assertEqual(recover_route(slot), 'poll_close_order')
 
     def test_long_chase_route(self):
         st = {

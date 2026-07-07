@@ -53,7 +53,12 @@ class TestV3SoftwareBreach(unittest.TestCase):
 
         phase = MagicMock()
         phase.name = 'phase2_net_credit'
-        phase.execute = MagicMock()
+
+        def _exec(mon):
+            mon.state.setdefault('phases', {})['breach_limit_placed_at'] = state_mod.now_iso()
+            mon.state['close_mechanism'] = 'software_breach'
+
+        phase.execute = MagicMock(side_effect=_exec)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, 'ms-v3_C_test.json')

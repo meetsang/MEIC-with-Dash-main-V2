@@ -9,7 +9,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from common import tt_config
-from common.broker_factory import get_broker
+from common.broker_factory import get_shared_broker
+from common.process_lock import process_lock
 from common.tt_auth import create_tastytrade_session, get_account
 from blocks.stop.alerts import AlertListener
 from blocks.stop.runner import MonitorRunner
@@ -74,23 +75,25 @@ def main():
     log.info('Stop monitor engine: %s (STOP_MONITOR_ENGINE)', engine)
 
     paper = args.paper or tt_config.PAPER_MODE
-    broker = get_broker(paper=paper)
 
-    alert_listener = None
-    if tt_config.BROKER == 'tastytrade':
-        session = create_tastytrade_session(paper=paper)
-        account = get_account(session)
-        alert_listener = AlertListener(session, account, paper=paper)
+    with process_lock('stop_monitor', paper=paper, command='blocks/stop/run.py'):
+        broker = get_shared_broker(paper=paper)
 
-    run_kwargs = {
-        'broker': broker,
-        'poll_interval': args.poll,
-        'alert_listener': alert_listener,
-    }
-    if engine == 'v3':
-        _run_v3(**run_kwargs)
-    else:
-        _run_v2(**run_kwargs)
+        alert_listener = None
+        if tt_config.BROKER == 'tastytrade':
+            session = create_tastytrade_session(paper=paper)
+            account = get_account(session)
+            alert_listener = AlertListener(session, account, paper=paper)
+
+        run_kwargs = {
+            'broker': broker,
+            'poll_interval': args.poll,
+            'alert_listener': alert_listener,
+        }
+        if engine == 'v3':
+            _run_v3(**run_kwargs)
+        else:
+            _run_v2(**run_kwargs)
 
 
 if __name__ == '__main__':

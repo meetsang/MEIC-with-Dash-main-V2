@@ -17,6 +17,8 @@ class OrderResult:
     remaining_quantity: Optional[int] = None
     short_fill_price: Optional[float] = None
     long_fill_price: Optional[float] = None
+    filled_at: Optional[float] = None  # unix timestamp of broker fill (R-9)
+    transmitted: bool = True
     message: str = ''
     raw: Any = field(default=None, repr=False)
 
@@ -83,6 +85,19 @@ class BrokerBase(ABC):
     def fetch_option_mids_api(self, symbols: List[str]) -> Dict[str, float]:
         """REST market-data mids for option symbols (batch, scan path)."""
         return {}
+
+    def inspect_spread_position(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        *,
+        expected_qty: int,
+    ) -> str:
+        """
+        Pre-close position check. Returns one of:
+        closable | flat | mismatch | not_closable | unknown
+        """
+        return 'closable'
 
     def close_at_market(self, symbol: str, qty: int) -> OrderResult:
         return self.place_market_order('BUY_TO_CLOSE', symbol, qty)

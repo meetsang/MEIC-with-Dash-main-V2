@@ -92,16 +92,166 @@ def check_exit_stall(slot: TradeSlot) -> bool:
 
 def recover_route(slot: TradeSlot) -> Optional[str]:
     """Return recovery route label for startup (§6.7), or None."""
+    route = resolve_exit_recovery_route(slot)
+    if route == 'none':
+        return None
+    return route
+
+
+def resolve_exit_recovery_route(slot: TradeSlot) -> str:
+    """
+    Explicit F-4 recovery routing. Never route breach_* to manual kill.
+    """
     st = slot.state
     status = str(st.get('status') or '')
     if status in ('closed', 'cancelled'):
-        return None
+        return 'none'
+
     if st.get('spread_close_order_id'):
-        return 'resume_spread_close_poll'
-    if st.get('short_closed_at') and status == 'closing':
-        return 'resume_long_chase'
-    if st.get('close_only_mode') or st.get('exit_handler'):
-        return 'resume_exit_handler'
+        return 'poll_close_order'
+
+    exit_handler = str(st.get('exit_handler') or '')
+    close_mech = str(st.get('close_mechanism') or '')
+
+    if exit_handler in ('manual_close', 'admin_killswitch'):
+        if st.get('spread_close_order_id'):
+            return 'poll_close_order'
+        if status == 'closing':
+            return 'poll_close_order'
+        return 'resume_manual_kill'
+
+    if exit_handler == 'exchange_stop' or close_mech == 'exchange_stop':
+        if st.get('short_closed_at') and status == 'closing':
+            return 'resume_long_chase'
+        if st.get('spread_close_order_id'):
+            return 'poll_close_order'
+        return 'none'
+
+    if exit_handler.startswith('breach_') or close_mech in (
+        'software_breach', 'spread_stop_breach', 'breach_limit_reprice',
+    ):
+        if st.get('spread_close_order_id'):
+            return 'poll_close_order'
+        if st.get('short_closed_at') and status == 'closing':
+            return 'resume_long_chase'
+        active = st.get('active_stop') or {}
+        if active.get('type') == 'LIMIT' and active.get('order_id'):
+            return 'resume_breach_exit'
+        return 'none'
+
+    if exit_handler == 'phase3_spx_proximity' or close_mech == 'phase3_proximity':
+        if st.get('spread_close_order_id'):
+            return 'poll_close_order'
+        if st.get('short_closed_at') and status == 'closing':
+            return 'resume_long_chase'
+        return 'resume_phase3_exit'
+
+    if exit_handler == 'phase2_net_credit_upgrade':
+        log.error('Invalid exit_handler phase2 on %s — quarantine', slot.path)
+        return 'quarantine'
+
+    if st.get('close_only_mode') and not exit_handler:
+        return 'quarantine'
+
+    return 'none'
+
+
+def exit_action_confirmed(state: Dict[str, Any]) -> bool:
+    """True when phase/handler work initiated a real exit (F-3)."""
+    status = str(state.get('status') or '')
+    if status in ('closing', 'closed'):
+        return True
+    if state.get('spread_close_order_id'):
+        return True
+    if state.get('short_closed_at'):
+        return True
+    mech = str(state.get('close_mechanism') or '').lower()
+    if mech in ('phase3_proximity',):
+        return state.get('short_closed_at') is not None
+    if mech in ('software_breach', 'spread_stop_breach', 'breach_limit_reprice'):
+        phases = state.get('phases') or {}
+        if phases.get('breach_limit_placed_at'):
+            return True
+    if str(state.get('exit_handler') or '').startswith('breach_'):
+        phases = state.get('phases') or {}
+        if phases.get('breach_limit_placed_at'):
+            return True
+    return False
+
+
+def finalize_v3_exit_state(state: Dict[str, Any]) -> None:
+    """Clear active recovery triggers after close; preserve audit (F-6)."""
+    audit = dict(state.get('exit_audit') or {})
+    if state.get('exit_handler'):
+        audit.setdefault('handler', state.get('exit_handler'))
+    if state.get('exit_started_at'):
+        audit.setdefault('started_at', state.get('exit_started_at'))
+    audit['finished_at'] = state_mod.now_iso()
+    if state.get('exit_last_step'):
+        audit['last_step'] = state.get('exit_last_step')
+    if state.get('spread_close_order_id'):
+        audit['spread_close_order_id'] = state.get('spread_close_order_id')
+    state['exit_audit'] = audit
+    state['close_only_mode'] = False
+    state['exit_handler'] = None
+    state['exit_started_at'] = None
+    state['exit_last_step'] = 'finalized_closed'
+    state.pop('exit_stalled', None)
+    state.pop('exit_error', None)
+
+
+def fill_timestamp_from_broker_result(result) -> Optional[float]:
+    """R-9 — use broker fill time when available."""
+    if result is None:
+        return None
+    if getattr(result, 'filled_at', None) is not None:
+        return float(result.filled_at)
+    raw = getattr(result, 'raw', None)
+    if raw is None:
+        return None
+    try:
+        latest = None
+        for leg in getattr(raw, 'legs', None) or []:
+            for fill in getattr(leg, 'fills', None) or []:
+                ts = getattr(fill, 'filled_at', None) or getattr(fill, 'fill_time', None)
+                if ts is None:
+                    continue
+                if hasattr(ts, 'timestamp'):
+                    val = float(ts.timestamp())
+                else:
+                    val = float(datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp())
+                if latest is None or val > latest:
+                    latest = val
+        return latest
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def spread_close_preflight_blocked(
+    broker: BrokerBase,
+    state: Dict[str, Any],
+    *,
+    short_sym: str,
+    long_sym: str,
+    qty: int,
+) -> Optional[str]:
+    """
+    Returns block reason if spread close must not transmit (F-5/F-9).
+    None means OK to proceed.
+    """
+    status = str(state.get('status') or '')
+    if status in ('closed', 'cancelled'):
+        return 'already_terminal'
+    if state.get('exit_last_step') in ('spread_close_filled', 'finalized_closed'):
+        return 'already_finalized'
+    if state.get('spread_close_order_id'):
+        return 'existing_close_order'
+
+    position_state = broker.inspect_spread_position(
+        short_sym, long_sym, expected_qty=qty,
+    )
+    if position_state in ('flat', 'not_closable', 'mismatch'):
+        return position_state
     return None
 
 

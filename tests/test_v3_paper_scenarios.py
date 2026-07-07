@@ -124,7 +124,9 @@ class TestRestartMidClose(unittest.TestCase):
 
             spread_closes = [p for p in broker.placed if p[0] == 'spread_close']
             self.assertGreaterEqual(len(spread_closes), 1)
-            self.assertTrue(slot.state.get('close_only_mode'))
+            self.assertEqual(slot.state.get('status'), 'closed')
+            self.assertFalse(slot.state.get('close_only_mode'))
+            self.assertIsNotNone(slot.state.get('exit_audit'))
 
     def test_supervisor_polls_spread_close_on_restart(self):
         broker = MockBroker()
@@ -333,5 +335,6 @@ class TestV3SupervisorDualKill(unittest.TestCase):
             spread_closes = [p for p in broker.placed if p[0] == 'spread_close']
             self.assertEqual(len(spread_closes), 2)
             for slot in slots:
-                self.assertTrue(slot.state.get('close_only_mode'))
+                self.assertEqual(slot.state.get('status'), 'closed')
+                self.assertFalse(slot.state.get('close_only_mode'))
             self.assertLess(wall, 8.0, f'dual supervisor kill wall={wall:.2f}s')

@@ -14,6 +14,8 @@ Modular rewrite of the SPX MEIC autotrader. **V1 remains frozen** at `../MEIC-wi
 
 Design docs: `changes/V2_MODULAR_REWRITE.md`, `changes/V2_APPENDIX_GAPS.md`.
 
+**Living changelog (since Jul 6, 2026):** [changes/CHANGES_SINCE_2026-07-06.md](changes/CHANGES_SINCE_2026-07-06.md) — dated implementations, findings, learnings, open items. **Add a new section here after every change.**
+
 ## Quick start (production)
 
 1. Copy or verify `.env` (credentials from V1).
@@ -57,6 +59,31 @@ config/          # strategies.yaml
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+## Stop-monitor process check (pre-open / EOD)
+
+Orphan `blocks/stop/run.py` processes can run alongside the launcher and duplicate broker traffic. Check before starting `run.py` and after shutdown:
+
+```powershell
+cd MEIC-with-Dash-main-V2
+uv run python scripts/check_stop_monitor.py
+```
+
+If PowerShell blocks `.ps1` scripts on your machine, use the Python command above (preferred). Alternative:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_stop_monitor.ps1
+```
+
+Expected when launcher is running: **one** stop-monitor process and a fresh `trades/heartbeat.json` `ts`.
+
+After EOD shutdown: **zero** stop-monitor processes; wait 5s and confirm `heartbeat.json` `ts` does not advance.
+
+Kill stray processes (prompts for confirmation):
+
+```powershell
+uv run python scripts/check_stop_monitor.py --kill
 ```
 
 ## Next implementation steps (Phase 2)

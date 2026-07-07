@@ -104,7 +104,8 @@ class TestV3ManualKillHandler(unittest.TestCase):
             self.assertEqual(slot.state.get('status'), 'closed')
             spread_closes = [p for p in broker.placed if p[0] == 'spread_close']
             self.assertEqual(len(spread_closes), 1)
-            self.assertTrue(slot.state.get('close_only_mode'))
+            self.assertFalse(slot.state.get('close_only_mode'))
+            self.assertIsNotNone(slot.state.get('exit_audit'))
 
 
 class TestV3CommandClaim(unittest.TestCase):

@@ -17,7 +17,7 @@ from blocks.stop.fill_sync import stop_is_current, stop_order_fully_filled
 from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
 from blocks.stop.mqtt_prices import MqttPriceCache
 from blocks.stop.pending_fill_sync import sync_pending_fills
-from blocks.stop.phases import PhaseBase, default_phases
+from blocks.stop.phases import PhaseAction, PhaseBase, default_phases
 from blocks.stop.v3 import config as v3_config
 from blocks.stop.v3.broker_lane import BrokerLane
 from blocks.stop.v3.command_claim import (
@@ -36,6 +36,7 @@ from blocks.stop.v3.recovery import (
     ensure_v3_exit_fields,
     recover_route,
     reconcile_stalled_exit,
+    resolve_exit_recovery_route,
 )
 from blocks.stop.v3.trade_slot import TradeSlot, merge_disk_state, save_slot
 from common.streamer_symbols import register_spread_symbols
@@ -277,6 +278,9 @@ class StopSupervisor:
         if not self.exit_pool.submit(slot, _job, job_kind='exchange_stop_filled'):
             slot.exit_job_id = None
 
+    def _enqueue_confirmed_exit(self, slot: TradeSlot, phase: PhaseBase) -> None:
+        self._enqueue_software_breach(slot, phase)
+
     def _enqueue_software_breach(self, slot: TradeSlot, phase: PhaseBase) -> None:
         if self.exit_pool.has_job(slot.path):
             return
@@ -356,6 +360,122 @@ class StopSupervisor:
             return True
         return False
 
+    def _lifecycle_section(self, slot: TradeSlot) -> dict:
+        lc = slot.state.setdefault('lifecycle', {})
+        if not isinstance(lc, dict):
+            lc = {}
+            slot.state['lifecycle'] = lc
+        return lc
+
+    def _breach_arm_ready(self, slot: TradeSlot, mon: StopMonitor) -> tuple[bool, str]:
+        """F-8 gates before phase breach evaluation."""
+        st = slot.state
+        if st.get('close_only_mode'):
+            return False, 'exit_in_progress'
+        if str(st.get('status') or '') != 'open':
+            return False, 'not_open'
+        filled = int(st.get('filled_quantity') or 0)
+        if filled <= 0:
+            return False, 'not_filled'
+        short_fill = float((st.get('short_leg') or {}).get('fill_price') or 0)
+        long_fill = float((st.get('long_leg') or {}).get('fill_price') or 0)
+        if short_fill <= 0 or long_fill <= 0:
+            return False, 'legs_not_filled'
+
+        active = st.get('active_stop') or {}
+        if not active.get('order_id'):
+            return False, 'waiting_stop'
+        stop_qty = int(st.get('stop_quantity') or 0)
+        if stop_qty < filled:
+            return False, 'waiting_stop'
+
+        stop_st = str(active.get('status') or '').lower()
+        if stop_st in ('cancelled', 'canceled', 'rejected', ''):
+            return False, 'waiting_stop'
+
+        watch = st.get('breach_watch') or {}
+        wstatus = str(watch.get('status') or '')
+        if wstatus in ('stale', 'no_prices'):
+            return False, 'waiting_mqtt'
+
+        short_sym = st['short_leg']['symbol']
+        long_sym = st['long_leg']['symbol']
+        if mon.prices.get(short_sym) is None or mon.prices.get(long_sym) is None:
+            return False, 'waiting_mqtt'
+
+        return True, 'armed'
+
+    def _mark_breach_armed(self, slot: TradeSlot, mon: StopMonitor) -> None:
+        lc = self._lifecycle_section(slot)
+        if lc.get('breach_armed_at'):
+            return
+        lc['breach_armed_at'] = state_mod.now_iso()
+        lc['breach_arm_status'] = 'armed'
+        active = slot.state.get('active_stop') or {}
+        watch = slot.state.get('breach_watch') or {}
+        log.info(
+            'Breach armed %s %s: stop=%s spread_mid=%s threshold=%s',
+            slot.state.get('lot', '?'),
+            (slot.state.get('entry') or {}).get('side', '?'),
+            active.get('order_id'),
+            watch.get('spread_mid'),
+            watch.get('threshold'),
+        )
+
+    def _apply_recovery_route(self, slot: TradeSlot, route: str) -> bool:
+        """Returns True if route handled (no further scan this cycle)."""
+        if route == 'none':
+            return False
+        if route == 'quarantine':
+            log.error(
+                'Recover route unknown close_only state — quarantine path=%s handler=%s',
+                slot.path,
+                slot.state.get('exit_handler'),
+            )
+            return True
+        if route == 'resume_manual_kill':
+            reason = (
+                slot.state.get('close_mechanism')
+                or slot.state.get('exit_handler')
+                or 'manual_close'
+            )
+            log.info(
+                'Recover route manual_close → ManualKillHandler path=%s reason=%s',
+                slot.path,
+                reason,
+            )
+            self._enqueue_manual_kill(slot, reason=str(reason))
+            return True
+        if route in ('poll_close_order', 'resume_long_chase'):
+            log.info('Recover route %s path=%s', route, slot.path)
+            self._poll_closing(slot)
+            return True
+        if route == 'resume_breach_exit':
+            exit_handler = str(slot.state.get('exit_handler') or '')
+            phase_name = (
+                exit_handler.replace('breach_', '', 1)
+                if exit_handler.startswith('breach_')
+                else 'phase1_initial_stop'
+            )
+            phase = next((p for p in self.phases if p.name == phase_name), self.phases[0])
+            log.info(
+                'Recover route %s → %s path=%s',
+                route,
+                phase.name,
+                slot.path,
+            )
+            self._enqueue_confirmed_exit(slot, phase)
+            return True
+        if route == 'resume_phase3_exit':
+            phase = next((p for p in self.phases if p.name == 'phase3_spx_proximity'), None)
+            if phase is None:
+                log.error('Phase3 not configured for recovery on %s', slot.path)
+                return True
+            log.info('Recover route resume_phase3_exit path=%s', slot.path)
+            self._enqueue_confirmed_exit(slot, phase)
+            return True
+        return False
+
     def _scan_open_slot(self, slot: TradeSlot) -> None:
         mon = self._legacy_monitor(slot)
 
@@ -381,20 +501,44 @@ class StopSupervisor:
                 return
 
         if streamer_stale:
+            self._lifecycle_section(slot)['breach_arm_status'] = 'stale'
             save_slot(slot)
             return
-
-        mon.kill_switch = self.prices.kill_switch
-
-        for phase in self.phases:
-            if phase.should_activate(mon):
-                self._enqueue_software_breach(slot, phase)
-                save_slot(slot)
-                return
 
         if not stop_is_current(slot.state):
             mon._ensure_stop_for_filled_qty()
             slot.state = mon.state
+            self._lifecycle_section(slot)['breach_arm_status'] = 'waiting_stop'
+            save_slot(slot)
+            return
+
+        ready, arm_status = self._breach_arm_ready(slot, mon)
+        self._lifecycle_section(slot)['breach_arm_status'] = arm_status
+        if not ready:
+            save_slot(slot)
+            return
+
+        self._mark_breach_armed(slot, mon)
+        mon.kill_switch = self.prices.kill_switch
+
+        for phase in self.phases:
+            action = phase.evaluate(mon)
+            if action == PhaseAction.NONE:
+                continue
+            if action == PhaseAction.MAINTENANCE:
+                phase.execute(mon)
+                slot.state = mon.state
+                save_slot(slot)
+                continue
+            if action == PhaseAction.EXIT_REQUIRED:
+                log.info(
+                    'Confirmed exit required phase=%s path=%s',
+                    phase.name,
+                    slot.path,
+                )
+                self._enqueue_confirmed_exit(slot, phase)
+                save_slot(slot)
+                return
 
         save_slot(slot)
 
@@ -441,25 +585,10 @@ class StopSupervisor:
             slot.exit_job_id = 'active'
             return
 
-        manual_handlers = ('manual_close', 'admin_killswitch')
-        exit_handler = str(slot.state.get('exit_handler') or '')
-        if slot.close_only_mode or exit_handler in manual_handlers:
-            if slot.status == 'closing':
-                self._poll_closing(slot)
+        route = resolve_exit_recovery_route(slot)
+        if route != 'none':
+            if self._apply_recovery_route(slot, route):
                 return
-            if slot.status == 'open' and not self.exit_pool.has_job(slot.path):
-                reason = (
-                    slot.state.get('close_mechanism')
-                    or exit_handler
-                    or 'manual_close'
-                )
-                log.info(
-                    'Resuming manual kill on restart path=%s reason=%s',
-                    slot.path,
-                    reason,
-                )
-                self._enqueue_manual_kill(slot, reason=str(reason))
-            return
 
         if slot.status == 'closing':
             self._poll_closing(slot)

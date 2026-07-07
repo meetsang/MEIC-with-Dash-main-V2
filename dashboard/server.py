@@ -47,9 +47,10 @@ from manual_spread_handlers import (
 )
 from gex_handlers import register_gex_routes
 from common.trade_pick import pick_best_trade
-from blocks.stop.close_fills import slippage_dollars, slippage_label
+from blocks.stop.close_fills import display_close_prices, slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
 from blocks.stop.stop_math import stop_multiplier_for_state
+from brokers.base import BrokerBase
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
 from blocks.session.manual_helpers import append_manual_session_row
 from blocks.session.plan import load_meic_session_today, load_manual_session_today
@@ -109,6 +110,8 @@ bot_process    = None
 token_process  = None
 _state_lock    = threading.Lock()
 _synced_trades = set()
+
+# Fill sync moved to dashboard/broker_fill_sync.py (lock + cooldown).
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -300,12 +303,15 @@ def _read_active_trades():
     try:
         from blocks.stop import state as state_mod
         from blocks.stop.pending_fill_sync import sync_pending_fills
-        from common.broker_factory import get_broker
+        from common.broker_factory import get_shared_broker
+        from dashboard.broker_fill_sync import maybe_sync_active_trades
 
-        try:
-            sync_pending_fills(get_broker())
-        except Exception:
-            log.exception('Active trade fill sync failed')
+        maybe_sync_active_trades(
+            read_json=read_json_safe,
+            iter_paths=state_mod.iter_active_trade_paths,
+            get_broker_fn=get_shared_broker,
+            sync_fn=sync_pending_fills,
+        )
 
         for fpath in state_mod.iter_active_trade_paths():
             state = read_json_safe(fpath)
@@ -405,8 +411,7 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
     quantity = int(trade.get('filled_quantity', 1) or 1)
     short_fill = float(short_leg.get('fill_price') or 0)
     long_fill = float(long_leg.get('fill_price') or 0)
-    short_close = trade.get('short_close_price')
-    long_close = trade.get('long_close_price')
+    short_close, long_close = display_close_prices(trade)
 
     cur_long = _leg_mark(long_sym, long_fill)
     cur_short = _leg_mark(short_sym, short_fill)
@@ -773,6 +778,13 @@ def api_lot_logs():
 def start_bot():
     global bot_process
     with _state_lock:
+        if _launcher_active():
+            status = read_bot_status()
+            return jsonify({
+                'status': 'already_running_external',
+                'reason': 'Launcher already active',
+                'bot_status': status,
+            }), 409
         if bot_process is not None and bot_process.poll() is None:
             return jsonify({'status': 'already_running'})
         bot_process = subprocess.Popen(
@@ -780,6 +792,34 @@ def start_bot():
             cwd=ROOT
         )
     return jsonify({'status': 'started', 'pid': bot_process.pid})
+
+
+@app.route('/api/broker_health')
+def broker_health():
+    from common import broker_cooldown
+    from common.process_lock import list_locks
+    from common.rest_limiter import get_rest_limiter
+    from common.broker_factory import shared_broker_stats
+    from dashboard.broker_fill_sync import fill_sync_stats
+
+    locks = [
+        {
+            'name': lk.name,
+            'pid': lk.pid,
+            'alive': lk.alive,
+            'meta': lk.meta,
+        }
+        for lk in list_locks()
+    ]
+    return jsonify({
+        'fill_sync': fill_sync_stats(),
+        'cooldown': broker_cooldown.cooldown_snapshot(),
+        'rest': get_rest_limiter().stats(),
+        'shared_broker': shared_broker_stats(),
+        'locks': locks,
+        'launcher_active': _launcher_active(),
+        'dashboard_pid': os.getpid(),
+    })
 
 @app.route('/api/stop_bot', methods=['POST'])
 def stop_bot():
@@ -1153,5 +1193,8 @@ register_manual_spread_routes(
 register_gex_routes(app)
 
 if __name__ == '__main__':
+    from common.process_lock import process_lock
+
     print('MEIC Dashboard running at  http://localhost:5002')
-    socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)
+    with process_lock('dashboard', command='dashboard/server.py'):
+        socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)
