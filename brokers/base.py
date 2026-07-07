@@ -54,7 +54,13 @@ class BrokerBase(ABC):
 
     @abstractmethod
     def place_spread_close_order(
-        self, short_symbol: str, long_symbol: str, qty: int, debit_limit: float
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        qty: int,
+        debit_limit: float,
+        *,
+        allow_unverified_emergency_close: bool = False,
     ) -> OrderResult:
         ...
 

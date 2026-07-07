@@ -437,26 +437,40 @@ class TastyTradeBroker(BrokerBase):
             return OrderResult(False, None, 'rejected', message=str(exc))
 
     def place_spread_close_order(
-        self, short_symbol: str, long_symbol: str, qty: int, debit_limit: float
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        qty: int,
+        debit_limit: float,
+        *,
+        allow_unverified_emergency_close: bool = False,
     ) -> OrderResult:
         pos_state = self.inspect_spread_position(
             short_symbol, long_symbol, expected_qty=qty,
         )
-        if pos_state in ('flat', 'not_closable', 'mismatch'):
-            log.error(
-                'BROKER_PREFLIGHT_BLOCKED_SPREAD_CLOSE short=%s long=%s qty=%s reason=%s',
-                short_symbol,
-                long_symbol,
-                qty,
-                pos_state,
-            )
-            return OrderResult(
-                False,
-                None,
-                'rejected_preflight',
-                message=f'spread_not_closable_{pos_state}',
-                transmitted=False,
-            )
+        if pos_state != 'closable':
+            if pos_state == 'unknown' and allow_unverified_emergency_close:
+                log.warning(
+                    'BROKER_PREFLIGHT_EMERGENCY_OVERRIDE short=%s long=%s qty=%s',
+                    short_symbol,
+                    long_symbol,
+                    qty,
+                )
+            else:
+                log.error(
+                    'BROKER_PREFLIGHT_BLOCKED_SPREAD_CLOSE short=%s long=%s qty=%s reason=%s',
+                    short_symbol,
+                    long_symbol,
+                    qty,
+                    pos_state,
+                )
+                return OrderResult(
+                    False,
+                    None,
+                    'rejected_preflight',
+                    message=f'spread_not_closable_{pos_state}',
+                    transmitted=False,
+                )
 
         from tastytrade.order import (
             NewOrder,

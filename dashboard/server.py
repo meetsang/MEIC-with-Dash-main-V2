@@ -777,7 +777,15 @@ def api_lot_logs():
 @app.route('/api/start_bot', methods=['POST'])
 def start_bot():
     global bot_process
+    from common.process_lock import active_lock_pid
+
     with _state_lock:
+        lock_pid = active_lock_pid('launcher')
+        if lock_pid is not None:
+            return jsonify({
+                'status': 'already_running_external_lock',
+                'pid': lock_pid,
+            }), 409
         if _launcher_active():
             status = read_bot_status()
             return jsonify({

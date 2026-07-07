@@ -45,6 +45,36 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-06 (evening) — ChatGPT pre-live follow-up review
+
+**Status:** implemented  
+**Tests:** `uv run pytest tests/ -q` → **282 passed**
+
+### What changed
+
+| Item | Summary |
+|------|---------|
+| **Unknown preflight** | `place_spread_close_order()` blocks `unknown` position state; only `allow_unverified_emergency_close=True` bypasses (operator emergency only) |
+| **AlertListener session** | `blocks/stop/run.py` reuses `get_shared_broker()` session/account — no second OAuth session |
+| **Start bot lock** | `/api/start_bot` checks `runtime/locks/launcher.lock` via `active_lock_pid()` → 409 `already_running_external_lock` |
+| **Phase 3 gating** | Phase 3 SPX proximity evaluated before option-leg breach arm; not blocked by `breach_watch` `no_prices` |
+| **Tests** | 8 new tests across `test_v3_incident_fixes.py`, `test_broker_hardening.py` |
+
+### Findings / learnings
+
+- `unknown` position from failed REST preflight must **block** spread close — same hazard class as `flat` (accidental open).
+- Emergency override is explicit opt-in only — not for software-breach or duplicate recovery paths.
+- Phase 1 breach still requires option-leg MQTT; Phase 3 only needs SPX + time + working stop.
+
+### Files touched
+
+- `brokers/tastytrade_broker.py`, `brokers/base.py`
+- `blocks/stop/v3/recovery.py`, `blocks/stop/v3/supervisor.py`, `blocks/stop/run.py`
+- `common/process_lock.py` (`active_lock_pid`)
+- `dashboard/server.py`
+
+---
+
 ## 2026-07-06 — V3 false-breach incident repair + broker hardening
 
 **Status:** implemented (live validation pending)  

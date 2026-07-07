@@ -250,7 +250,7 @@ def spread_close_preflight_blocked(
     position_state = broker.inspect_spread_position(
         short_sym, long_sym, expected_qty=qty,
     )
-    if position_state in ('flat', 'not_closable', 'mismatch'):
+    if position_state in ('flat', 'not_closable', 'mismatch', 'unknown'):
         return position_state
     return None
 

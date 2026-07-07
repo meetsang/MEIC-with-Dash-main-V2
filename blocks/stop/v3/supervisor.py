@@ -405,6 +405,38 @@ class StopSupervisor:
 
         return True, 'armed'
 
+    def _phase3_scan_ready(self, slot: TradeSlot, mon: StopMonitor) -> bool:
+        """Phase 3 uses SPX + time only — not option-leg MQTT breach arm."""
+        st = slot.state
+        if st.get('close_only_mode'):
+            return False
+        if str(st.get('status') or '') != 'open':
+            return False
+        if int(st.get('filled_quantity') or 0) <= 0:
+            return False
+        if mon.prices.get_spx() is None:
+            return False
+        return stop_is_current(slot.state)
+
+    def _maybe_enqueue_phase3_exit(self, slot: TradeSlot, mon: StopMonitor) -> bool:
+        phase3 = next((p for p in self.phases if p.name == 'phase3_spx_proximity'), None)
+        if phase3 is None:
+            return False
+        if not self._phase3_scan_ready(slot, mon):
+            return False
+        if not phase3.should_activate(mon):
+            return False
+        action = phase3.evaluate(mon)
+        if action != PhaseAction.EXIT_REQUIRED:
+            return False
+        log.info(
+            'Confirmed exit required phase=%s path=%s (SPX proximity)',
+            phase3.name,
+            slot.path,
+        )
+        self._enqueue_confirmed_exit(slot, phase3)
+        return True
+
     def _mark_breach_armed(self, slot: TradeSlot, mon: StopMonitor) -> None:
         lc = self._lifecycle_section(slot)
         if lc.get('breach_armed_at'):
@@ -512,6 +544,11 @@ class StopSupervisor:
             save_slot(slot)
             return
 
+        mon.kill_switch = self.prices.kill_switch
+        if self._maybe_enqueue_phase3_exit(slot, mon):
+            save_slot(slot)
+            return
+
         ready, arm_status = self._breach_arm_ready(slot, mon)
         self._lifecycle_section(slot)['breach_arm_status'] = arm_status
         if not ready:
@@ -519,9 +556,10 @@ class StopSupervisor:
             return
 
         self._mark_breach_armed(slot, mon)
-        mon.kill_switch = self.prices.kill_switch
 
         for phase in self.phases:
+            if phase.name == 'phase3_spx_proximity':
+                continue
             action = phase.evaluate(mon)
             if action == PhaseAction.NONE:
                 continue

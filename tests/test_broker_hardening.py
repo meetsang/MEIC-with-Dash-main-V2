@@ -79,6 +79,16 @@ class TestDashboardFillSync(unittest.TestCase):
             )
         self.assertEqual(broker.placed, [])
 
+    def test_dashboard_no_pending_fill_does_not_call_get_broker_fn(self):
+        get_broker_fn = MagicMock()
+        maybe_sync_active_trades(
+            read_json=lambda p: {'status': 'open', 'filled_quantity': 3, 'quantity': 3},
+            iter_paths=lambda: ['t.json'],
+            get_broker_fn=get_broker_fn,
+            sync_fn=MagicMock(),
+        )
+        get_broker_fn.assert_not_called()
+
     def test_dashboard_sync_uses_cached_broker_once(self):
         calls = []
 
@@ -235,6 +245,83 @@ class TestTastyLiveOrdersCache(unittest.TestCase):
             broker.get_order_status('123')
             broker.get_order_status('123')
         self.assertEqual(calls['n'], 2)
+
+    def test_get_order_status_two_calls_one_live_orders_rest_fetch_within_ttl(self):
+        import asyncio
+
+        from brokers.tastytrade_broker import TastyTradeBroker
+
+        broker = object.__new__(TastyTradeBroker)
+        broker._live_orders_cache = None
+        broker._live_orders_ts = 0.0
+        broker._live_orders_ttl = 2.0
+        broker.session = MagicMock()
+        broker.account = MagicMock()
+        rest_calls = []
+
+        async def _get_live_orders(session):
+            rest_calls.append(1)
+            order = MagicMock()
+            order.id = '123'
+            return [order]
+
+        broker.account.get_live_orders = _get_live_orders
+
+        def _run(coro, **kwargs):
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+        broker._run = _run
+        from brokers.tastytrade_broker import _order_result_from_placed_order
+        with patch('brokers.tastytrade_broker._order_result_from_placed_order', return_value='ok'):
+            broker.get_order_status('123')
+            broker.get_order_status('456')
+        self.assertEqual(rest_calls, [1])
+
+
+class TestStopMonitorAlertListener(unittest.TestCase):
+    def test_stop_monitor_alert_listener_reuses_shared_broker_session(self):
+        from blocks.stop.run import _alert_listener_for_broker
+
+        broker = MagicMock()
+        broker.session = MagicMock()
+        broker.account = MagicMock()
+        with patch('blocks.stop.run.tt_config.BROKER', 'tastytrade'), \
+             patch('blocks.stop.run.create_tastytrade_session') as mock_create, \
+             patch('blocks.stop.run.AlertListener') as alert_cls:
+            _alert_listener_for_broker(broker, paper=True)
+        mock_create.assert_not_called()
+        alert_cls.assert_called_once_with(broker.session, broker.account, paper=True)
+
+
+class TestDashboardStartBot(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._locks = os.path.join(self._tmpdir, 'locks')
+        os.makedirs(self._locks, exist_ok=True)
+
+    def test_start_bot_refuses_when_launcher_lock_alive_even_if_status_file_stale(self):
+        import json
+
+        lock_pid = 424242
+        with open(os.path.join(self._locks, 'launcher.lock'), 'w', encoding='utf-8') as f:
+            json.dump({'pid': lock_pid, 'name': 'launcher'}, f)
+
+        with patch('common.process_lock.LOCKS_DIR', self._locks), \
+             patch('common.process_lock._pid_alive', return_value=True), \
+             patch('dashboard.server.read_bot_status', return_value={'state': 'stopped'}), \
+             patch('dashboard.server.bot_process', None):
+            from dashboard.server import app
+            client = app.test_client()
+            rv = client.post('/api/start_bot')
+
+        self.assertEqual(rv.status_code, 409)
+        body = rv.get_json()
+        self.assertEqual(body['status'], 'already_running_external_lock')
+        self.assertEqual(body['pid'], lock_pid)
 
 
 if __name__ == '__main__':

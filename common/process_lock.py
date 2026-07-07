@@ -50,6 +50,17 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def active_lock_pid(name: str) -> Optional[int]:
+    """Return PID holding lock if alive, else None."""
+    meta = read_lock(name)
+    if not meta:
+        return None
+    pid = int(meta.get('pid') or 0)
+    if pid and _pid_alive(pid):
+        return pid
+    return None
+
+
 def read_lock(name: str) -> Optional[Dict[str, Any]]:
     path = _lock_path(name)
     try:

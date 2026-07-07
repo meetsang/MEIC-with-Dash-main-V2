@@ -3,6 +3,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Optional
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if ROOT not in sys.path:
@@ -18,6 +19,19 @@ from blocks.stop.runner import MonitorRunner
 log = logging.getLogger(__name__)
 
 VALID_ENGINES = frozenset({'v2', 'v3'})
+
+
+def _alert_listener_for_broker(broker, *, paper: bool) -> Optional[AlertListener]:
+    """Reuse shared broker session when available (one OAuth connection)."""
+    if tt_config.BROKER != 'tastytrade':
+        return None
+    session = getattr(broker, 'session', None)
+    account = getattr(broker, 'account', None)
+    if session is not None and account is not None:
+        return AlertListener(session, account, paper=paper)
+    session = create_tastytrade_session(paper=paper)
+    account = get_account(session)
+    return AlertListener(session, account, paper=paper)
 
 
 def stop_monitor_engine() -> str:
@@ -78,12 +92,7 @@ def main():
 
     with process_lock('stop_monitor', paper=paper, command='blocks/stop/run.py'):
         broker = get_shared_broker(paper=paper)
-
-        alert_listener = None
-        if tt_config.BROKER == 'tastytrade':
-            session = create_tastytrade_session(paper=paper)
-            account = get_account(session)
-            alert_listener = AlertListener(session, account, paper=paper)
+        alert_listener = _alert_listener_for_broker(broker, paper=paper)
 
         run_kwargs = {
             'broker': broker,
