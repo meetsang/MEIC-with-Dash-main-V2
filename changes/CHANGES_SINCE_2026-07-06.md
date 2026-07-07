@@ -45,6 +45,37 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-06 (late) — Manual spread dashboard dedupe + operator cleanup
+
+**Status:** implemented (code); operator trade files cleaned locally  
+**Tests:** `uv run pytest tests/test_build_manual_trades.py -q` → pass
+
+### What changed
+
+| Item | Summary |
+|------|---------|
+| **Dashboard dedupe** | `load_dashboard_manual_trades()` keys by `lot_side`, keeps newest archive — not by filename |
+| **Regression test** | `test_duplicate_history_archives_dedupe_by_lot_side` in `tests/test_build_manual_trades.py` |
+
+### Findings / learnings
+
+- **Why duplicates appeared:** Re-seeded `ms-99`/`ms-100` test fixtures + V3 close/finalize each wrote a **new** JSON under `trades/history/MANUAL_SPREAD/` (different timestamps in filename). Dashboard merged all “closed today” history files but deduped only by **filename** → one row per archive (9 files = 9 rows).
+- **MEIC hanging:** Jul 6 `11-00` legs were `status: closed` but still in `trades/active/MEIC_IC/`; session CSV still `entered`. Grid showed them as live until active files removed.
+- **Ctrl+C:** Stale `runtime/locks/` for dead PIDs (stop_monitor, streamer, market_data) — clear with `release_lock` or delete lock file if PID dead. `check_stop_monitor.py` → 0 processes.
+
+### Operator cleanup (local, not in git)
+
+- Removed `ms-176` active (cancelled on Tasty), `11-00` MEIC from active
+- Removed duplicate `ms-99`/`ms-100` history archives from tonight’s test runs
+- Session CSV: `ms-176_P` → `cancelled`; `11-00_*` → `closed` with history paths
+
+### Files touched (code)
+
+- `manual_spread/entry.py`
+- `tests/test_build_manual_trades.py`
+
+---
+
 ## 2026-07-06 (evening) — ChatGPT pre-live follow-up review
 
 **Status:** implemented  

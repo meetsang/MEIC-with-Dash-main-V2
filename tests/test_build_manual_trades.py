@@ -59,6 +59,41 @@ class TestBuildManualTradesRows(unittest.TestCase):
             lots = {r['lot'] for r in rows}
             self.assertEqual(lots, {'ms-81', 'ms-82', 'ms-83', 'ms-84'})
 
+    def test_duplicate_history_archives_dedupe_by_lot_side(self):
+        from manual_spread.entry import load_dashboard_manual_trades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            active = os.path.join(tmp, 'active')
+            hist = os.path.join(tmp, 'history')
+            os.makedirs(active)
+            os.makedirs(hist)
+            today = date.today().isoformat()
+            base = {
+                'status': 'closed',
+                'lot': 'ms-99',
+                'entry': {
+                    'strategy': 'MANUAL_SPREAD',
+                    'side': 'C',
+                    'timestamp': f'{today}T10:00:00-05:00',
+                    'net_credit': 0.5,
+                },
+                'short_leg': {'strike': 7600, 'fill_price': 0.8, 'symbol': '.SPXW260706C7600'},
+                'long_leg': {'strike': 7625, 'fill_price': 0.3, 'symbol': '.SPXW260706C7625'},
+            }
+            for name in ('ms-99_C_old.json', 'ms-99_C_new.json'):
+                st = dict(base)
+                st['entry'] = dict(base['entry'])
+                st['entry']['timestamp'] = f'{today}T22:00:00-05:00' if 'new' in name else f'{today}T21:00:00-05:00'
+                with open(os.path.join(hist, name), 'w', encoding='utf-8') as f:
+                    json.dump(st, f)
+
+            with patch('manual_spread.entry.state_mod.manual_spread_active_dir', return_value=active), \
+                 patch('manual_spread.entry.state_mod.manual_spread_closed_dir', return_value=hist), \
+                 patch('common.session_cleanup.central_today', return_value=date.today()):
+                trades = load_dashboard_manual_trades()
+            self.assertEqual(len(trades), 1)
+            self.assertEqual(trades[0]['_filename'], 'ms-99_C_new.json')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -372,6 +372,28 @@ def load_active_trades() -> List[Dict[str, Any]]:
     return trades
 
 
+def _trade_dedupe_key(trade: Dict[str, Any]) -> str:
+    entry = trade.get('entry') or {}
+    lot = str(trade.get('lot') or entry.get('lot') or '').strip()
+    side = str(entry.get('side') or '').strip().upper()
+    if not lot or not side:
+        return str(trade.get('_filename') or '')
+    return f'{lot}_{side}'
+
+
+def _trade_recency_key(trade: Dict[str, Any]) -> tuple:
+    """Sort key — later trades win dedupe."""
+    entry = trade.get('entry') or {}
+    ts = str(entry.get('timestamp') or '')
+    path = str(trade.get('_filepath') or '')
+    try:
+        mtime = os.path.getmtime(path) if path and os.path.isfile(path) else 0.0
+    except OSError:
+        mtime = 0.0
+    active_rank = 0 if str(trade.get('status') or '') in ('open', 'closing', 'pending_fill') else 1
+    return (ts, mtime, str(trade.get('_filename') or ''))
+
+
 def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
     """
     Manual spreads for today's dashboard: active rows plus closed today from history.
@@ -382,15 +404,20 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
     from common.session_cleanup import central_today
 
     today = central_today().isoformat()
-    by_name: Dict[str, Dict[str, Any]] = {}
+    by_key: Dict[str, Dict[str, Any]] = {}
+
+    def _keep(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> bool:
+        if old is None:
+            return True
+        return _trade_recency_key(new) >= _trade_recency_key(old)
 
     for st in load_active_trades():
-        by_name[st['_filename']] = st
+        key = _trade_dedupe_key(st)
+        if _keep(st, by_key.get(key)):
+            by_key[key] = st
 
     for path in _iter_manual_history_paths():
         name = os.path.basename(path)
-        if name in by_name:
-            continue
         st = _load_trade_file(path, name)
         if not st:
             continue
@@ -398,6 +425,8 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
             continue
         if _trade_entry_date(st) != today:
             continue
-        by_name[name] = st
+        key = _trade_dedupe_key(st)
+        if _keep(st, by_key.get(key)):
+            by_key[key] = st
 
-    return [by_name[name] for name in sorted(by_name)]
+    return [by_key[k] for k in sorted(by_key)]
