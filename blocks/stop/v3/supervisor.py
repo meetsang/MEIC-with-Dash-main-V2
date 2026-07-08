@@ -120,19 +120,23 @@ class StopSupervisor:
             root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
             hb_path = os.path.join(root, 'trades', 'heartbeat.json')
             os.makedirs(os.path.dirname(hb_path), exist_ok=True)
-            with open(hb_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'ts': state_mod.now_iso(),
-                    'engine': 'v3',
-                    'loop_count': self._loop_count,
-                    'active_trades': active_trades,
-                    'active_slots': active_trades,
-                    'active_exit_jobs': len(self.exit_pool.active_paths),
-                    'exit_jobs': len(self.exit_pool.active_paths),
-                    'broker_in_flight': self.lane.in_flight,
-                    'broker_lane_max': self.lane.max_concurrent,
-                    'target_cycle_sec': v3_config.TARGET_CYCLE_SEC,
-                }, f)
+            payload = {
+                'ts': state_mod.now_iso(),
+                'engine': 'v3',
+                'loop_count': self._loop_count,
+                'active_trades': active_trades,
+                'active_slots': active_trades,
+                'active_exit_jobs': len(self.exit_pool.active_paths),
+                'exit_jobs': len(self.exit_pool.active_paths),
+                'broker_in_flight': self.lane.in_flight,
+                'broker_lane_max': self.lane.max_concurrent,
+                'target_cycle_sec': v3_config.TARGET_CYCLE_SEC,
+            }
+            tmp = f'{hb_path}.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(payload, f)
+                f.flush()
+            os.replace(tmp, hb_path)
         except Exception:
             pass
 
