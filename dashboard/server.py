@@ -630,6 +630,7 @@ def build_summary():
 
     heartbeat_data = read_json_safe(os.path.join(TRADES_DIR, 'heartbeat.json'))
     streamer_health = read_json_safe(os.path.join(TRADES_DIR, 'streamer_health.json'))
+    mqtt_cache_health = read_json_safe(os.path.join(TRADES_DIR, 'mqtt_cache_health.json'))
 
     manual_rows, manual_pnl, manual_open, manual_slippage = build_manual_trades(
         live_price_fn=_live_price,
@@ -670,6 +671,7 @@ def build_summary():
             'streamer_log_age': _log_age_seconds(_stream_log_path()),
             'streamer_health': streamer_health or {},
             'stop_monitor': heartbeat_data or {},
+            'stop_monitor_mqtt': mqtt_cache_health or {},
             'mqtt_spx_price': live_prices.get(INDEX_TOPIC),
         },
     }

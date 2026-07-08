@@ -37,10 +37,16 @@ class TestClosingOrphanRecovery(unittest.TestCase):
             state_mod.save_state(path, st)
 
             broker = MagicMock()
+            broker.fetch_option_mids_api = None
             broker.get_order_status.return_value = OrderResult(False, '', 'unknown')
             broker.place_limit_order.return_value = OrderResult(True, '478000001', 'working')
             prices = MqttPriceCache()
-            prices.set_override('.SPXW260625P7275', 0.15)
+            prices._client = MagicMock()
+            prices._connected = True
+            now = time.time()
+            with prices._lock:
+                prices._prices['.SPXW260625P7275'] = 0.15
+                prices._last_msg_at = now
 
             class _SyncThread:
                 def __init__(self, target=None, **kwargs):

@@ -22,11 +22,14 @@ SPREAD_LOG_DELTA = 0.05
 def resolve_breach_status(
     *,
     streamer_stale: bool,
+    mqtt_cache_stale: bool = False,
     short_mqtt: bool,
     long_mqtt: bool,
     gap_to_breach: Optional[float],
 ) -> str:
     if streamer_stale:
+        return 'stale'
+    if mqtt_cache_stale:
         return 'stale'
     if not short_mqtt or not long_mqtt:
         return 'no_prices'
@@ -43,6 +46,7 @@ def build_breach_watch_snapshot(
     short_p: Optional[float],
     long_p: Optional[float],
     streamer_stale: bool,
+    mqtt_cache_stale: bool = False,
     now_iso: str,
 ) -> Dict[str, Any]:
     threshold = spread_breach_threshold(state)
@@ -59,6 +63,7 @@ def build_breach_watch_snapshot(
 
     status = resolve_breach_status(
         streamer_stale=streamer_stale,
+        mqtt_cache_stale=mqtt_cache_stale,
         short_mqtt=short_mqtt,
         long_mqtt=long_mqtt,
         gap_to_breach=gap,
@@ -71,6 +76,7 @@ def build_breach_watch_snapshot(
         'short_mqtt': short_mqtt,
         'long_mqtt': long_mqtt,
         'streamer_stale': streamer_stale,
+        'mqtt_cache_stale': mqtt_cache_stale,
         'exchange_stop': exchange_stop,
         'status': status,
         'updated_at': now_iso,
@@ -90,6 +96,8 @@ def breach_label_from_watch(watch: Dict[str, Any]) -> str:
             missing.append('long')
         return f'{float(threshold):.2f} ⚠ no MQTT ({",".join(missing)})'
     if status == 'stale':
+        if watch.get('mqtt_cache_stale'):
+            return f'{float(threshold):.2f} ⚠ MQTT cache stale'
         return f'{float(threshold):.2f} ⚠ streamer stale'
     gap = watch.get('gap_to_breach')
     if gap is None:
@@ -248,6 +256,14 @@ def log_breach_watch(monitor: 'StopMonitor', watch: Dict[str, Any]) -> None:
 
     status = watch.get('status') or 'ok'
     if status == 'stale':
+        if watch.get('mqtt_cache_stale'):
+            if not monitor._breach_stale_logged:
+                log.critical(
+                    'Breach watch %s: stop_monitor MQTT cache stale — software breach checks frozen',
+                    tag,
+                )
+                monitor._breach_stale_logged = True
+            return
         if not monitor._breach_stale_logged:
             log.critical(
                 'Breach watch %s: streamer stale — software breach checks frozen',

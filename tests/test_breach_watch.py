@@ -19,6 +19,19 @@ class TestResolveBreachStatus(unittest.TestCase):
         self.assertEqual(
             resolve_breach_status(
                 streamer_stale=True,
+                mqtt_cache_stale=False,
+                short_mqtt=True,
+                long_mqtt=True,
+                gap_to_breach=0.10,
+            ),
+            'stale',
+        )
+
+    def test_mqtt_cache_stale(self):
+        self.assertEqual(
+            resolve_breach_status(
+                streamer_stale=False,
+                mqtt_cache_stale=True,
                 short_mqtt=True,
                 long_mqtt=True,
                 gap_to_breach=0.10,
@@ -30,6 +43,7 @@ class TestResolveBreachStatus(unittest.TestCase):
         self.assertEqual(
             resolve_breach_status(
                 streamer_stale=False,
+                mqtt_cache_stale=False,
                 short_mqtt=False,
                 long_mqtt=True,
                 gap_to_breach=None,
@@ -41,6 +55,7 @@ class TestResolveBreachStatus(unittest.TestCase):
         self.assertEqual(
             resolve_breach_status(
                 streamer_stale=False,
+                mqtt_cache_stale=False,
                 short_mqtt=True,
                 long_mqtt=True,
                 gap_to_breach=NEAR_BREACH_GAP,
@@ -50,6 +65,7 @@ class TestResolveBreachStatus(unittest.TestCase):
         self.assertEqual(
             resolve_breach_status(
                 streamer_stale=False,
+                mqtt_cache_stale=False,
                 short_mqtt=True,
                 long_mqtt=True,
                 gap_to_breach=-0.05,

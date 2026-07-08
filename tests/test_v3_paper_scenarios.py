@@ -58,6 +58,7 @@ def _mock_prices():
     prices.get_market_mid = MagicMock(return_value=0.20)
     prices.get = prices.get_market_mid
     prices.kill_switch = False
+    prices.is_stale.return_value = False
     prices.start = MagicMock()
     prices.stop = MagicMock()
     return prices

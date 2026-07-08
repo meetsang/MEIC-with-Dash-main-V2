@@ -291,6 +291,14 @@ def write_mqtt_cache_health(cache: MqttPriceCache, root: Optional[str] = None) -
     os.replace(tmp, path)
 
 
+def mqtt_cache_is_stale(prices) -> bool:
+    """True only when cache exposes is_stale() and it returns literal True."""
+    checker = getattr(prices, 'is_stale', None)
+    if not callable(checker):
+        return False
+    return checker() is True
+
+
 def get_shared_cache() -> MqttPriceCache:
     """Process-wide cache — same MQTT feed as stop_monitor."""
     global _shared_cache

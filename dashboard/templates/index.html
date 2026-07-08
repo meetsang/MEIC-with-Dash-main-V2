@@ -1525,11 +1525,36 @@ function strategyBadge(strategy) {
   return '<span class="strategy-pill-meic">MEIC</span>';
 }
 
+function stopMonitorMqttDot(mqttHealth) {
+  const mh = mqttHealth || {};
+  if (!mh.running) return 'dot-grey';
+  if (mh.stale) return 'dot-red';
+  if (mh.connected) return 'dot-green';
+  return 'dot-yellow';
+}
+
+function stopMonitorMqttLabel(mqttHealth) {
+  const mh = mqttHealth || {};
+  if (!mh.running) return 'stop MQTT offline';
+  if (mh.stale) {
+    const age = mh.age_seconds != null ? Math.round(mh.age_seconds) : '?';
+    return `stop MQTT stale ${age}s`;
+  }
+  if (mh.connected) {
+    const age = mh.age_seconds != null ? Math.round(mh.age_seconds) : '0';
+    return `stop MQTT live ${age}s`;
+  }
+  return 'stop MQTT disconnected';
+}
+
 function renderHealthInto(h, bar) {
   const launcher = h.launcher || {};
   const smHb = h.stop_monitor || {};
+  const smMqtt = h.stop_monitor_mqtt || {};
   const streamerDot = streamerHealthDot(h);
   const streamerDetail = streamerHealthLabel(h);
+  const smMqttDot = stopMonitorMqttDot(smMqtt);
+  const smMqttDetail = stopMonitorMqttLabel(smMqtt);
   const spx = h.mqtt_spx_price;
   const launcherDot = launcher.state === 'running' ? 'dot-green' : launcher.state === 'kill' ? 'dot-red' : 'dot-grey';
   const smDot = smHb.ts ? hbDotClass(smHb.ts) : 'dot-grey';
@@ -1540,6 +1565,7 @@ function renderHealthInto(h, bar) {
     <div class="health-item"><span class="status-dot ${launcherDot}"></span>Launcher</div>
     <div class="health-item" title="${streamerDetail}"><span class="status-dot ${streamerDot}"></span>Streamer</div>
     <div class="health-item"><span class="status-dot ${smDot}"></span>StopMon${smLoops}</div>
+    <div class="health-item" title="${smMqttDetail}"><span class="status-dot ${smMqttDot}"></span>SM MQTT</div>
     <div class="health-item"><span class="status-dot ${mqttDot}"></span>SPX ${mqttVal}</div>`;
 }
 

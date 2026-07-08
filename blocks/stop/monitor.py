@@ -31,6 +31,7 @@ from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_wat
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
 from blocks.stop.stop_ownership import has_ownership_conflict
 from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
+from common.mqtt_prices import mqtt_cache_is_stale
 from common.streamer_health import is_stale as streamer_prices_stale
 from blocks.stop.stop_profile import StopProfile, resolve_stop_profile
 
@@ -539,9 +540,10 @@ class StopMonitor:
             return
 
         streamer_stale = self._streamer_prices_stale()
-        self._refresh_breach_watch(streamer_stale)
+        mqtt_cache_stale = mqtt_cache_is_stale(self.prices)
+        self._refresh_breach_watch(streamer_stale, mqtt_cache_stale=mqtt_cache_stale)
 
-        if streamer_stale:
+        if mqtt_cache_stale or streamer_stale:
             self._maybe_merge_disk_stop_state()
             state_mod.save_state(self.json_path, self.state)
             return
@@ -627,17 +629,22 @@ class StopMonitor:
     def current_stop_price(self) -> float:
         return spread_breach_threshold(self.state)
 
-    def _refresh_breach_watch(self, streamer_stale: bool) -> None:
+    def _refresh_breach_watch(self, streamer_stale: bool, *, mqtt_cache_stale: bool = False) -> None:
         """Persist spread vs software breach threshold; rate-limited diagnostics."""
         short_sym = self.state['short_leg']['symbol']
         long_sym = self.state['long_leg']['symbol']
-        short_p = self.prices.get(short_sym)
-        long_p = self.prices.get(long_sym)
+        if mqtt_cache_stale:
+            short_p = None
+            long_p = None
+        else:
+            short_p = self.prices.get_market_mid(short_sym)
+            long_p = self.prices.get_market_mid(long_sym)
         watch = build_breach_watch_snapshot(
             self.state,
             short_p=short_p,
             long_p=long_p,
             streamer_stale=streamer_stale,
+            mqtt_cache_stale=mqtt_cache_stale,
             now_iso=state_mod.now_iso(),
         )
         self.state['breach_watch'] = watch

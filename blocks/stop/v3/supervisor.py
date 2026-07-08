@@ -21,7 +21,7 @@ from blocks.stop.stop_ownership import (
 )
 from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
 from blocks.stop.mqtt_prices import MqttPriceCache
-from common.mqtt_prices import write_mqtt_cache_health
+from common.mqtt_prices import mqtt_cache_is_stale, write_mqtt_cache_health
 from blocks.stop.pending_fill_sync import sync_pending_fills
 from blocks.stop.phases import PhaseAction, PhaseBase, default_phases
 from blocks.stop.v3 import config as v3_config
@@ -407,12 +407,16 @@ class StopSupervisor:
 
         watch = st.get('breach_watch') or {}
         wstatus = str(watch.get('status') or '')
-        if wstatus in ('stale', 'no_prices'):
+        if mqtt_cache_is_stale(mon.prices):
+            return False, 'stale_mqtt'
+        if wstatus == 'stale':
+            return False, 'stale_mqtt' if watch.get('mqtt_cache_stale') else 'waiting_mqtt'
+        if wstatus == 'no_prices':
             return False, 'waiting_mqtt'
 
         short_sym = st['short_leg']['symbol']
         long_sym = st['long_leg']['symbol']
-        if mon.prices.get(short_sym) is None or mon.prices.get(long_sym) is None:
+        if mon.prices.get_market_mid(short_sym) is None or mon.prices.get_market_mid(long_sym) is None:
             return False, 'waiting_mqtt'
 
         return True, 'armed'
@@ -434,6 +438,8 @@ class StopSupervisor:
         if str(st.get('status') or '') != 'open':
             return False
         if int(st.get('filled_quantity') or 0) <= 0:
+            return False
+        if mqtt_cache_is_stale(mon.prices):
             return False
         if mon.prices.get_spx() is None:
             return False
@@ -544,7 +550,8 @@ class StopSupervisor:
             return
 
         streamer_stale = mon._streamer_prices_stale()
-        mon._refresh_breach_watch(streamer_stale)
+        mqtt_cache_stale = mqtt_cache_is_stale(self.prices)
+        mon._refresh_breach_watch(streamer_stale, mqtt_cache_stale=mqtt_cache_stale)
 
         now = time.time()
         if now - slot.last_broker_sync >= SLOW_INTERVAL:
@@ -552,6 +559,11 @@ class StopSupervisor:
             if self._slow_broker_sync(slot):
                 save_slot(slot)
                 return
+
+        if mqtt_cache_stale:
+            self._lifecycle_section(slot)['breach_arm_status'] = 'stale_mqtt'
+            save_slot(slot)
+            return
 
         if streamer_stale:
             self._lifecycle_section(slot)['breach_arm_status'] = 'stale'

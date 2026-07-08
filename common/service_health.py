@@ -106,3 +106,49 @@ def check_mqtt_cache_health(
     if not data.get('connected') and data.get('running'):
         return False, 'STOP_MONITOR MQTT — not connected'
     return True, 'ok'
+
+
+def scan_price_gate_trades(
+    root: str,
+    *,
+    grace_sec: float = 120.0,
+) -> Tuple[bool, str]:
+    """Alert when open trades stay disarmed due to MQTT / price gates."""
+    from blocks.stop import state as state_mod
+
+    issues: list[str] = []
+    for path in state_mod.iter_active_trade_paths():
+        try:
+            st = state_mod.load_state(path)
+        except Exception:
+            continue
+        if str(st.get('status') or '') not in ('open', 'closing'):
+            continue
+        lc = st.get('lifecycle') or {}
+        arm = str(lc.get('breach_arm_status') or '')
+        watch = st.get('breach_watch') or {}
+        wstatus = str(watch.get('status') or '')
+        if arm not in ('waiting_mqtt', 'stale_mqtt', 'stale') and wstatus not in (
+            'no_prices',
+            'stale',
+        ):
+            continue
+        updated = watch.get('updated_at') or lc.get('breach_armed_at')
+        age = _age_from_iso(str(updated)) if updated else None
+        if age is not None and age < grace_sec:
+            continue
+        lot = st.get('lot', '?')
+        side = (st.get('entry') or {}).get('side', '?')
+        tag = f'{lot} {side}'
+        if arm == 'stale_mqtt' or watch.get('mqtt_cache_stale'):
+            issues.append(f'{tag} stale_mqtt')
+        elif arm in ('waiting_mqtt',) or wstatus == 'no_prices':
+            issues.append(f'{tag} waiting_mqtt')
+        elif wstatus == 'stale' or arm == 'stale':
+            issues.append(f'{tag} streamer_stale')
+    if not issues:
+        return True, 'ok'
+    preview = ', '.join(issues[:4])
+    if len(issues) > 4:
+        preview += f' (+{len(issues) - 4} more)'
+    return False, f'PRICE GATES — {preview}'
