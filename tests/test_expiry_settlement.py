@@ -1,14 +1,22 @@
 """Tests for 0DTE expiry settlement."""
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
 from datetime import date, datetime
 
 from common.expiry_settlement import (
+    capture_mqtt_settlement_close,
     compute_settled_pnl,
+    ensure_spx_settlement_close,
+    get_spx_settlement_close,
+    resolve_spx_settlement_close,
     settlement_cutoff_reached,
     spread_intrinsic_at_expiry,
     trade_to_history_row,
+    write_spx_settlement_close,
 )
 
 
@@ -115,6 +123,102 @@ class TestExpirySettlement(unittest.TestCase):
         row = trade_to_history_row(trade, spx_close=7499.0)
         self.assertEqual(row['pnl'], 140.0)
         self.assertEqual(row['status'], 'CLOSED')
+
+    def test_stale_manual_file_loses_to_spx_polls(self):
+        """Unlocked manual settlement must not beat session polls before MQTT cutoff."""
+        with tempfile.TemporaryDirectory() as tmp:
+            day = date(2026, 7, 7)
+            settlement_dir = os.path.join(tmp, 'trades', 'settlement')
+            data_dir = os.path.join(tmp, 'data', day.isoformat())
+            os.makedirs(settlement_dir)
+            os.makedirs(data_dir)
+            with open(os.path.join(settlement_dir, f'{day.isoformat()}.json'), 'w', encoding='utf-8') as f:
+                json.dump({'date': day.isoformat(), 'spx_close': 7524.29, 'source': 'manual'}, f)
+            with open(os.path.join(data_dir, 'SPX_polls.csv'), 'w', encoding='utf-8') as f:
+                f.write('timestamp,price\n')
+                f.write('2026-07-07 14:59:49,7500.15\n')
+
+            before_cutoff = datetime(2026, 7, 7, 14, 30)
+            resolved = resolve_spx_settlement_close(day, root=tmp, now=before_cutoff)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved['source'], 'spx_polls')
+            self.assertEqual(get_spx_settlement_close(day, root=tmp, now=before_cutoff), 7500.15)
+
+    def test_mqtt_settlement_wins_after_3pm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = date(2026, 7, 7)
+            data_dir = os.path.join(tmp, 'data', day.isoformat())
+            os.makedirs(data_dir)
+            with open(os.path.join(data_dir, 'SPX_polls.csv'), 'w', encoding='utf-8') as f:
+                f.write('timestamp,price\n')
+                f.write('2026-07-07 14:59:49,7500.15\n')
+            with open(os.path.join(data_dir, 'spx_mqtt_settlement.json'), 'w', encoding='utf-8') as f:
+                json.dump({
+                    'date': day.isoformat(),
+                    'spx_close': 7503.0,
+                    'source': 'mqtt_settlement',
+                    'captured_at': '2026-07-07T15:00:05-05:00',
+                }, f)
+
+            after_cutoff = datetime(2026, 7, 7, 15, 5)
+            self.assertEqual(get_spx_settlement_close(day, root=tmp, now=after_cutoff), 7503.0)
+
+    def test_capture_mqtt_settlement_persists_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = date(2026, 7, 7)
+            os.makedirs(os.path.join(tmp, 'data', day.isoformat()))
+            after_cutoff = datetime(2026, 7, 7, 15, 0, 5)
+
+            class _FakeCache:
+                def get_spx(self):
+                    return 7503.205
+
+            import common.expiry_settlement as mod
+            original = mod._spx_from_mqtt_snapshot
+            mod._spx_from_mqtt_snapshot = lambda: _FakeCache().get_spx()
+            try:
+                first = capture_mqtt_settlement_close(day, root=tmp, now=after_cutoff)
+                second = capture_mqtt_settlement_close(day, root=tmp, now=after_cutoff)
+            finally:
+                mod._spx_from_mqtt_snapshot = original
+
+            self.assertEqual(first, 7503.205)
+            self.assertEqual(second, 7503.205)
+            self.assertEqual(get_spx_settlement_close(day, root=tmp, now=after_cutoff), 7503.205)
+
+    def test_locked_manual_file_wins_over_polls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = date(2026, 7, 7)
+            data_dir = os.path.join(tmp, 'data', day.isoformat())
+            os.makedirs(data_dir)
+            write_spx_settlement_close(day, 7503.0, root=tmp, source='operator_manual', locked=True)
+            with open(os.path.join(data_dir, 'SPX_polls.csv'), 'w', encoding='utf-8') as f:
+                f.write('timestamp,price\n')
+                f.write('2026-07-07 14:59:49,7500.15\n')
+
+            self.assertEqual(get_spx_settlement_close(day, root=tmp), 7503.0)
+
+    def test_ensure_rewrites_stale_manual_from_polls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = date(2026, 7, 7)
+            settlement_dir = os.path.join(tmp, 'trades', 'settlement')
+            data_dir = os.path.join(tmp, 'data', day.isoformat())
+            os.makedirs(settlement_dir)
+            os.makedirs(data_dir)
+            with open(os.path.join(settlement_dir, f'{day.isoformat()}.json'), 'w', encoding='utf-8') as f:
+                json.dump({'date': day.isoformat(), 'spx_close': 7524.29, 'source': 'manual'}, f)
+            with open(os.path.join(data_dir, 'SPX_polls.csv'), 'w', encoding='utf-8') as f:
+                f.write('timestamp,price\n')
+                f.write('2026-07-07 14:59:49,7500.15\n')
+
+            before_cutoff = datetime(2026, 7, 7, 14, 45)
+            spx = ensure_spx_settlement_close(day, root=tmp, now=before_cutoff)
+            self.assertEqual(spx, 7500.15)
+            with open(os.path.join(settlement_dir, f'{day.isoformat()}.json'), encoding='utf-8') as f:
+                saved = json.load(f)
+            self.assertEqual(saved['spx_close'], 7500.15)
+            self.assertEqual(saved['source'], 'spx_polls')
+            self.assertFalse(saved['locked'])
 
 
 if __name__ == '__main__':

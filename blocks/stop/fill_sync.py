@@ -135,8 +135,14 @@ def stop_qty_for_state(state: Dict[str, Any]) -> int:
     return int(state.get('filled_quantity') or 0)
 
 
-def stop_is_current(state: Dict[str, Any]) -> bool:
-    """True when active stop quantity matches filled quantity."""
+def stop_is_current(
+    state: Dict[str, Any],
+    *,
+    ownership_conflict: bool = False,
+) -> bool:
+    """True when this JSON's active stop quantity matches filled quantity."""
+    if ownership_conflict:
+        return False
     active = state.get('active_stop') or {}
     if not active.get('order_id'):
         return False

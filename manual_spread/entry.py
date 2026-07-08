@@ -409,6 +409,10 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
     def _keep(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> bool:
         if old is None:
             return True
+        new_closed = str(new.get('status') or '') == 'closed'
+        old_closed = str(old.get('status') or '') == 'closed'
+        if new_closed != old_closed:
+            return new_closed
         return _trade_recency_key(new) >= _trade_recency_key(old)
 
     for st in load_active_trades():

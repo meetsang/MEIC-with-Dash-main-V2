@@ -94,6 +94,53 @@ class TestBuildManualTradesRows(unittest.TestCase):
             self.assertEqual(len(trades), 1)
             self.assertEqual(trades[0]['_filename'], 'ms-99_C_new.json')
 
+    def test_closed_history_beats_stale_active_open_ghost(self):
+        from manual_spread.entry import load_dashboard_manual_trades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            active = os.path.join(tmp, 'active')
+            hist = os.path.join(tmp, 'history')
+            os.makedirs(active)
+            os.makedirs(hist)
+            today = date.today().isoformat()
+            closed = {
+                'status': 'closed',
+                'lot': 'ms-185',
+                'close_mechanism': 'operator_manual',
+                'entry': {
+                    'strategy': 'MANUAL_SPREAD',
+                    'side': 'P',
+                    'timestamp': f'{today}T09:16:42-05:00',
+                    'net_credit': 0.7,
+                },
+                'short_leg': {'strike': 7425, 'fill_price': 1.32, 'symbol': '.SPXW260707P7425'},
+                'long_leg': {'strike': 7400, 'fill_price': 0.62, 'symbol': '.SPXW260707P7400'},
+                'close': {'brokerage_spread_exit_debit': 0.05},
+            }
+            ghost = {
+                'status': 'open',
+                'lot': 'ms-185',
+                'close_only_mode': True,
+                'exit_handler': 'manual_close',
+                'entry': dict(closed['entry']),
+                'short_leg': dict(closed['short_leg']),
+                'long_leg': dict(closed['long_leg']),
+            }
+            with open(os.path.join(hist, 'ms-185_P_20260707T091639.json'), 'w', encoding='utf-8') as f:
+                json.dump(closed, f)
+            with open(os.path.join(active, 'ms-185_P_20260707T091639.json'), 'w', encoding='utf-8') as f:
+                json.dump(ghost, f)
+                # Make active ghost look newer on disk than history.
+                os.utime(os.path.join(active, 'ms-185_P_20260707T091639.json'), None)
+
+            with patch('manual_spread.entry.state_mod.manual_spread_active_dir', return_value=active), \
+                 patch('manual_spread.entry.state_mod.manual_spread_closed_dir', return_value=hist), \
+                 patch('common.session_cleanup.central_today', return_value=date.today()):
+                trades = load_dashboard_manual_trades()
+            self.assertEqual(len(trades), 1)
+            self.assertEqual(trades[0]['status'], 'closed')
+            self.assertEqual(trades[0]['lot'], 'ms-185')
+
 
 if __name__ == '__main__':
     unittest.main()

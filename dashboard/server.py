@@ -1114,7 +1114,14 @@ def api_history_sync():
     spx_close = data.get('spx_close')
     for_date = data.get('date')
     if spx_close is not None and for_date:
-        write_spx_settlement_close(date.fromisoformat(for_date), float(spx_close), root=ROOT)
+        write_spx_settlement_close(
+            date.fromisoformat(for_date),
+            float(spx_close),
+            root=ROOT,
+            source='operator_manual',
+            locked=True,
+            note='Operator-confirmed 3 PM CT SPX cash close',
+        )
     result = sync_history_from_disk(ROOT)
     return jsonify(result)
 

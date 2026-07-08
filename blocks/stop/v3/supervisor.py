@@ -14,6 +14,11 @@ from brokers.base import BrokerBase
 from blocks.stop import state as state_mod
 from blocks.stop.alerts import AlertListener
 from blocks.stop.fill_sync import stop_is_current, stop_order_fully_filled
+from blocks.stop.stop_ownership import (
+    apply_ownership_conflict_flags,
+    has_ownership_conflict,
+    scan_duplicate_stop_ownership,
+)
 from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
 from blocks.stop.mqtt_prices import MqttPriceCache
 from blocks.stop.pending_fill_sync import sync_pending_fills
@@ -68,6 +73,7 @@ class StopSupervisor:
         self._loop_count = 0
         self._alert_order_paths: Dict[str, str] = {}
         self._last_pending_sync = 0.0
+        self._ownership_conflict_paths: set[str] = set()
 
     def run_forever(self) -> None:
         self.prices.start()
@@ -405,6 +411,15 @@ class StopSupervisor:
 
         return True, 'armed'
 
+    def _stop_is_current_for_slot(self, slot: TradeSlot) -> bool:
+        return stop_is_current(
+            slot.state,
+            ownership_conflict=(
+                slot.path in self._ownership_conflict_paths
+                or has_ownership_conflict(slot.state)
+            ),
+        )
+
     def _phase3_scan_ready(self, slot: TradeSlot, mon: StopMonitor) -> bool:
         """Phase 3 uses SPX + time only — not option-leg MQTT breach arm."""
         st = slot.state
@@ -416,7 +431,7 @@ class StopSupervisor:
             return False
         if mon.prices.get_spx() is None:
             return False
-        return stop_is_current(slot.state)
+        return self._stop_is_current_for_slot(slot)
 
     def _maybe_enqueue_phase3_exit(self, slot: TradeSlot, mon: StopMonitor) -> bool:
         phase3 = next((p for p in self.phases if p.name == 'phase3_spx_proximity'), None)
@@ -537,7 +552,7 @@ class StopSupervisor:
             save_slot(slot)
             return
 
-        if not stop_is_current(slot.state):
+        if not self._stop_is_current_for_slot(slot):
             mon._ensure_stop_for_filled_qty()
             slot.state = mon.state
             self._lifecycle_section(slot)['breach_arm_status'] = 'waiting_stop'
@@ -636,6 +651,12 @@ class StopSupervisor:
             self._scan_open_slot(slot)
 
     def _cycle(self) -> None:
+        duplicates = scan_duplicate_stop_ownership()
+        apply_ownership_conflict_flags(duplicates)
+        self._ownership_conflict_paths = {
+            p for dup in duplicates for p in dup.paths
+        }
+
         slots = self._discover_slots()
         killswitch = check_killswitch_global()
         if killswitch and not self._killswitch_claimed:
@@ -646,4 +667,20 @@ class StopSupervisor:
         for slot in slots:
             self._scan_slot(slot, killswitch_active=killswitch)
 
+        self._maybe_capture_mqtt_settlement()
         self._write_heartbeat(len(slots))
+
+    def _maybe_capture_mqtt_settlement(self) -> None:
+        """Snapshot MQTT SPX at/after 15:00 CT once per session for expiry settlement."""
+        try:
+            from meic0dte.app.utilities import central_now
+            from common.expiry_settlement import capture_mqtt_settlement_close
+
+            today = central_now().date()
+            root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+            spx = capture_mqtt_settlement_close(today, root=root)
+            if spx is not None and not getattr(self, '_mqtt_settle_logged', False):
+                log.info('MQTT settlement SPX captured for %s: %.2f', today.isoformat(), spx)
+                self._mqtt_settle_logged = True
+        except Exception:
+            log.debug('MQTT settlement capture skipped', exc_info=True)

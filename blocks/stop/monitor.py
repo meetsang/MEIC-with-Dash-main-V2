@@ -15,7 +15,6 @@ from meic0dte.app.utilities import central_time
 from brokers.base import BrokerBase, OrderResult
 from blocks.stop import state as state_mod
 from common.option_ticks import round_spx_option_price, step_down_spx_option_price
-from blocks.stop.broker_sync import cancel_all_close_orders_on_short
 from blocks.stop.fill_sync import (
     stop_is_current,
     stop_order_fully_filled,
@@ -30,6 +29,7 @@ from common.market_hours import (
 )
 from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
+from blocks.stop.stop_ownership import has_ownership_conflict
 from common.streamer_health import is_stale as streamer_prices_stale
 from blocks.stop.stop_profile import StopProfile, resolve_stop_profile
 
@@ -169,8 +169,9 @@ class StopMonitor:
             result = self.broker.get_order_status(active['order_id'])
             if result.success:
                 st = str(result.status).lower()
-                if st in ('cancelled', 'canceled'):
-                    self._reconcile_active_stop_with_broker()
+                if st in ('cancelled', 'canceled', 'rejected', 'expired'):
+                    self.state['active_stop'] = None
+                    self.state['stop_quantity'] = 0
                 else:
                     active['status'] = result.status
                     if stop_order_fully_filled(self.state, result):
@@ -178,7 +179,10 @@ class StopMonitor:
                 self._maybe_merge_disk_stop_state()
                 state_mod.save_state(self.json_path, self.state)
         self._ensure_stop_for_filled_qty()
-        if self.state.get('status') == 'open' and not stop_is_current(self.state):
+        if self.state.get('status') == 'open' and not stop_is_current(
+            self.state,
+            ownership_conflict=has_ownership_conflict(self.state),
+        ):
             state_mod.save_state(self.json_path, self.state)
 
         self._recover_closing_on_load()
@@ -220,9 +224,6 @@ class StopMonitor:
             )
             t.start()
 
-    def _cancel_all_close_orders_on_short(self) -> None:
-        cancel_all_close_orders_on_short(self.state, self.broker)
-
     def _ensure_stop_for_filled_qty(self) -> None:
         """Place or resize exchange stop only for filled spread units (both legs)."""
         if state_mod.section(self.state, 'active_stop').get('skip_initial'):
@@ -238,6 +239,13 @@ class StopMonitor:
         short_fill = float(self.state['short_leg'].get('fill_price') or 0)
         long_fill = float(self.state['long_leg'].get('fill_price') or 0)
         if short_fill <= 0 or long_fill <= 0:
+            return
+
+        if has_ownership_conflict(self.state):
+            log.critical(
+                'stop_ownership_conflict — skip auto stop place for %s (operator repair required)',
+                self.json_path,
+            )
             return
 
         if stop_is_current(self.state):
@@ -502,7 +510,10 @@ class StopMonitor:
             return
 
         if self.state.get('status') == 'open':
-            if not stop_is_current(self.state):
+            if not stop_is_current(
+                self.state,
+                ownership_conflict=has_ownership_conflict(self.state),
+            ):
                 self._ensure_stop_for_filled_qty()
 
         # Handle 'closing' status — chase the long close order (in background thread)
@@ -772,86 +783,43 @@ class StopMonitor:
         self._sync_active_close_order()
 
     def _reconcile_active_stop_with_broker(self) -> None:
-        """Adopt a manually replaced stop when JSON still points at a cancelled order."""
+        """Refresh this JSON's own active_stop at broker — never adopt by short symbol."""
         if self.state.get('status') != 'open':
             return
 
-        short_sym = self.state['short_leg']['symbol']
         active = self.state.get('active_stop') or {}
         oid = str(active.get('order_id') or '')
-
-        if oid:
-            result = self.broker.get_order_status(oid)
-            if result.success:
-                st = str(result.status).lower()
-                if st in ('working', 'live', 'contingent', 'received', 'open', 'partially filled'):
-                    active['status'] = 'working'
-                    return
-                if stop_order_fully_filled(self.state, result):
-                    self.handle_stop_order_update(active, broker_result=result)
-                    return
-                if st not in ('cancelled', 'canceled', 'rejected', 'expired', 'unknown'):
-                    return
-
-        working = self.broker.find_working_close_order(short_sym)
-        if not working or not working.order_id:
+        if not oid:
             return
 
-        new_oid = str(working.order_id)
-        if oid == new_oid and str(active.get('status', '')).lower() in ('working', 'live'):
+        result = self.broker.get_order_status(oid)
+        if not result.success:
             return
 
-        raw = working.raw
-        stop_price = active.get('stop_price')
-        limit_price = active.get('limit_price')
-        if raw is not None:
-            trig = getattr(raw, 'stop_trigger', None)
-            if trig is not None:
-                stop_price = round_spx_option_price(float(trig))
-            if getattr(raw, 'price', None) is not None:
-                limit_price = round_spx_option_price(abs(float(raw.price)))
+        st = str(result.status).lower()
+        if st in ('working', 'live', 'contingent', 'received', 'open', 'partially filled'):
+            active['status'] = 'working'
+            state_mod.save_state(self.json_path, self.state)
+            return
 
-        old_oid = oid or None
-        qty = int(
-            working.order_quantity
-            or working.filled_quantity
-            or stop_qty_for_state(self.state)
-        )
-        self.state['active_stop'] = {
-            'order_id': new_oid,
-            'type': 'STOP_LIMIT',
-            'stop_price': stop_price,
-            'limit_price': limit_price,
-            'phase': active.get('phase', 1),
-            'status': 'working',
-            'placed_at': state_mod.now_iso(),
-            'quantity': qty,
-        }
-        self.state['stop_quantity'] = qty
-        if stop_price is not None:
-            self.state['designated_stop_price'] = float(stop_price)
-        if old_oid and old_oid != new_oid:
+        if stop_order_fully_filled(self.state, result):
+            self.handle_stop_order_update(active, broker_result=result)
+            return
+
+        if st in ('cancelled', 'canceled', 'rejected', 'expired', 'unknown'):
             state_mod.append_stop_history(
                 self.state,
                 action='cancelled',
-                order_id=old_oid,
-                price=active.get('stop_price'),
+                order_id=oid,
+                price=active.get('stop_price') or active.get('limit_price'),
                 phase=active.get('phase', 1),
-                reason='replaced_at_broker',
+                reason='own_stop_terminal_at_broker',
                 spx_price_at_event=self.prices.get_spx(),
             )
-        state_mod.append_stop_history(
-            self.state,
-            action='placed',
-            order_id=new_oid,
-            price=stop_price,
-            phase=active.get('phase', 1),
-            reason='broker_reconcile',
-            spx_price_at_event=self.prices.get_spx(),
-        )
-        self._reregister_alert(old_oid, new_oid)
-        log.info('Reconciled active stop for %s → order %s', short_sym, new_oid)
-        state_mod.save_state(self.json_path, self.state)
+            self._reregister_alert(oid, None)
+            self.state['active_stop'] = None
+            self.state['stop_quantity'] = 0
+            state_mod.save_state(self.json_path, self.state)
 
     def _maybe_merge_disk_stop_state(self) -> None:
         """Adopt manual stop JSON edits when in-memory state is stale."""

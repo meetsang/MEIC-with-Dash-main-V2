@@ -476,33 +476,55 @@ def _wait_for_active_stop(
 
 
 def cmd_sync_broker_stop(args) -> int:
-    """Repair JSON/broker drift: adopt live short-leg close order into active_stop."""
+    """Repair JSON/broker drift via strict orphan-stop adoption (dry-run unless --apply)."""
     from common.broker_factory import get_broker
     from blocks.stop import state as state_mod
-    from blocks.stop.broker_sync import adopt_active_stop_from_broker, cancel_all_close_orders_on_short
+    from blocks.stop.broker_sync import cancel_all_close_orders_on_short, repair_orphan_stop
+    from blocks.stop.stop_ownership import collect_claimed_stop_order_ids, scan_duplicate_stop_ownership
 
     paths = _active_json_paths(getattr(args, 'lot', None))
     if not paths:
         print('  No files in trades/active/')
         return 1
 
+    duplicates = scan_duplicate_stop_ownership(paths)
+    if duplicates:
+        for dup in duplicates:
+            print(f'  CRITICAL duplicate active_stop {dup.order_id}: {list(dup.paths)}')
+
     broker = get_broker(paper=args.paper)
-    print(f'--- Sync broker stops ({len(paths)} file(s)) ---')
+    apply = bool(getattr(args, 'apply', False))
+    mode = 'APPLY' if apply else 'DRY-RUN'
+    print(f'--- Repair orphan stops ({mode}, {len(paths)} file(s)) ---')
+
+    claimed = set(collect_claimed_stop_order_ids(paths).keys())
     for path in paths:
         st = state_mod.load_state(path)
         if getattr(args, 'cancel_broker_stops', False):
+            if not apply:
+                print(f'  DRY-RUN would cancel broker BTC + clear JSON: {path}')
+                continue
             n = cancel_all_close_orders_on_short(st, broker)
             st['active_stop'] = None
             st['stop_quantity'] = 0
             state_mod.save_state(path, st)
             print(f'  Cancelled {n} broker close order(s); cleared JSON: {path}')
             continue
-        if adopt_active_stop_from_broker(st, broker):
+
+        outcome = repair_orphan_stop(
+            st,
+            broker,
+            apply=apply,
+            repair_reason='sync_broker_stop_cli',
+            claimed_order_ids=claimed,
+        )
+        print(f'  {path}: {outcome.status} — {outcome.message}')
+        if apply and outcome.status == 'adopted':
             state_mod.save_state(path, st)
             oid = state_mod.section(st, 'active_stop').get('order_id')
-            print(f'  Linked broker stop {oid} → {path}')
-        else:
-            print(f'  No working broker stop to adopt for {path}')
+            if oid:
+                claimed.add(str(oid))
+            print(f'    → linked broker stop {oid}')
     return 0
 
 
@@ -1053,15 +1075,29 @@ def main() -> int:
 
     p_sync = sub.add_parser(
         'sync-broker-stop',
-        help='Adopt live broker close order into JSON (fix null active_stop drift)',
+        help='Repair orphan broker stop into JSON (dry-run unless --apply)',
     )
     p_sync.add_argument('--lot', default=None, help='Only sync JSONs matching this lot')
     p_sync.add_argument(
+        '--apply',
+        action='store_true',
+        help='Write adoption to JSON (default: dry-run only)',
+    )
+    p_sync.add_argument(
         '--cancel-broker-stops',
         action='store_true',
-        help='Cancel all broker close orders on short leg and clear JSON (clean slate)',
+        help='Cancel all broker close orders on short leg and clear JSON (requires --apply)',
     )
     p_sync.set_defaults(func=cmd_sync_broker_stop)
+
+    p_repair = sub.add_parser(
+        'repair-orphaned-stops',
+        help='Alias for sync-broker-stop (explicit repair path)',
+    )
+    p_repair.add_argument('--lot', default=None)
+    p_repair.add_argument('--apply', action='store_true')
+    p_repair.add_argument('--cancel-broker-stops', action='store_true')
+    p_repair.set_defaults(func=cmd_sync_broker_stop)
 
     p_mon = sub.add_parser('run-stop-monitor', help='Run stop_monitor on active JSONs')
     p_mon.add_argument('--seconds', type=int, default=120)

@@ -36,6 +36,26 @@ class BrokerRateLimited(Exception):
     """REST call rejected by rate limiter or remote throttle."""
 
 
+def _signed_position_qty(pos: Any) -> int:
+    """Normalize Tasty position qty to signed contracts (short < 0, long > 0).
+
+    Tasty REST/WS reports positive ``quantity`` with ``quantity_direction``
+    ('Short' / 'Long'). Fall back to raw signed qty when direction is absent.
+    """
+    raw = int(getattr(pos, 'quantity', 0) or 0)
+    if raw == 0:
+        return 0
+    direction = getattr(pos, 'quantity_direction', None)
+    if direction is None:
+        direction = getattr(pos, 'quantity-direction', None)
+    dir_s = str(direction or '').strip().lower()
+    if dir_s == 'short':
+        return -abs(raw)
+    if dir_s == 'long':
+        return abs(raw)
+    return raw
+
+
 def _retry_on_transient(func, max_retries=3, base_delay=2.0):
     """Retry on transient errors (network, 500s). Not on business errors (margin, invalid order)."""
     last_exc = None
@@ -707,7 +727,7 @@ class TastyTradeBroker(BrokerBase):
         for pos in positions or []:
             sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
             sym_s = str(sym)
-            qty = int(getattr(pos, 'quantity', 0) or 0)
+            qty = _signed_position_qty(pos)
             if symbols_equivalent(sym_s, short_tt):
                 short_qty = qty
             elif symbols_equivalent(sym_s, long_tt):
