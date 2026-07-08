@@ -81,3 +81,44 @@ def test_symbol_state_minute_ohlc_and_rollup():
         assert len(bars_3) == 1
         assert bars_3[0]['open'] == '6000.0'
         assert bars_3[0]['close'] == '6012.0'
+
+
+def test_symbol_state_tick_ohlc_captures_intra_minute_extremes():
+    """Many MQTT ticks in one minute should set true high/low (not sparse poll)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        day_path = os.path.join(tmp, '2026-07-01')
+        os.makedirs(day_path)
+        st = SymbolState(symbol='SPX', day_path=day_path)
+
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        st.record_tick(base.replace(second=5), 6000.0)
+        st.record_tick(base.replace(second=15), 6010.0)
+        st.record_tick(base.replace(second=30), 5990.0)
+        st.record_tick(base.replace(second=45), 6005.0)
+
+        st.record_tick(datetime(2026, 7, 1, 10, 1, 0), 6012.0)
+
+        path_1m = config.ohlc_path(day_path, 'SPX', 1)
+        with open(path_1m, encoding='utf-8') as f:
+            rows = list(csv.DictReader(f))
+
+        assert len(rows) == 1
+        assert rows[0]['open'] == '6000.0'
+        assert rows[0]['high'] == '6010.0'
+        assert rows[0]['low'] == '5990.0'
+        assert rows[0]['close'] == '6005.0'
+        assert int(rows[0]['samples']) == 4
+
+        with open(config.polls_path(day_path, 'SPX'), encoding='utf-8') as f:
+            tick_rows = list(csv.DictReader(f))
+        assert len(tick_rows) == 5
+
+
+def test_watch_symbol_from_mqtt_topic():
+    from market_data.watch_symbols import watch_symbol_from_mqtt_topic
+
+    assert watch_symbol_from_mqtt_topic('SPX') == 'SPX'
+    assert watch_symbol_from_mqtt_topic('$SPX') == 'SPX'
+    assert watch_symbol_from_mqtt_topic('QQQ') == 'QQQ'
+    assert watch_symbol_from_mqtt_topic('.SPXW260708P7400') is None
+

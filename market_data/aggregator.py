@@ -98,7 +98,8 @@ class SymbolState:
             if interval != 1:
                 self.closes_by_interval[interval] = self._load_closes(interval)
 
-    def record_poll(self, ts: datetime, price: float) -> None:
+    def record_tick(self, ts: datetime, price: float) -> None:
+        """Record one MQTT mid arrival — drives OHLC and raw tick log."""
         minute = ts.replace(second=0, microsecond=0)
         if self.minute_start is None:
             self.minute_start = minute
@@ -107,9 +108,13 @@ class SymbolState:
             self.minute_start = minute
             self.minute_prices = []
         self.minute_prices.append((ts, price))
-        self._append_poll_row(ts, price)
+        self._append_tick_row(ts, price)
 
-    def _append_poll_row(self, ts: datetime, price: float) -> None:
+    def record_poll(self, ts: datetime, price: float) -> None:
+        """Backward-compatible alias for record_tick."""
+        self.record_tick(ts, price)
+
+    def _append_tick_row(self, ts: datetime, price: float) -> None:
         path = config.polls_path(self.day_path, self.symbol)
         exists = os.path.isfile(path)
         with open(path, 'a', encoding='utf-8', newline='') as f:
@@ -117,6 +122,9 @@ class SymbolState:
             if not exists:
                 writer.writerow(['timestamp', 'price'])
             writer.writerow([ts.strftime('%Y-%m-%d %H:%M:%S'), round(price, 4)])
+
+    def _append_poll_row(self, ts: datetime, price: float) -> None:
+        self._append_tick_row(ts, price)
 
     def _finalize_minute(self, minute_start: datetime) -> None:
         if not self.minute_prices:

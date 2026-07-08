@@ -96,3 +96,22 @@ def test_on_message_updates_last_msg_at():
     with cache._lock:
         cache._last_msg_at = time.time() - 120.0
     assert cache.get('SPX') is None
+
+
+def test_tick_listener_fires_on_message():
+    cache = MqttPriceCache()
+    seen = []
+
+    def listener(symbol, price, epoch):
+        seen.append((symbol, price, epoch))
+
+    cache.add_tick_listener(listener)
+    msg = MagicMock()
+    msg.topic = f'{cache._prefix}QQQ'
+    msg.payload = b'707.25'
+    cache._on_message(None, None, msg)
+    assert seen == [('QQQ', 707.25, seen[0][2])]
+    cache.remove_tick_listener(listener)
+    cache._on_message(None, None, msg)
+    assert len(seen) == 1
+

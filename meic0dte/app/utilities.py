@@ -30,12 +30,23 @@ def _central_offset_hours(local_dt):
     return CENTRAL_DST_OFFSET if dst_start <= local_dt < dst_end else CENTRAL_STD_OFFSET
 
 
-def central_now():
-    utc_now = dt.now(timezone.utc)
+def _central_offset_for_utc(utc_now: dt) -> int:
     dst_start_local, dst_end_local = _central_dst_bounds(utc_now.year)
     dst_start_utc = (dst_start_local - timedelta(hours=CENTRAL_STD_OFFSET)).replace(tzinfo=timezone.utc)
     dst_end_utc = (dst_end_local - timedelta(hours=CENTRAL_DST_OFFSET)).replace(tzinfo=timezone.utc)
-    offset = CENTRAL_DST_OFFSET if dst_start_utc <= utc_now < dst_end_utc else CENTRAL_STD_OFFSET
+    return CENTRAL_DST_OFFSET if dst_start_utc <= utc_now < dst_end_utc else CENTRAL_STD_OFFSET
+
+
+def central_now():
+    utc_now = dt.now(timezone.utc)
+    offset = _central_offset_for_utc(utc_now)
+    return (utc_now + timedelta(hours=offset)).replace(tzinfo=None)
+
+
+def central_from_epoch(epoch: float) -> dt:
+    """Convert Unix epoch to naive US/Central local time (same basis as central_now)."""
+    utc_now = dt.fromtimestamp(epoch, tz=timezone.utc)
+    offset = _central_offset_for_utc(utc_now)
     return (utc_now + timedelta(hours=offset)).replace(tzinfo=None)
 
 

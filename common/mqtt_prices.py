@@ -7,7 +7,9 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+TickListener = Callable[[str, float, float], None]
 
 import paho.mqtt.client as mqtt
 
@@ -51,6 +53,8 @@ class MqttPriceCache:
         self._last_msg_at: float = 0.0
         self._last_error: Optional[str] = None
         self._last_stale_warn_at: float = 0.0
+        self._tick_listeners: List[TickListener] = []
+        self._listener_lock = threading.Lock()
         self.kill_switch: bool = False
 
     def is_running(self) -> bool:
@@ -163,6 +167,28 @@ class MqttPriceCache:
             log.warning('MQTT price cache reconnect failed: %s', exc)
             self._schedule_reconnect()
 
+    def add_tick_listener(self, listener: TickListener) -> None:
+        """Register callback(symbol, price, epoch_sec) on each MQTT mid update."""
+        with self._listener_lock:
+            if listener not in self._tick_listeners:
+                self._tick_listeners.append(listener)
+
+    def remove_tick_listener(self, listener: TickListener) -> None:
+        with self._listener_lock:
+            try:
+                self._tick_listeners.remove(listener)
+            except ValueError:
+                pass
+
+    def _notify_tick_listeners(self, symbol: str, price: float, epoch: float) -> None:
+        with self._listener_lock:
+            listeners = list(self._tick_listeners)
+        for listener in listeners:
+            try:
+                listener(symbol, price, epoch)
+            except Exception:
+                log.exception('MQTT tick listener failed for %s', symbol)
+
     def _on_message(self, client, userdata, msg) -> None:
         try:
             topic = msg.topic
@@ -178,6 +204,7 @@ class MqttPriceCache:
                 self._prices[symbol] = price
                 self._last_symbol_at[symbol] = now
                 self._last_msg_at = now
+            self._notify_tick_listeners(symbol, price, now)
         except (ValueError, UnicodeDecodeError):
             pass
 

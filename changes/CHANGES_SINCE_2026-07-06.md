@@ -45,6 +45,42 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-08 (late) — Index OHLC from MQTT ticks on arrival
+
+**Status:** implemented  
+**Tests:** `uv run pytest tests/test_market_data.py tests/test_mqtt_prices_resilience.py tests/test_option_snapshots.py -q` → **18 passed**
+
+### What changed
+
+| Area | Files | Behavior |
+|------|-------|----------|
+| **MQTT tick listeners** | `common/mqtt_prices.py` | `add_tick_listener` / `remove_tick_listener` — callback on every streamer publish |
+| **Index tick → OHLC** | `market_data/recorder.py`, `market_data/watch_symbols.py`, `market_data/aggregator.py`, `market_data/mqtt_reader.py` | SPX/VIX/QQQ/VXN/IWM recorded **on each MQTT mid** (not 30s poll); queue drains on main loop |
+| **Timestamps** | `meic0dte/app/utilities.py` | `central_from_epoch()` — tick time matches `central_now()` basis |
+| **Raw tick log** | `market_data/config.py` | `*_polls.csv` is now one row per MQTT publish (filename unchanged) |
+| **Options** | unchanged | `options_quotes.csv` still 3 min snapshot of spread legs — no OHLC |
+
+### Why
+
+- 30s polling produced **~2 samples/min** → wrong 1m/3m/5m high/low (missed intra-minute extremes).
+- Stale MQTT cache during streamer outages compounded the problem (flat `7459.0` bars for hours on Jul 8 morning).
+
+### Findings / learnings
+
+- `samples` column in `SPX_1m.csv` is the quick health check: **1–2 = old poll path or stale feed**; **10+ = tick path with live streamer**.
+- Restart `run.py` after deploy so `market_data` child picks up tick listeners; pre-restart bars in today's CSVs stay sparse.
+
+### Validation
+
+- [x] pytest market_data + mqtt tick listener + option snapshots
+- [ ] Live session tomorrow — confirm `samples` >> 2 on new 1m bars after restart
+
+### Related
+
+- Option snapshots (unchanged): section **2026-07-07 (late) — Option quote snapshots** below
+
+---
+
 ## 2026-07-08 — Stop monitor MQTT hardening (P0-C / P0-B / P0-A) + ms-187 incident
 
 **Status:** implemented; live-validated after **13:17 CT** restart with new code  
@@ -124,7 +160,8 @@ tests/test_long_close_chase.py, tests/test_breach_watch.py, ...
 ### Validation
 
 - [x] pytest option snapshots + logging + health
-- [ ] Live session — terminal quiet; `options_quotes.csv` grows after entries; alert on `kill streamer`
+- [x] Live session — `options_quotes.csv` grows after entries (Jul 8 ~12:12 CT once streamer healthy)
+- [ ] Live session — terminal quiet; alert on `kill streamer`
 
 ---
 
@@ -573,6 +610,7 @@ uv run python run.py                          # single launcher
 | Dashboard SW Breach on closed rows | **Fixed** | 2026-07-07 | Persisted snapshot + not gated on live mode |
 | Tranche grid entry/exit times | **Fixed** | 2026-07-07 | MEIC exit only; Manual entry + exit |
 | Option quote snapshots (`options_quotes.csv`) | **Fixed** | 2026-07-07 | 3 min MQTT snapshot, no OHLC |
+| Index OHLC from MQTT ticks (not 30s poll) | **Fixed** | 2026-07-08 | Tick listeners; live validate tomorrow |
 | Quiet terminal logging | **Fixed** | 2026-07-07 | See TERMINAL_LOGGING_QUIET.md |
 | Software breach threshold (2× vs 2×+$0.20) | **Deferred** | 2026-07-07 | Afternoon breach review |
 | Software breach execution (spread cap) | **Deferred** | 2026-07-07 | Large slippage on Jul 7 breach exits |

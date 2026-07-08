@@ -4,17 +4,17 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from common.broker_factory import get_mqtt_topic_prefix
-from common.mqtt_prices import MqttPriceCache
+from common.mqtt_prices import MqttPriceCache, TickListener
 from market_data import config
 
 log = logging.getLogger(__name__)
 
 
 class MqttQuoteReader:
-    """Poll shared MQTT cache; only forward prices that changed since last poll."""
+    """Shared MQTT cache for index ticks and option snapshot reads."""
 
     def __init__(self, symbols=None):
         self.symbols = tuple(symbols or config.WATCH_SYMBOLS)
@@ -29,6 +29,12 @@ class MqttQuoteReader:
 
     def stop(self) -> None:
         self._cache.stop()
+
+    def add_tick_listener(self, listener: TickListener) -> None:
+        self._cache.add_tick_listener(listener)
+
+    def remove_tick_listener(self, listener: TickListener) -> None:
+        self._cache.remove_tick_listener(listener)
 
     def poll_changed(self) -> Dict[str, float]:
         """Return {symbol: price} for symbols with new mids since last poll."""

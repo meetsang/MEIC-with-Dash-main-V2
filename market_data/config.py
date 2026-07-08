@@ -8,7 +8,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # Symbols published to MQTT by streamer and consumed here.
 WATCH_SYMBOLS = ('SPX', 'VIX', 'QQQ', 'VXN', 'IWM')
 
-# Poll MQTT every N seconds for new mids.
+# Legacy — index OHLC is driven by per-tick MQTT listeners, not interval polling.
 POLL_INTERVAL_SEC = 30
 
 # Snapshot all registered spread option mids to one CSV (no OHLC).
@@ -29,6 +29,7 @@ def day_dir(for_date) -> str:
 
 
 def polls_path(day_path: str, symbol: str) -> str:
+    """Per-tick MQTT mid log (one row per streamer publish)."""
     return os.path.join(day_path, f'{symbol}_polls.csv')
 
 
