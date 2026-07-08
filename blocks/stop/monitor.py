@@ -30,6 +30,7 @@ from common.market_hours import (
 from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
 from blocks.stop.stop_ownership import has_ownership_conflict
+from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
 from common.streamer_health import is_stale as streamer_prices_stale
 from blocks.stop.stop_profile import StopProfile, resolve_stop_profile
 
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 FAST_INTERVAL = 3       # seconds — breach check + long chase
+LEGACY_LONG_CLOSE_FLOOR = 0.05
 
 def _trades_dir() -> str:
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -1135,35 +1137,54 @@ class StopMonitor:
             self.long_close_delay_sec,
         )
 
-    def _long_leg_mid(self) -> float:
+    def _resolve_long_close_quote(self) -> LegQuoteResult:
         long_sym = self.state['long_leg']['symbol']
-        long_p = self.prices.get_market_mid(long_sym) or self.prices.get(long_sym)
-        if long_p is not None and float(long_p) > 20.0:
-            log.error(
-                'Long leg mid %.2f for %s looks like index noise — using $0.05 floor',
-                long_p,
-                long_sym,
-            )
-            return 0.05
-        return float(long_p) if long_p is not None else 0.05
+        return resolve_leg_mid(long_sym, self.prices, self.broker)
 
-    def _compute_long_close_limit(self, existing_limit: Optional[float] = None) -> float:
+    def _mark_long_close_blocked(self, source: str) -> None:
+        self.state['long_close_source'] = source
+        self.state['exit_last_step'] = 'long_close_blocked_no_quote'
+        log.critical(
+            'Long close blocked — no quote (source=%s) for %s',
+            source,
+            self.json_path,
+        )
+
+    def _compute_long_close_limit(self, existing_limit: Optional[float] = None) -> Optional[float]:
         """
-        SELL_TO_CLOSE limit from MQTT mid.
+        SELL_TO_CLOSE limit from MQTT/REST mid.
 
         When the rounded mid matches (or is above) the working limit, step down one
-        SPX tick instead of re-sending the same price ($0.05 below $3, $0.10 at/above).
+        SPX tick instead of re-sending the same price.
         """
-        mid_limit = round_spx_option_price(self._long_leg_mid())
+        quote = self._resolve_long_close_quote()
+        if quote.mid is None:
+            return None
+        mid_limit = round_spx_option_price(quote.mid)
         if existing_limit is None:
             return mid_limit
         existing = round_spx_option_price(float(existing_limit))
+        if existing <= LEGACY_LONG_CLOSE_FLOOR and mid_limit > existing:
+            return mid_limit
         if mid_limit >= existing:
             return step_down_spx_option_price(existing)
         return mid_limit
 
-    def _place_long_close_limit(self, limit_price: float) -> bool:
+    def _place_long_close_limit(self, limit_price: float, *, source: Optional[str] = None) -> bool:
         """Place SELL_TO_CLOSE at limit_price; return True if broker accepted."""
+        quote = self._resolve_long_close_quote()
+        if quote.mid is None:
+            self._mark_long_close_blocked(quote.source)
+            return False
+        if limit_price <= LEGACY_LONG_CLOSE_FLOOR and quote.mid > LEGACY_LONG_CLOSE_FLOOR:
+            self._mark_long_close_blocked('blocked_no_quote')
+            log.critical(
+                'Refusing long close at floor %.2f — live quote %.2f (source=%s)',
+                limit_price,
+                quote.mid,
+                quote.source,
+            )
+            return False
         long_sym = self.state['long_leg']['symbol']
         qty = stop_qty_for_state(self.state)
         limit_price = round_spx_option_price(limit_price)
@@ -1172,13 +1193,15 @@ class StopMonitor:
             self.state['long_close_order_id'] = result.order_id
             self.state['long_close_limit_price'] = limit_price
             self.state['long_close_attempts'] = self.state.get('long_close_attempts', 0) + 1
+            self.state['long_close_source'] = source or quote.source
             log.info(
-                'Long close placed: %s qty=%s limit=%s (order %s, attempt %d)',
+                'Long close placed: %s qty=%s limit=%s (order %s, attempt %d, source=%s)',
                 long_sym,
                 qty,
                 limit_price,
                 result.order_id,
                 self.state['long_close_attempts'],
+                self.state.get('long_close_source', source or '?'),
             )
             return True
         log.error('Long close re-place failed: %s', result.message)
@@ -1219,10 +1242,14 @@ class StopMonitor:
 
     def _chase_long_close(self) -> None:
         """Check long close order and reprice if needed."""
+        quote = self._resolve_long_close_quote()
         oid = self.state.get('long_close_order_id')
         existing_limit = self.state.get('long_close_limit_price')
 
         if not oid:
+            if quote.mid is None:
+                self._mark_long_close_blocked(quote.source)
+                return
             self._place_long_close_at_mid()
             return
 
@@ -1238,33 +1265,61 @@ class StopMonitor:
             return
 
         if status in ('cancelled', 'canceled', 'rejected', 'expired'):
+            if quote.mid is None:
+                self._mark_long_close_blocked(quote.source)
+                return
             self._place_long_close_at_mid(existing_limit=existing_limit)
             return
 
-        # Still working — reprice only when we can go one tick lower (more aggressive).
-        if self._long_leg_mid() <= 0.01:
+        if quote.mid is None:
+            self._mark_long_close_blocked(quote.source)
+            return
+
+        if existing_limit is not None:
+            existing_rounded = round_spx_option_price(float(existing_limit))
+            if existing_rounded <= LEGACY_LONG_CLOSE_FLOOR and quote.mid > LEGACY_LONG_CLOSE_FLOOR:
+                new_limit = round_spx_option_price(quote.mid)
+                self.broker.cancel_order(oid)
+                self._place_long_close_limit(new_limit, source=quote.source)
+                return
+
+        if quote.mid <= 0.01:
             return
 
         new_limit = self._compute_long_close_limit(existing_limit)
+        if new_limit is None:
+            self._mark_long_close_blocked('blocked_no_quote')
+            return
         if existing_limit is not None and new_limit >= round_spx_option_price(float(existing_limit)):
             return
 
         self.broker.cancel_order(oid)
-        self._place_long_close_limit(new_limit)
+        self._place_long_close_limit(new_limit, source=quote.source)
 
-        # Check attempt count for market order escalation
         attempts = self.state.get('long_close_attempts', 0)
-        if attempts >= 10:
+        if attempts >= 10 and self.state.get('long_close_source') in ('mqtt', 'broker_rest'):
             self._place_long_close_market()
 
     def _place_long_close_at_mid(self, existing_limit: Optional[float] = None) -> None:
         """Place SELL_TO_CLOSE; step down if mid matches the last working limit."""
+        quote = self._resolve_long_close_quote()
+        if quote.mid is None:
+            self._mark_long_close_blocked(quote.source)
+            return
         limit = existing_limit if existing_limit is not None else self.state.get('long_close_limit_price')
         limit_price = self._compute_long_close_limit(limit)
-        if limit is not None and limit_price >= round_spx_option_price(float(limit)):
-            log.info('Long close skip re-place at same limit %.2f', limit_price)
+        if limit_price is None:
+            self._mark_long_close_blocked('blocked_no_quote')
             return
-        self._place_long_close_limit(limit_price)
+        if limit is not None:
+            limit_rounded = round_spx_option_price(float(limit))
+            if (
+                limit_price >= limit_rounded
+                and not (limit_rounded <= LEGACY_LONG_CLOSE_FLOOR and limit_price > limit_rounded)
+            ):
+                log.info('Long close skip re-place at same limit %.2f', limit_price)
+                return
+        self._place_long_close_limit(limit_price, source=quote.source)
 
     def _place_long_close_market(self) -> None:
         """Escalate to market order after too many chase attempts."""

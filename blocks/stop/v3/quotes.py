@@ -11,6 +11,8 @@ from common.option_ticks import round_spx_option_price
 
 log = logging.getLogger(__name__)
 
+INDEX_NOISE_THRESHOLD = 20.0
+
 
 @dataclass
 class QuoteResult:
@@ -18,6 +20,55 @@ class QuoteResult:
     source: str
     short_mid: float
     long_mid: float
+
+
+@dataclass
+class LegQuoteResult:
+    mid: Optional[float]
+    source: str
+
+
+def _coerce_option_mid(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        mid = float(value)
+    except (TypeError, ValueError):
+        return None
+    if mid > INDEX_NOISE_THRESHOLD:
+        return None
+    return mid
+
+
+def resolve_leg_mid(
+    symbol: str,
+    prices,
+    broker,
+    *,
+    allow_emergency: bool = False,
+) -> LegQuoteResult:
+    """
+    Single-leg quote ladder: fresh MQTT → broker REST → blocked.
+    Never fabricates a floor price.
+    """
+    del allow_emergency  # reserved for explicit emergency rules elsewhere
+
+    mid = _coerce_option_mid(prices.get_market_mid(symbol))
+    if mid is not None:
+        return LegQuoteResult(mid=mid, source='mqtt')
+
+    fetch = getattr(broker, 'fetch_option_mids_api', None)
+    if callable(fetch):
+        try:
+            mids = fetch([symbol])
+            if isinstance(mids, dict):
+                rest = _coerce_option_mid(mids.get(symbol))
+                if rest is not None:
+                    return LegQuoteResult(mid=rest, source='broker_rest')
+        except Exception as exc:
+            log.warning('Broker REST leg quote fetch failed for %s: %s', symbol, exc)
+
+    return LegQuoteResult(mid=None, source='blocked_no_quote')
 
 
 def resolve_spread_close_debit(
