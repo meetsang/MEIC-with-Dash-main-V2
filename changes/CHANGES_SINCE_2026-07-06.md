@@ -45,6 +45,28 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-07 (late) — Option quote snapshots + quiet terminal logging
+
+**Status:** implemented  
+**Tests:** `uv run pytest tests/test_option_snapshots.py tests/test_logging_config.py tests/test_service_health.py -q` → **10 passed**
+
+**Specs:** [TERMINAL_LOGGING_QUIET.md](TERMINAL_LOGGING_QUIET.md)
+
+### What changed
+
+| Area | Files | Behavior |
+|------|-------|----------|
+| **Option quote log** | `common/stream_option_symbols.py`, `market_data/option_snapshots.py`, `market_data/recorder.py`, `market_data/config.py` | Every **3 min**, all spread legs from `optsymbols.json` → `data/YYYY-MM-DD/options_quotes.csv` (`snapshot_ts,symbol,mid`). No OHLC. |
+| **Quiet terminal** | `common/logging_config.py`, `common/service_health.py`, `run.py`, `blocks/stop/run.py`, `streaming/publish_tastytrade.py`, `dashboard/server.py` | Microservices log **file-only**. Terminal shows **WARNING+** only: subprocess death/restart, streamer SPX stale, stop_monitor heartbeat stale, dashboard died, skip-day reason. Silent when healthy. |
+| **Child stdout** | `run.py` | Subprocesses use `stdout/stderr=DEVNULL` so child INFO does not leak to terminal. |
+
+### Validation
+
+- [x] pytest option snapshots + logging + health
+- [ ] Live session — terminal quiet; `options_quotes.csv` grows after entries; alert on `kill streamer`
+
+---
+
 ## 2026-07-07 (late) — Tranche grid: SW Breach on closed rows, entry/exit times
 
 **Status:** implemented  
@@ -486,6 +508,8 @@ uv run python run.py                          # single launcher
 | EOD settlement MQTT capture | **Fixed** | 2026-07-07 | Priority + `spx_mqtt_settlement.json` |
 | Dashboard SW Breach on closed rows | **Fixed** | 2026-07-07 | Persisted snapshot + not gated on live mode |
 | Tranche grid entry/exit times | **Fixed** | 2026-07-07 | MEIC exit only; Manual entry + exit |
+| Option quote snapshots (`options_quotes.csv`) | **Fixed** | 2026-07-07 | 3 min MQTT snapshot, no OHLC |
+| Quiet terminal logging | **Fixed** | 2026-07-07 | See TERMINAL_LOGGING_QUIET.md |
 | Software breach threshold (2× vs 2×+$0.20) | **Deferred** | 2026-07-07 | Afternoon breach review |
 | Software breach execution (spread cap) | **Deferred** | 2026-07-07 | Large slippage on Jul 7 breach exits |
 | Recovery backoff on preflight_mismatch | **Deferred** | 2026-07-07 | ms-185 API storm |

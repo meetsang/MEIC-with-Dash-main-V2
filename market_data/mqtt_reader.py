@@ -62,6 +62,10 @@ class MqttQuoteReader:
                 out[sym] = price
         return out
 
+    @property
+    def cache(self) -> MqttPriceCache:
+        return self._cache
+
     def wait_for_any(self, timeout: float = 120.0) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:

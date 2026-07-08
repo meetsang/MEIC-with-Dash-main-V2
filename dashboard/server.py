@@ -1211,8 +1211,11 @@ register_manual_spread_routes(
 register_gex_routes(app)
 
 if __name__ == '__main__':
-    from common.process_lock import process_lock
+    import logging
 
-    print('MEIC Dashboard running at  http://localhost:5002')
+    from common.process_lock import process_lock
+    from common.logging_config import silence_noisy_loggers
+
+    silence_noisy_loggers('werkzeug')
     with process_lock('dashboard', command='dashboard/server.py'):
         socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)

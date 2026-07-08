@@ -11,6 +11,7 @@ LOGS_DIR_NAME = "logs"
 LAUNCHER_BASE = "launcher"
 STREAM_TT_BASE = "stream_pub_tt"
 STREAM_SCHWAB_BASE = "stream_pub"
+MARKET_DATA_BASE = "market_data"
 
 _LOG_LINE_TS = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})"

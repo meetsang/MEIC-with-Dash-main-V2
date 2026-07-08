@@ -53,7 +53,6 @@ def _get_logger():
             level=logging.INFO,
             format='%(asctime)s [TT-STREAM] %(message)s',
             handlers=[
-                logging.StreamHandler(),
                 logging.FileHandler(log_path, mode='w'),
             ],
         )

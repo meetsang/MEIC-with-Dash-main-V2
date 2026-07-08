@@ -28,7 +28,9 @@ from common.broker_factory import get_shared_broker
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
 from strategies.loader import load_enabled_strategies
 from strategies.validate import StrategyConfigError, validate_startup_config
-from common.session_logs import LAUNCHER_BASE, new_session_log_path, relocate_all_legacy_logs
+from common.session_logs import LAUNCHER_BASE, MARKET_DATA_BASE, new_session_log_path, relocate_all_legacy_logs
+from common.logging_config import setup_session_logging, terminal_info
+from common.service_health import check_stop_monitor_health, check_streamer_health
 from meic0dte.app.utilities import central_now, crossed_market_close
 
 # Tranches moved to strategies/meic/strategy.py (MEIC_TRANCHE_SLOTS) — loaded via Orchestrator.
@@ -91,20 +93,35 @@ def _central_to_utc(local_dt):
 _relocated = relocate_all_legacy_logs(ROOT)
 LAUNCHER_LOG = str(new_session_log_path(ROOT, LAUNCHER_BASE, when=central_now()))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [LAUNCHER] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LAUNCHER_LOG, mode="w"),
-    ],
-)
-log = logging.getLogger("launcher")
+log = setup_session_logging('launcher', LAUNCHER_LOG, stream_prefix='LAUNCHER', file_mode='w')
 if _relocated:
     log.info("Relocated legacy logs: %s", ", ".join(str(p) for p in _relocated))
 log.info("Launcher log: %s", LAUNCHER_LOG)
 
 STATUS_FILE = os.path.join(ROOT, 'dashboard', 'bot_status.json')
+_SUBPROCESS_QUIET = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+_terminal_warn_at: dict[str, float] = {}
+_TERMINAL_WARN_COOLDOWN_SEC = 300.0
+
+
+def _terminal_warn_once(key: str, msg: str) -> None:
+    """Rate-limited operator terminal alert (WARNING → passes terminal filter)."""
+    now = time.time()
+    last = _terminal_warn_at.get(key, 0.0)
+    if now - last < _TERMINAL_WARN_COOLDOWN_SEC:
+        return
+    _terminal_warn_at[key] = now
+    log.warning(msg)
+
+
+def _check_running_services_health(*, stop_mon_running: bool) -> None:
+    ok, detail = check_streamer_health(ROOT)
+    if not ok:
+        _terminal_warn_once('streamer_stale', detail)
+    if stop_mon_running:
+        ok, detail = check_stop_monitor_health(ROOT)
+        if not ok:
+            _terminal_warn_once('stop_monitor_stale', detail)
 
 def _write_status(state: str, reason: str = ''):
     try:
@@ -120,10 +137,14 @@ def _token_refresh_loop():
     Schwab tokens expire after 30 min — this keeps them fresh all day.
     """
     import logging as _logging
-    rlog = _logging.getLogger('token_refresh')
-    rlog.addHandler(_logging.FileHandler(LAUNCHER_LOG, mode='a'))
-    rlog.addHandler(_logging.StreamHandler())
-    rlog.setLevel(_logging.INFO)
+    from common.logging_config import setup_file_only_logging
+
+    rlog = setup_file_only_logging(
+        'token_refresh',
+        LAUNCHER_LOG,
+        stream_prefix='TOKEN',
+        file_mode='a',
+    )
     while True:
         time.sleep(25 * 60)  # wait 25 minutes
         try:
@@ -164,6 +185,7 @@ def start_streamer():
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, script)],
         cwd=ROOT,
+        **_SUBPROCESS_QUIET,
     )
     log.info(f"Streamer PID: {proc.pid}")
     return proc
@@ -177,7 +199,7 @@ def start_stop_monitor(paper: bool = False):
     if paper or tt_config.PAPER_MODE:
         cmd.append('--paper')
     log.info('Starting stop_monitor: %s', ' '.join(cmd))
-    proc = subprocess.Popen(cmd, cwd=ROOT)
+    proc = subprocess.Popen(cmd, cwd=ROOT, **_SUBPROCESS_QUIET)
     log.info('Stop monitor PID: %s', proc.pid)
     return proc
 
@@ -185,7 +207,11 @@ def start_stop_monitor(paper: bool = False):
 def start_market_data_recorder():
     """MQTT index/equity OHLC recorder — runs alongside streamer."""
     log.info('Starting market_data recorder ...')
-    proc = subprocess.Popen([sys.executable, '-m', 'market_data.run'], cwd=ROOT)
+    proc = subprocess.Popen(
+        [sys.executable, '-m', 'market_data.run'],
+        cwd=ROOT,
+        **_SUBPROCESS_QUIET,
+    )
     log.info('Market data recorder PID: %s', proc.pid)
     return proc
 
@@ -202,6 +228,7 @@ def run_tranche(wait: bool = False, lot: str | None = None, extra_env: dict | No
             [sys.executable, os.path.join(ROOT, "meic0dte", "app_main.py")],
             cwd=ROOT,
             env=env,
+            **_SUBPROCESS_QUIET,
         )
         proc.wait()
         log.info(f"Tranche finished (exit code {proc.returncode})")
@@ -350,11 +377,12 @@ def main(
     # --- Daily check: skip if holiday or FOMC ---
     if not force:
         should_trade, reason = check_trading_day()
-        log.info(reason)
         if not should_trade:
+            terminal_info(log, reason)
             log.info("Exiting. No trades will be placed today.")
             _write_status('skipped', reason)
             return
+        log.info(reason)
     else:
         log.info('Force mode — skipping trading-day check.')
     _write_status('running', 'Bot is active.')
@@ -420,24 +448,26 @@ def main(
             # --- Health checks: restart crashed subprocesses ---
             if streamer.poll() is not None:
                 log.critical(
-                    'Streamer exited unexpectedly (code %s) — restarting ...',
+                    'STREAMER exited unexpectedly (code %s) — restarting ...',
                     streamer.returncode,
                 )
                 streamer = start_streamer()
 
             if stop_mon is not None and stop_mon.poll() is not None:
                 log.critical(
-                    'stop_monitor exited unexpectedly (code %s) — restarting ...',
+                    'STOP_MONITOR exited unexpectedly (code %s) — restarting ...',
                     stop_mon.returncode,
                 )
                 stop_mon = start_stop_monitor(paper=paper)
 
             if market_data.poll() is not None:
                 log.critical(
-                    'market_data recorder exited unexpectedly (code %s) — restarting ...',
+                    'MARKET_DATA exited unexpectedly (code %s) — restarting ...',
                     market_data.returncode,
                 )
                 market_data = start_market_data_recorder()
+
+            _check_running_services_health(stop_mon_running=stop_mon is not None)
 
             # Entry monitor — one worker per session CSV row (replaces Orchestrator)
             entry_runner.tick(now)
@@ -514,9 +544,10 @@ if __name__ == "__main__":
     # Start dashboard server once — stays running all week
     dash = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, 'dashboard', 'server.py')],
-        cwd=ROOT
+        cwd=ROOT,
+        **_SUBPROCESS_QUIET,
     )
-    log.info(f"Dashboard started (PID {dash.pid}) at http://localhost:5002")
+    log.info("Dashboard started (PID %s) at http://localhost:5002", dash.pid)
 
     # Refresh Schwab token only when using Schwab broker
     if tt_config.BROKER == 'schwab':
@@ -567,6 +598,11 @@ if __name__ == "__main__":
                     run_session_cleanup('morning', log)
                 except Exception:
                     log.exception('Morning session cleanup failed')
+                if dash.poll() is not None:
+                    log.critical(
+                        'DASHBOARD exited unexpectedly (code %s)',
+                        dash.returncode,
+                    )
                 main(
                     paper=args.paper,
                     force=args.force,

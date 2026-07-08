@@ -11,6 +11,9 @@ WATCH_SYMBOLS = ('SPX', 'VIX', 'QQQ', 'VXN', 'IWM')
 # Poll MQTT every N seconds for new mids.
 POLL_INTERVAL_SEC = 30
 
+# Snapshot all registered spread option mids to one CSV (no OHLC).
+OPTION_SNAPSHOT_INTERVAL_SEC = 180
+
 # Completed OHLC bar intervals (minutes).
 BAR_INTERVALS_MIN = (1, 3, 5, 10, 30, 60)
 
@@ -31,3 +34,8 @@ def polls_path(day_path: str, symbol: str) -> str:
 
 def ohlc_path(day_path: str, symbol: str, interval_min: int) -> str:
     return os.path.join(day_path, f'{symbol}_{interval_min}m.csv')
+
+
+def options_quotes_path(day_path: str) -> str:
+    """All spread-leg MQTT mids per snapshot — long CSV, no OHLC."""
+    return os.path.join(day_path, 'options_quotes.csv')
