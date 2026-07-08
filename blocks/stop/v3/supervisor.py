@@ -21,6 +21,7 @@ from blocks.stop.stop_ownership import (
 )
 from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
 from blocks.stop.mqtt_prices import MqttPriceCache
+from common.mqtt_prices import write_mqtt_cache_health
 from blocks.stop.pending_fill_sync import sync_pending_fills
 from blocks.stop.phases import PhaseAction, PhaseBase, default_phases
 from blocks.stop.v3 import config as v3_config
@@ -137,6 +138,7 @@ class StopSupervisor:
                 json.dump(payload, f)
                 f.flush()
             os.replace(tmp, hb_path)
+            write_mqtt_cache_health(self.prices, root=root)
         except Exception:
             pass
 

@@ -30,7 +30,7 @@ from strategies.loader import load_enabled_strategies
 from strategies.validate import StrategyConfigError, validate_startup_config
 from common.session_logs import LAUNCHER_BASE, MARKET_DATA_BASE, new_session_log_path, relocate_all_legacy_logs
 from common.logging_config import setup_session_logging, terminal_info
-from common.service_health import check_stop_monitor_health, check_streamer_health
+from common.service_health import check_mqtt_cache_health, check_stop_monitor_health, check_streamer_health
 from meic0dte.app.utilities import central_now, crossed_market_close
 
 # Tranches moved to strategies/meic/strategy.py (MEIC_TRANCHE_SLOTS) — loaded via Orchestrator.
@@ -122,6 +122,9 @@ def _check_running_services_health(*, stop_mon_running: bool) -> None:
         ok, detail = check_stop_monitor_health(ROOT)
         if not ok:
             _terminal_warn_once('stop_monitor_stale', detail)
+        ok, detail = check_mqtt_cache_health(ROOT)
+        if not ok:
+            _terminal_warn_once('stop_monitor_mqtt_stale', detail)
 
 def _write_status(state: str, reason: str = ''):
     try:

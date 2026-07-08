@@ -11,6 +11,7 @@ from common.streamer_health import is_stale as streamer_is_stale, spx_price_age_
 
 STOP_MONITOR_STALE_SEC = 60
 STREAMER_STALE_SEC = 60
+MQTT_CACHE_STALE_SEC = 30
 
 
 def _age_from_iso(ts: Optional[str]) -> Optional[float]:
@@ -73,4 +74,35 @@ def check_stop_monitor_health(root: str, *, threshold_sec: float = STOP_MONITOR_
     if age > threshold_sec:
         loops = data.get('loop_count', '?')
         return False, f'STOP_MONITOR — heartbeat stale ({age:.0f}s, loop #{loops})'
+    return True, 'ok'
+
+
+def _read_mqtt_cache_health(root: str) -> Optional[Dict[str, Any]]:
+    path = os.path.join(root, 'trades', 'mqtt_cache_health.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def check_mqtt_cache_health(
+    root: str,
+    *,
+    threshold_sec: float = MQTT_CACHE_STALE_SEC,
+) -> Tuple[bool, str]:
+    """Stop-monitor MQTT cache freshness (separate from streamer_health.json)."""
+    data = _read_mqtt_cache_health(root)
+    if not data:
+        return False, 'STOP_MONITOR MQTT — cache health file absent'
+    if data.get('stale'):
+        age = data.get('age_seconds')
+        if age is None:
+            return False, 'STOP_MONITOR MQTT — cache stale'
+        return False, f'STOP_MONITOR MQTT — cache stale ({float(age):.0f}s)'
+    age = data.get('age_seconds')
+    if age is not None and float(age) > threshold_sec:
+        return False, f'STOP_MONITOR MQTT — cache stale ({float(age):.0f}s)'
+    if not data.get('connected') and data.get('running'):
+        return False, 'STOP_MONITOR MQTT — not connected'
     return True, 'ok'

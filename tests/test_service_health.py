@@ -15,6 +15,7 @@ if ROOT not in sys.path:
 
 from common.service_health import (
     _read_heartbeat_json,
+    check_mqtt_cache_health,
     check_stop_monitor_health,
     check_streamer_health,
 )
@@ -99,6 +100,30 @@ def test_atomic_heartbeat_write_survives_concurrent_reads(tmp_path):
     t1.join()
     t2.join()
     assert failures == []
+
+
+def test_mqtt_cache_health_fresh(tmp_path):
+    path = tmp_path / 'trades' / 'mqtt_cache_health.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({'connected': True, 'stale': False, 'age_seconds': 1.0, 'running': True}),
+        encoding='utf-8',
+    )
+    ok, detail = check_mqtt_cache_health(str(tmp_path))
+    assert ok is True
+    assert detail == 'ok'
+
+
+def test_mqtt_cache_health_stale(tmp_path):
+    path = tmp_path / 'trades' / 'mqtt_cache_health.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({'connected': True, 'stale': True, 'age_seconds': 45.0, 'running': True}),
+        encoding='utf-8',
+    )
+    ok, detail = check_mqtt_cache_health(str(tmp_path))
+    assert ok is False
+    assert 'stale' in detail.lower()
 
 
 def test_streamer_stale_without_health(tmp_path):
