@@ -45,6 +45,67 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-08 — Stop monitor MQTT hardening (P0-C / P0-B / P0-A) + ms-187 incident
+
+**Status:** implemented; live-validated after **13:17 CT** restart with new code  
+**Tests:** `uv run pytest tests/ -q --ignore=tests/adhoc_integration.py` → **341 passed**
+
+**Specs:** [STOP_MONITOR_MQTT_CACHE_FIX_PLAIN_ENGLISH.md](STOP_MONITOR_MQTT_CACHE_FIX_PLAIN_ENGLISH.md), [LIVE_SESSION_2026-07-08.md](LIVE_SESSION_2026-07-08.md)
+
+### What changed (4 commits, not yet pushed to GitHub as of check)
+
+| Commit | Area | Summary |
+|--------|------|---------|
+| P0-C | `blocks/stop/v3/supervisor.py`, `blocks/stop/runner.py`, `common/service_health.py` | Atomic `heartbeat.json` write; launcher read retry; distinct absent vs unreadable vs stale messages |
+| P0-B | `common/mqtt_prices.py`, `trades/mqtt_cache_health.json` | MQTT reconnect/backoff, 30s staleness gate, `cache_health()` file; launcher **STOP_MONITOR MQTT** alert |
+| P0-A | `blocks/stop/v3/quotes.py`, `blocks/stop/monitor.py` | `resolve_leg_mid()` — MQTT → REST → block; **no silent $0.05** auto long close |
+| Visibility | `blocks/stop/breach_watch.py`, `blocks/stop/v3/supervisor.py`, `run.py`, `dashboard/` | `stale_mqtt` breach gate; separate dashboard dots for StopMon heartbeat vs SM MQTT vs streamer |
+
+### Incident — ms-187 (Jul 8 morning)
+
+- Exchange stop filled @ $1.65; auto long STC @ **$0.05** never filled (frozen MQTT cache since ~08:45 streamer exit).
+- Manual **Close selected** on ms-188 used broker REST correctly (`source=broker_rest`).
+- Root cause: stop_monitor `MqttPriceCache` had no reconnect/staleness; long-close path had no REST fallback.
+
+### Live validation (13:17+ CT restart with hardened code)
+
+| Check | Result |
+|-------|--------|
+| `trades/heartbeat.json` | Fresh (v3, loop advancing) |
+| `trades/mqtt_cache_health.json` | `connected: true`, `stale: false`, `age_seconds` &lt; 1s |
+| `check_stop_monitor_health()` | **ok** |
+| `check_mqtt_cache_health()` | **ok** |
+| `check_streamer_health()` | **ok** |
+| `scan_price_gate_trades()` | **ok** (no stuck `waiting_mqtt`) |
+| Open trade `breach_watch` | `short_mqtt` / `long_mqtt` true, `mqtt_cache_stale: false`, `breach_arm_status: armed` |
+| Stop monitor log | `MQTT price cache connected; subscribed TASTYTRADE/#` @ 13:17:20 |
+
+**Note:** Terminal may still show pre-13:17 `heartbeat missing` lines from the **old** binary (before P0-C). After the 13:17 restart, health files and breach watch look correct; watch for **new** absent/unreadable messages (should be rare/absent).
+
+### Operator cleanup (local)
+
+- Removed test artifact `trades/history/MANUAL_SPREAD/ms-v3_C_test.json`
+- Removed closed orphans still under `trades/active/` (`ms-188`, `ms-189`, `12-30_P`) — copies remain in `trades/history/`
+
+### Deferred (unchanged)
+
+- P2 single shared MQTT consumer
+- P1 floor chase → MARKET as primary fix (superseded by no-$0.05 + REST ladder)
+
+### Related files touched
+
+```
+common/mqtt_prices.py, common/service_health.py
+blocks/stop/monitor.py, blocks/stop/breach_watch.py
+blocks/stop/v3/quotes.py, blocks/stop/v3/supervisor.py
+blocks/stop/runner.py, run.py
+dashboard/server.py, dashboard/templates/index.html
+tests/test_service_health.py, tests/test_mqtt_prices_resilience.py
+tests/test_long_close_chase.py, tests/test_breach_watch.py, ...
+```
+
+---
+
 ## 2026-07-07 (late) — Option quote snapshots + quiet terminal logging
 
 **Status:** implemented  
@@ -503,6 +564,9 @@ uv run python run.py                          # single launcher
 | Item | Status | Since | Notes |
 |------|--------|-------|-------|
 | V3 live validation | **Partial pass** | 2026-07-06 | Jul 7: open/stop/close OK after F-9; MEIC shared-stop fixed evening |
+| Stop monitor MQTT hardening (P0-A/B/C) | **Fixed** | 2026-07-08 | 4 commits local; push pending; live OK after 13:17 restart |
+| ms-187 $0.05 long-close incident | **Fixed (code)** | 2026-07-08 | REST ladder + MQTT reconnect; restart required after deploy |
+| Heartbeat false “missing” alert | **Fixed** | 2026-07-08 | P0-C atomic write + read retry |
 | F-9 preflight qty sign (Tasty) | **Fixed** | 2026-07-07 | ms-186 validated ~13:16 |
 | Shared stop per tranche (P0) | **Fixed** | 2026-07-07 | Evening deploy; fresh JSONs next session |
 | EOD settlement MQTT capture | **Fixed** | 2026-07-07 | Priority + `spx_mqtt_settlement.json` |
@@ -523,5 +587,6 @@ uv run python run.py                          # single launcher
 
 | Date | Operator | V3 validated | Broker smoke | Notes |
 |------|----------|--------------|--------------|-------|
+| 2026-07-08 | | **pass** (post-hardening) | partial | MQTT cache + long-close fix; ms-187 post-mortem |
 | 2026-07-07 | | **partial → pass** (post-fix) | partial | F-9, shared-stop P0, EOD settle; breach slippage tabled |
 | 2026-07-06 | | blocked | partial | False breach incident; V3 repair shipped |
