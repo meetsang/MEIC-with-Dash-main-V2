@@ -45,6 +45,32 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-07 (late) — Tranche grid: SW Breach on closed rows, entry/exit times
+
+**Status:** implemented  
+**Tests:** `uv run pytest tests/test_breach_watch.py tests/test_trade_times.py -q` → **13 passed**
+
+### What changed
+
+| Area | Files | Behavior |
+|------|-------|----------|
+| **SW Breach column** | `blocks/stop/breach_watch.py`, `dashboard/templates/index.html` | Closed and closing rows now show persisted `breach_watch` snapshot (threshold / gap). Breach cell no longer gated on live-price mode — fixes blank SW Breach on software-breached 7485P rows after close. |
+| **Exit / entry times** | `dashboard/trade_times.py`, `dashboard/server.py`, `dashboard/manual_spread_handlers.py`, `index.html` | **MEIC** tranche grid: **Exit Time** only (`close.timestamp`, else `short_closed_at` while closing). **Manual** active grid: **Entry Time** + **Exit Time** (`entry.timestamp` / close). Displayed as `HH:MM` CT. |
+| **Tests** | `tests/test_breach_watch.py`, `tests/test_trade_times.py` | Closed breached snapshot, closing live path, time helpers. |
+
+### Findings / learnings
+
+- SW Breach is **not** a yes/no flag — format is **`threshold / gap`** where gap = threshold − spread mid; **negative gap** = past breach line.
+- **State = Breached** comes from `close_mechanism` (`software_breach`); the SW Breach numbers may be a **stale snapshot** if `breach_watch` was saved before the final move (e.g. 12-00_P showing `+0.25` room while state is Breached).
+- Operator asked for post-close breach visibility to reconcile Jul 7 afternoon breach wave without reading JSON/logs.
+
+### Validation
+
+- [x] pytest breach + trade_times suites
+- [ ] Dashboard refresh — closed 7485P rows show SW Breach; Exit Time populated on breached MEIC rows
+
+---
+
 ## 2026-07-07 (EOD) — Jul 7 live session: F-9 close, shared-stop P0, EOD settlement, breach review
 
 **Status:** implemented (code); live-validated partial; new day = fresh JSONs (no repair needed on prior shared-stop state)  
@@ -458,6 +484,8 @@ uv run python run.py                          # single launcher
 | F-9 preflight qty sign (Tasty) | **Fixed** | 2026-07-07 | ms-186 validated ~13:16 |
 | Shared stop per tranche (P0) | **Fixed** | 2026-07-07 | Evening deploy; fresh JSONs next session |
 | EOD settlement MQTT capture | **Fixed** | 2026-07-07 | Priority + `spx_mqtt_settlement.json` |
+| Dashboard SW Breach on closed rows | **Fixed** | 2026-07-07 | Persisted snapshot + not gated on live mode |
+| Tranche grid entry/exit times | **Fixed** | 2026-07-07 | MEIC exit only; Manual entry + exit |
 | Software breach threshold (2× vs 2×+$0.20) | **Deferred** | 2026-07-07 | Afternoon breach review |
 | Software breach execution (spread cap) | **Deferred** | 2026-07-07 | Large slippage on Jul 7 breach exits |
 | Recovery backoff on preflight_mismatch | **Deferred** | 2026-07-07 | ms-185 API storm |

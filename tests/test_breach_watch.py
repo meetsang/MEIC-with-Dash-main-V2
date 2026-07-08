@@ -101,6 +101,55 @@ class TestBreachDisplayFields(unittest.TestCase):
         fields = breach_display_fields({}, live_short=1.0, live_long=0.5, trade_status='closed')
         self.assertEqual(fields['breach_label'], '')
 
+    def test_closed_trade_shows_snapshot(self):
+        trade = {
+            'status': 'closed',
+            'close_mechanism': 'software_breach',
+            'entry': {'net_credit': 0.45, 'two_x_net_credit': 0.9},
+            'short_leg': {'fill_price': 0.72},
+            'long_leg': {'fill_price': 0.27},
+            'short_close_price': 1.95,
+            'long_close_price': 0.10,
+            'breach_watch': {
+                'threshold': 1.1,
+                'spread_mid': 1.85,
+                'gap_to_breach': -0.75,
+                'short_mqtt': True,
+                'long_mqtt': True,
+                'status': 'breached',
+            },
+        }
+        fields = breach_display_fields(
+            trade,
+            live_short=None,
+            live_long=None,
+            trade_status='closed',
+        )
+        self.assertEqual(fields['breach_status'], 'breached')
+        self.assertIn('-0.75', fields['breach_label'])
+        self.assertEqual(fields['breach_class'], 'text-danger fw-semibold')
+
+    def test_closing_trade_uses_live_prices(self):
+        trade = {
+            'entry': {'net_credit': 1.9, 'two_x_net_credit': 3.8},
+            'breach_watch': {
+                'threshold': 4.0,
+                'spread_mid': 2.0,
+                'gap_to_breach': 2.0,
+                'short_mqtt': True,
+                'long_mqtt': True,
+                'streamer_stale': False,
+            },
+        }
+        fields = breach_display_fields(
+            trade,
+            live_short=5.2,
+            live_long=1.15,
+            trade_status='closing',
+        )
+        self.assertEqual(fields['breach_gap'], -0.05)
+        self.assertEqual(fields['breach_status'], 'breached')
+
     def test_live_prices_override(self):
         trade = {
             'entry': {'net_credit': 1.9, 'two_x_net_credit': 3.8},

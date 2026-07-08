@@ -13,6 +13,7 @@ from manual_spread import entry as ms_entry
 from blocks.stop import state as state_mod
 from blocks.stop.close_fills import slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
+from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
 from blocks.stop.pending_fill_sync import sync_pending_fills
 from blocks.stop.stop_math import stop_multiplier_for_state
 
@@ -190,6 +191,8 @@ def build_manual_trades(
             'state': row_state,
             'status': status,
             '_filename': trade.get('_filename', ''),
+            'entry_time': trade_entry_time_iso(trade),
+            'exit_time': trade_exit_time_iso(trade),
             **breach_fields,
         })
 

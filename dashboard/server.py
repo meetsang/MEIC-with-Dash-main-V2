@@ -49,6 +49,7 @@ from gex_handlers import register_gex_routes
 from common.trade_pick import pick_best_trade
 from blocks.stop.close_fills import display_close_prices, slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
+from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
 from blocks.stop.stop_math import stop_multiplier_for_state
 from brokers.base import BrokerBase
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
@@ -461,6 +462,8 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
         'short_strike': short_leg.get('strike', ''),
         'long_strike': long_leg.get('strike', ''),
         'time_opened': entry.get('timestamp', ''),
+        'entry_time': trade_entry_time_iso(trade),
+        'exit_time': trade_exit_time_iso(trade),
         'entry_credit': net_credit,
         'entry_label': entry_label,
         'exit_label': exit_label,

@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from blocks.stop.breach import spread_mark_price
+from blocks.stop.close_fills import brokerage_spread_exit_debit
 from blocks.stop.stop_math import spread_breach_threshold
 
 if TYPE_CHECKING:
@@ -96,6 +97,91 @@ def breach_label_from_watch(watch: Dict[str, Any]) -> str:
     return f'{float(threshold):.2f} / {float(gap):+.2f}'
 
 
+def _breach_class_for_status(status: str) -> str:
+    if status in ('no_prices', 'stale'):
+        return 'text-warning'
+    if status == 'near':
+        return 'text-warning fw-semibold'
+    if status == 'breached':
+        return 'text-danger fw-semibold'
+    return 'grid-dim'
+
+
+def _breach_fields_from_watch(
+    *,
+    threshold: float,
+    gap: Optional[float],
+    status: str,
+    short_mqtt: bool,
+    long_mqtt: bool,
+    streamer_stale: bool,
+) -> Dict[str, Any]:
+    display_watch = {
+        'threshold': threshold,
+        'gap_to_breach': gap,
+        'status': status,
+        'short_mqtt': short_mqtt,
+        'long_mqtt': long_mqtt,
+        'streamer_stale': streamer_stale,
+    }
+    return {
+        'breach_threshold': threshold,
+        'breach_gap': gap,
+        'breach_status': status,
+        'breach_label': breach_label_from_watch(display_watch),
+        'breach_class': _breach_class_for_status(status),
+    }
+
+
+def _breach_fields_from_snapshot(trade: Dict[str, Any]) -> Dict[str, Any]:
+    """Persisted breach_watch for closing/closed rows (no live MQTT overlay)."""
+    empty = {
+        'breach_threshold': None,
+        'breach_gap': None,
+        'breach_status': '',
+        'breach_label': '',
+        'breach_class': 'grid-dim',
+    }
+    watch = trade.get('breach_watch') or {}
+    threshold = watch.get('threshold')
+    if threshold is None:
+        try:
+            threshold = spread_breach_threshold(trade)
+        except Exception:
+            return empty
+
+    gap = watch.get('gap_to_breach')
+    spread_mid = watch.get('spread_mid')
+    if gap is None and spread_mid is not None:
+        gap = round(float(threshold) - float(spread_mid), 2)
+    if gap is None and trade.get('status') == 'closed':
+        exit_debit = brokerage_spread_exit_debit(trade)
+        if exit_debit is not None:
+            spread_mid = exit_debit
+            gap = round(float(threshold) - float(exit_debit), 2)
+
+    if gap is None and spread_mid is None and not watch:
+        return empty
+
+    status = watch.get('status')
+    if status not in ('stale', 'no_prices', 'near', 'breached', 'ok'):
+        status = resolve_breach_status(
+            streamer_stale=bool(watch.get('streamer_stale')),
+            short_mqtt=gap is not None or bool(watch.get('short_mqtt')),
+            long_mqtt=gap is not None or bool(watch.get('long_mqtt')),
+            gap_to_breach=float(gap) if gap is not None else None,
+        )
+
+    return _breach_fields_from_watch(
+        threshold=float(threshold),
+        gap=float(gap) if gap is not None else None,
+        status=str(status or 'ok'),
+        short_mqtt=bool(watch.get('short_mqtt')) if watch else gap is not None,
+        long_mqtt=bool(watch.get('long_mqtt')) if watch else gap is not None,
+        streamer_stale=bool(watch.get('streamer_stale')),
+    )
+
+
 def breach_display_fields(
     trade: Dict[str, Any],
     *,
@@ -111,8 +197,11 @@ def breach_display_fields(
         'breach_label': '',
         'breach_class': 'grid-dim',
     }
-    if trade_status != 'open':
+    if trade_status not in ('open', 'closing', 'closed'):
         return empty
+
+    if trade_status == 'closed':
+        return _breach_fields_from_snapshot(trade)
 
     watch = trade.get('breach_watch') or {}
     threshold = watch.get('threshold')
@@ -141,31 +230,14 @@ def breach_display_fields(
         gap_to_breach=float(gap) if gap is not None else None,
     )
 
-    display_watch = {
-        'threshold': threshold,
-        'gap_to_breach': gap,
-        'status': status,
-        'short_mqtt': short_mqtt,
-        'long_mqtt': long_mqtt,
-        'streamer_stale': streamer_stale,
-    }
-    label = breach_label_from_watch(display_watch)
-
-    css = 'grid-dim'
-    if status in ('no_prices', 'stale'):
-        css = 'text-warning'
-    elif status == 'near':
-        css = 'text-warning fw-semibold'
-    elif status == 'breached':
-        css = 'text-danger fw-semibold'
-
-    return {
-        'breach_threshold': threshold,
-        'breach_gap': gap,
-        'breach_status': status,
-        'breach_label': label,
-        'breach_class': css,
-    }
+    return _breach_fields_from_watch(
+        threshold=float(threshold),
+        gap=float(gap) if gap is not None else None,
+        status=status,
+        short_mqtt=short_mqtt,
+        long_mqtt=long_mqtt,
+        streamer_stale=streamer_stale,
+    )
 
 
 def log_breach_watch(monitor: 'StopMonitor', watch: Dict[str, Any]) -> None:

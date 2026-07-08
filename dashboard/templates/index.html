@@ -616,6 +616,7 @@
               <th>Lot</th><th>Leg</th><th>State</th>
               <th>Entry</th><th>Live P&amp;L</th>
               <th title="Long with * = live mid while closing">Exit</th>
+              <th title="Spread fully closed (CT)">Exit Time</th>
               <th title="Theoretical set stop (stop× net credit) vs brokerage spread exit; + = at or better than stop">Slippage</th>
               <th>Qty</th>
               <th>Short $</th><th>Long $</th><th>Spread</th>
@@ -770,15 +771,16 @@
             <thead><tr>
               <th style="width:30px;"></th>
               <th>Lot</th><th>Leg</th><th>State</th>
-              <th>Entry</th><th>Live P&amp;L</th>
+              <th>Entry</th><th title="Fill or order time (CT)">Entry Time</th><th>Live P&amp;L</th>
               <th title="Long with * = live mid while closing">Exit</th>
+              <th title="Spread fully closed (CT)">Exit Time</th>
               <th title="Theoretical set stop (stop× net credit) vs brokerage spread exit; + = at or better than stop">Slippage</th>
               <th>Qty</th>
               <th>Short $</th><th>Long $</th><th>Spread</th>
               <th>Phase</th><th>Stop #</th><th title="Stop trigger / limit price">Stop/Limit $</th>
               <th title="Software spread breach: threshold / gap (+ room, − at/past)">SW Breach</th>
             </tr></thead>
-            <tbody id="ms-active-tbody"><tr><td colspan="16" class="text-center text-muted py-3">No manual spreads</td></tr></tbody>
+            <tbody id="ms-active-tbody"><tr><td colspan="18" class="text-center text-muted py-3">No manual spreads</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1415,7 +1417,7 @@ function renderManual(d) {
   const activeNames = new Set(rows.map(r => r._filename).filter(Boolean));
   msCheckedFilenames = new Set([...msCheckedFilenames].filter(fn => activeNames.has(fn)));
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="16" class="text-center text-muted py-3">No manual spreads</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="18" class="text-center text-muted py-3">No manual spreads</td></tr>';
     return;
   }
   let html = '';
@@ -1436,8 +1438,9 @@ function renderManual(d) {
     const slipText = slippageRows === 0 ? '&ndash;' : fmtPnl(totalSlippage);
     const pnlCls = totalPnl >= 0 ? 'text-success' : 'text-danger';
     html += `<tr class="grid-totals-row">
-      <td colspan="5" class="text-end grid-totals-label">Totals</td>
+      <td colspan="6" class="text-end grid-totals-label">Totals</td>
       <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(totalPnl)}</td>
+      <td></td>
       <td></td>
       <td class="font-monospace small fw-bold ${slipCls}">${slipText}</td>
       <td colspan="9"></td>
@@ -1460,7 +1463,7 @@ function renderManual(d) {
       <td><span class="badge-lot">${r.lot}</span></td>
       <td>${legBadge}</td>
       <td><span class="status-dot ${dotCls}"></span><span class="ms-state ${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span></td>
-      ${spreadGridDataCells(r, hasData, showLive)}
+      ${spreadGridDataCells(r, hasData, showLive, { showEntryTime: true, showExitTime: true })}
     </tr>`;
   }
   tbody.innerHTML = html;
@@ -1549,11 +1552,24 @@ function spreadRowHasData(s) {
   return ['open', 'closing', 'breached', 'working', 'closed', 'killed'].includes(st);
 }
 
-function spreadGridDataCells(s, hasData, showLive) {
+function spreadGridDataCells(s, hasData, showLive, opts = {}) {
+  const showEntryTime = !!opts.showEntryTime;
+  const showExitTime = !!opts.showExitTime;
+  const entryTimeCell = showEntryTime
+    ? `<td class="small font-monospace grid-dim">${hasData ? fmtTime(s.entry_time) : '&ndash;'}</td>`
+    : '';
+  const exitTimeCell = showExitTime
+    ? `<td class="small font-monospace grid-dim">${hasData ? fmtTime(s.exit_time) : '&ndash;'}</td>`
+    : '';
+  const breachCell = hasData && s.breach_label
+    ? `<td class="small font-monospace ${s.breach_class || 'grid-dim'}">${s.breach_label}</td>`
+    : '<td class="small font-monospace grid-dim">&ndash;</td>';
   return `
       <td class="text-info font-monospace small">${hasData ? (s.entry_label || fmtPrice(s.entry_credit)) : '&ndash;'}</td>
+      ${entryTimeCell}
       <td class="fw-bold ${hasData ? (s.pnl_class || '') : ''}">${hasData ? fmtPnl(s.live_pnl || 0) : '&ndash;'}</td>
       <td class="text-warning font-monospace small">${s.exit_label || '&ndash;'}</td>
+      ${exitTimeCell}
       <td class="font-monospace small ${s.slippage != null ? (s.slippage >= 0 ? 'text-success' : 'text-danger') : 'grid-dim'}">${hasData && s.slippage_label ? s.slippage_label : '&ndash;'}</td>
       <td class="grid-cell">${hasData ? (s.quantity || '&ndash;') : '&ndash;'}</td>
       <td class="font-monospace grid-cell">${showLive ? fmtPrice(s.cur_short) : '&ndash;'}</td>
@@ -1562,14 +1578,15 @@ function spreadGridDataCells(s, hasData, showLive) {
       <td class="small grid-dim">${hasData && s.phase ? s.phase : '&ndash;'}</td>
       <td class="small font-monospace grid-cell">${hasData && s.stop_order_id ? s.stop_order_id : '&ndash;'}</td>
       <td class="small font-monospace grid-cell">${hasData && s.stop_label ? s.stop_label : '&ndash;'}</td>
-      <td class="small font-monospace ${showLive && s.breach_label ? (s.breach_class || 'grid-dim') : 'grid-dim'}">${showLive && s.breach_label ? s.breach_label : '&ndash;'}</td>`;
+      ${breachCell}`;
 }
 
 function gridRowHasData(s) {
   return spreadRowHasData(s);
 }
 
-const GRID_COL_COUNT = 16;
+const MEIC_GRID_COL_COUNT = 17;
+const MANUAL_GRID_COL_COUNT = 18;
 
 function gridLegBadge(s, hasData) {
   const letter = s.side === 'P' ? 'P' : 'C';
@@ -1612,6 +1629,7 @@ function renderGrid(grid) {
       <td colspan="5" class="text-end grid-totals-label">Totals</td>
       <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(totalPnl)}</td>
       <td></td>
+      <td></td>
       <td class="font-monospace small fw-bold ${slipCls}">${slipText}</td>
       <td colspan="4"></td>
       <td colspan="4"></td>
@@ -1623,7 +1641,7 @@ function renderGrid(grid) {
   for (const s of grid) {
     if (s.lot !== currentLot) {
       currentLot = s.lot;
-      html += `<tr class="tranche-group-header"><td colspan="${GRID_COL_COUNT}">${s.lot} CT</td></tr>`;
+      html += `<tr class="tranche-group-header"><td colspan="${MEIC_GRID_COL_COUNT}">${s.lot} CT</td></tr>`;
     }
 
     const st = s.state || 'pending';
@@ -1640,7 +1658,7 @@ function renderGrid(grid) {
       <td><span class="badge-lot">${s.lot}</span></td>
       <td>${legBadge}</td>
       <td><span class="status-dot ${dotCls}"></span><span class="${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span></td>
-      ${spreadGridDataCells(s, hasData, showLive)}
+      ${spreadGridDataCells(s, hasData, showLive, { showExitTime: true })}
     </tr>`;
   }
   tbody.innerHTML = html;
