@@ -70,6 +70,48 @@ class TestMarketHours(unittest.TestCase):
         }
         self.assertFalse(stop_is_current(state))
 
+    def test_yesterday_expiry_midnight_frozen(self):
+        state = {
+            'short_leg': {'symbol': '.SPXW260708P7435'},
+            'long_leg': {'symbol': '.SPXW260708P7410'},
+        }
+        self.assertTrue(
+            trade_past_0dte_close(state, 'x.json', now=datetime(2026, 7, 9, 0, 1))
+        )
+
+    def test_today_before_close_not_frozen(self):
+        state = {
+            'short_leg': {'symbol': '.SPXW260709P7435'},
+            'long_leg': {'symbol': '.SPXW260709P7410'},
+        }
+        self.assertFalse(
+            trade_past_0dte_close(state, now=datetime(2026, 7, 9, 14, 59))
+        )
+
+    def test_today_at_close_frozen(self):
+        state = {
+            'short_leg': {'symbol': '.SPXW260709P7435'},
+            'long_leg': {'symbol': '.SPXW260709P7410'},
+        }
+        self.assertTrue(
+            trade_past_0dte_close(state, now=datetime(2026, 7, 9, 15, 0))
+        )
+
+    def test_future_expiry_not_frozen_by_past_close(self):
+        state = {
+            'short_leg': {'symbol': '.SPXW260710P7435'},
+            'long_leg': {'symbol': '.SPXW260710P7410'},
+        }
+        self.assertFalse(
+            trade_past_0dte_close(state, now=datetime(2026, 7, 9, 16, 0))
+        )
+
+    def test_missing_expiry_not_frozen(self):
+        state = {'entry': {'side': 'P'}}
+        self.assertFalse(
+            trade_past_0dte_close(state, now=datetime(2026, 7, 9, 16, 0))
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

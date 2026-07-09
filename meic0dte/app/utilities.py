@@ -65,10 +65,12 @@ def crossed_market_close(
     close_hour: int = 15,
     close_minute: int = 0,
 ) -> bool:
-    """True when the session started before close and the clock has reached close.
+    """Legacy time-only cash-close cross (same calendar day only).
 
-    Starting the bot after 3 PM CT (e.g. for manual spread / dashboard) does not
-    trigger shutdown — only a session that was running before close crosses it.
+    Prefer common.runtime_session.runtime_should_stop_for_session() with an
+    explicit RuntimeSessionProfile for launcher/strategy shutdown. This helper
+    remains for backward compatibility and does not encode calendar rollover or
+    strategy-specific overnight rules.
     """
     now = now or central_now()
     close = time(close_hour, close_minute)

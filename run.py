@@ -31,7 +31,8 @@ from strategies.validate import StrategyConfigError, validate_startup_config
 from common.session_logs import LAUNCHER_BASE, MARKET_DATA_BASE, new_session_log_path, relocate_all_legacy_logs
 from common.logging_config import setup_session_logging, terminal_info
 from common.service_health import check_mqtt_cache_health, check_stop_monitor_health, check_streamer_health, scan_price_gate_trades
-from meic0dte.app.utilities import central_now, crossed_market_close
+from meic0dte.app.utilities import central_now
+from common.runtime_session import MEIC_SPX_0DTE, runtime_should_stop_for_session
 
 # Tranches moved to strategies/meic/strategy.py (MEIC_TRANCHE_SLOTS) — loaded via Orchestrator.
 
@@ -446,9 +447,13 @@ def main(
         while True:
             now = _central_now()
 
-            # Stop at 3 PM only if this session started before market close
-            if crossed_market_close(session_started, now, close_hour=STREAM_STOP_HOUR):
-                log.info("3:00 PM reached — shutting down.")
+            # MEIC SPX 0DTE daytime session — not a global platform shutdown rule.
+            if runtime_should_stop_for_session(
+                session_started,
+                now,
+                profile=MEIC_SPX_0DTE,
+            ):
+                log.info("MEIC SPX 0DTE session end — shutting down trading runtime.")
                 break
 
             # --- Health checks: restart crashed subprocesses ---

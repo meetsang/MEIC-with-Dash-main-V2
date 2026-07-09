@@ -24,7 +24,7 @@ from market_data.option_snapshots import OptionQuoteSnapshotWriter
 from market_data.spx_ladder import SpxLadderWriter
 from market_data.spx_ladder_snapshots import SpxLadderSnapshotWriter
 from market_data.watch_symbols import watch_symbol_from_mqtt_topic
-from meic0dte.app.utilities import central_from_epoch, central_now, crossed_market_close
+from meic0dte.app.utilities import central_from_epoch, central_now
 
 log = logging.getLogger(__name__)
 
@@ -144,9 +144,7 @@ class MarketDataRecorder:
         try:
             while not self._stop:
                 now = central_now()
-                if crossed_market_close(self._session_started, now, close_hour=15):
-                    log.info('3:00 PM CT — stopping market data recorder')
-                    break
+                # Lifecycle owned by parent launcher — no MEIC cash-close self-stop here.
 
                 self._drain_ticks()
                 self._drain_trade_sizes()
