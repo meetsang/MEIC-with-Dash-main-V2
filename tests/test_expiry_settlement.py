@@ -124,6 +124,26 @@ class TestExpirySettlement(unittest.TestCase):
         self.assertEqual(row['pnl'], 140.0)
         self.assertEqual(row['status'], 'CLOSED')
 
+    def test_cancelled_zero_fill_not_in_history(self):
+        """ms-205-style ghost: cancelled with filled_quantity=0 must not settle at qty=5."""
+        trade = {
+            'lot': 'ms-205',
+            'spread_type': 'credit',
+            'status': 'cancelled',
+            'quantity': 5,
+            'filled_quantity': 0,
+            'entry': {
+                'side': 'C',
+                'net_credit': 0.3,
+                'timestamp': '2026-07-08T14:30:38-05:00',
+                'lot': 'ms-205',
+            },
+            'short_leg': {'symbol': '.SPXW260708C7500', 'strike': 7500, 'fill_price': 0.0},
+            'long_leg': {'symbol': '.SPXW260708C7525', 'strike': 7525, 'fill_price': 0.0},
+        }
+        self.assertIsNone(trade_to_history_row(trade, spx_close=7481.46))
+        self.assertIsNone(compute_settled_pnl(trade, 7481.46))
+
     def test_stale_manual_file_loses_to_spx_polls(self):
         """Unlocked manual settlement must not beat session polls before MQTT cutoff."""
         with tempfile.TemporaryDirectory() as tmp:

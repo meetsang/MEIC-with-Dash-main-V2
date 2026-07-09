@@ -32,6 +32,55 @@ def _load_trade(path: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _valid_history_keys_for_date(
+    root: str,
+    target: date,
+    spx: Optional[float],
+) -> set[tuple[str, str]]:
+    """(lot, side) pairs that should exist in SQLite for target date."""
+    from common.test_trades import is_test_trade
+
+    valid: set[tuple[str, str]] = set()
+    for path in iter_trade_json_paths(root, for_date=target):
+        trade = _load_trade(path)
+        if not trade or is_test_trade(trade, path):
+            continue
+        row = trade_to_history_row(trade, spx_close=spx)
+        if row is None or row.get('date_opened') != target.isoformat():
+            continue
+        valid.add((row['lot'], row['side']))
+    return valid
+
+
+def purge_stale_history_rows(
+    root: str,
+    *,
+    for_date: Optional[date] = None,
+    spx_close: Optional[float] = None,
+) -> int:
+    """Drop SQLite rows that no longer qualify (ghost ms-205, re-synced test lots, etc.)."""
+    target = for_date or central_today()
+    spx = spx_close if spx_close is not None else ensure_spx_settlement_close(target, root=root)
+    valid = _valid_history_keys_for_date(root, target, spx)
+    deleted = 0
+    iso = target.isoformat()
+    from dashboard.db import get_conn
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            'SELECT id, lot, side FROM trades WHERE date_opened = ?',
+            (iso,),
+        ).fetchall()
+        for row in rows:
+            if (row['lot'], row['side']) not in valid:
+                conn.execute('DELETE FROM trades WHERE id = ?', (row['id'],))
+                deleted += 1
+    if deleted:
+        refresh_all_daily_summaries()
+        log.info('history_sync: purged %d stale row(s) for %s', deleted, iso)
+    return deleted
+
+
 def sync_history_from_disk(
     root: str,
     *,
@@ -39,6 +88,8 @@ def sync_history_from_disk(
     spx_close: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Upsert all settleable trades for a date. Returns summary counts."""
+    from common.test_trades import is_test_trade
+
     target = for_date or central_today()
     spx = spx_close if spx_close is not None else ensure_spx_settlement_close(target, root=root)
 
@@ -48,7 +99,7 @@ def sync_history_from_disk(
 
     for path in iter_trade_json_paths(root, for_date=target):
         trade = _load_trade(path)
-        if not trade:
+        if not trade or is_test_trade(trade, path):
             skipped += 1
             continue
         row = trade_to_history_row(trade, spx_close=spx)
@@ -65,11 +116,14 @@ def sync_history_from_disk(
             log.exception('history_sync: upsert failed for %s', path)
             skipped += 1
 
+    purged = purge_stale_history_rows(root, for_date=target, spx_close=spx)
+
     return {
         'date': target.isoformat(),
         'spx_close': spx,
         'synced': synced,
         'skipped': skipped,
+        'purged': purged,
         'dates_touched': sorted(dates_touched),
     }
 
@@ -96,11 +150,9 @@ def _trade_key(trade: Dict[str, Any]) -> Optional[tuple[str, str, str]]:
 
 
 def _skip_test_trade(trade: Dict[str, Any], path: str) -> bool:
-    lot = (trade.get('lot') or '').strip().lower()
-    if lot in ('test-lot', 'test'):
-        return True
-    base = os.path.basename(path).lower()
-    return base in ('trade.json', 'ms1_p_test.json')
+    from common.test_trades import is_test_trade
+
+    return is_test_trade(trade, path)
 
 
 def sync_all_history_from_disk(
@@ -162,6 +214,12 @@ def sync_all_history_from_disk(
             skipped += 1
 
     refresh_all_daily_summaries()
+
+    for d in sorted(set(dates_touched) | {central_today().isoformat()}):
+        try:
+            purge_stale_history_rows(root, for_date=date.fromisoformat(d))
+        except ValueError:
+            pass
 
     return {
         'synced': synced,

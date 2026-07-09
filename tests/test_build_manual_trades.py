@@ -42,7 +42,8 @@ class TestBuildManualTradesRows(unittest.TestCase):
                     'long_close_price': 0.05,
                     'close_mechanism': 'manual_close',
                 }
-                with open(os.path.join(active, f'{lot}_test.json'), 'w', encoding='utf-8') as f:
+                side = 'P' if i % 2 else 'C'
+                with open(os.path.join(active, f'{lot}_{side}.json'), 'w', encoding='utf-8') as f:
                     json.dump(state, f)
 
             with patch('manual_spread.entry.state_mod.manual_spread_active_dir', return_value=active), \
@@ -70,7 +71,7 @@ class TestBuildManualTradesRows(unittest.TestCase):
             today = date.today().isoformat()
             base = {
                 'status': 'closed',
-                'lot': 'ms-99',
+                'lot': 'ms-185',
                 'entry': {
                     'strategy': 'MANUAL_SPREAD',
                     'side': 'C',
@@ -80,7 +81,7 @@ class TestBuildManualTradesRows(unittest.TestCase):
                 'short_leg': {'strike': 7600, 'fill_price': 0.8, 'symbol': '.SPXW260706C7600'},
                 'long_leg': {'strike': 7625, 'fill_price': 0.3, 'symbol': '.SPXW260706C7625'},
             }
-            for name in ('ms-99_C_old.json', 'ms-99_C_new.json'):
+            for name in ('ms-185_C_old.json', 'ms-185_C_new.json'):
                 st = dict(base)
                 st['entry'] = dict(base['entry'])
                 st['entry']['timestamp'] = f'{today}T22:00:00-05:00' if 'new' in name else f'{today}T21:00:00-05:00'
@@ -92,7 +93,37 @@ class TestBuildManualTradesRows(unittest.TestCase):
                  patch('common.session_cleanup.central_today', return_value=date.today()):
                 trades = load_dashboard_manual_trades()
             self.assertEqual(len(trades), 1)
-            self.assertEqual(trades[0]['_filename'], 'ms-99_C_new.json')
+            self.assertEqual(trades[0]['_filename'], 'ms-185_C_new.json')
+
+    def test_known_test_lots_excluded_from_dashboard(self):
+        from manual_spread.entry import load_dashboard_manual_trades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            active = os.path.join(tmp, 'active')
+            hist = os.path.join(tmp, 'history')
+            os.makedirs(active)
+            os.makedirs(hist)
+            today = date.today().isoformat()
+            fixture = {
+                'status': 'closed',
+                'lot': 'ms-99',
+                'entry': {
+                    'strategy': 'MANUAL_SPREAD',
+                    'side': 'C',
+                    'timestamp': f'{today}T10:00:00-05:00',
+                    'net_credit': 0.5,
+                },
+                'short_leg': {'strike': 7600, 'fill_price': 0.8, 'symbol': '.SPXW260706C7600'},
+                'long_leg': {'strike': 7625, 'fill_price': 0.3, 'symbol': '.SPXW260706C7625'},
+            }
+            with open(os.path.join(hist, 'ms-99_C.json'), 'w', encoding='utf-8') as f:
+                json.dump(fixture, f)
+
+            with patch('manual_spread.entry.state_mod.manual_spread_active_dir', return_value=active), \
+                 patch('manual_spread.entry.state_mod.manual_spread_closed_dir', return_value=hist), \
+                 patch('common.session_cleanup.central_today', return_value=date.today()):
+                trades = load_dashboard_manual_trades()
+            self.assertEqual(trades, [])
 
     def test_closed_history_beats_stale_active_open_ghost(self):
         from manual_spread.entry import load_dashboard_manual_trades

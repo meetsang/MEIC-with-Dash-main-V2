@@ -5,7 +5,7 @@ Models two live CCS positions (different expiries) from operator screenshot:
   - Jul 6 7600/7625  stop #480934535
   - Jul 7 7585/7610  stop #480934537
 
-Default: writes to trades/sandbox/dual_kill/ (safe — stop_monitor does not watch there).
+Default: writes to trades/test/active/MANUAL_SPREAD/ (excluded from History totals).
 Use --apply to write under trades/active/MANUAL_SPREAD/ (stop_monitor WILL pick them up).
 
 Use --write-kill-commands to drop trades/commands/*.close.json (dashboard-style kill).
@@ -156,7 +156,7 @@ def main() -> int:
         active_dir = os.path.join(ROOT, trades_layout.MANUAL_ACTIVE)
         print('WARNING: --apply writes to stop_monitor active dir:', active_dir)
     else:
-        active_dir = os.path.join(ROOT, 'trades', 'sandbox', 'dual_kill', 'active', 'MANUAL_SPREAD')
+        active_dir = os.path.join(ROOT, trades_layout.TEST_MANUAL_ACTIVE)
 
     os.makedirs(active_dir, exist_ok=True)
     cmd_dir = os.path.join(ROOT, trades_layout.commands_dir())

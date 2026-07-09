@@ -108,10 +108,14 @@ def _migrate_db(conn):
 
 def upsert_trade(trade: dict):
     """Insert or update a trade record. Called whenever order_params.json changes."""
+    from common.expiry_settlement import effective_filled_quantity
+
     short_close = trade.get('short_close_price')
     long_close  = trade.get('long_close_price')
     open_credit = float(trade.get('filled_price') or 0)
-    quantity    = int(trade.get('quantity') or trade.get('filled_quantity') or 1)
+    quantity    = effective_filled_quantity(trade) if 'filled_quantity' in trade else int(trade.get('quantity') or 1)
+    if quantity <= 0 and short_close is None and long_close is None:
+        return
 
     close_debit = trade.get('close_debit')
     pnl         = trade.get('pnl')
@@ -353,6 +357,28 @@ def delete_trades_before(cutoff_date: str) -> int:
         cur = conn.execute("DELETE FROM trades WHERE date_opened < ?", (cutoff_date,))
         conn.execute("DELETE FROM daily_summary WHERE date < ?", (cutoff_date,))
         return cur.rowcount
+
+
+def delete_trades_by_lots(lots: tuple[str, ...]) -> int:
+    """Remove fixture rows from SQLite (e.g. ms-99, ms-100) and refresh summaries."""
+    if not lots:
+        return 0
+    lowered = tuple(sorted({str(l).strip().lower() for l in lots if str(l).strip()}))
+    placeholders = ','.join('?' for _ in lowered)
+    with get_conn() as conn:
+        cur = conn.execute(
+            f"DELETE FROM trades WHERE lower(lot) IN ({placeholders})",
+            lowered,
+        )
+        deleted = cur.rowcount
+    refresh_all_daily_summaries()
+    return deleted
+
+
+def purge_known_test_trades_from_db() -> int:
+    from common.test_trades import KNOWN_TEST_LOTS
+
+    return delete_trades_by_lots(tuple(KNOWN_TEST_LOTS))
 
 
 def refresh_all_daily_summaries() -> None:

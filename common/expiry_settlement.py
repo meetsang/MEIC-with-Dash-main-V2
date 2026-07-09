@@ -544,6 +544,21 @@ def settled_close_prices(
     return short_close, long_close
 
 
+def effective_filled_quantity(trade: Dict[str, Any]) -> int:
+    """Use explicit filled_quantity when present (0 means unfilled), else quantity."""
+    if 'filled_quantity' in trade and trade['filled_quantity'] is not None:
+        return int(trade['filled_quantity'])
+    return int(trade.get('quantity') or 0)
+
+
+def is_unfilled_terminal_trade(trade: Dict[str, Any]) -> bool:
+    """Cancelled/rejected orders with no fills must not appear in History totals."""
+    status = (trade.get('status') or '').lower()
+    if status not in ('cancelled', 'canceled', 'rejected'):
+        return False
+    return effective_filled_quantity(trade) <= 0 and not has_real_close_fills(trade)
+
+
 def has_real_close_fills(trade: Dict[str, Any]) -> bool:
     """True when the trade was closed with recorded leg fill prices."""
     status = (trade.get('status') or '').lower()
@@ -555,7 +570,7 @@ def has_real_close_fills(trade: Dict[str, Any]) -> bool:
 def compute_otm_decay_pnl(trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Full OTM expiry: credit spread keeps full credit; debit spread loses full premium."""
     entry = trade.get('entry') or {}
-    filled_qty = int(trade.get('filled_quantity') or trade.get('quantity') or 0)
+    filled_qty = effective_filled_quantity(trade)
     if filled_qty <= 0:
         return None
 
@@ -592,7 +607,7 @@ def compute_settled_pnl(
     if short_strike is None or long_strike is None:
         return None
 
-    filled_qty = int(trade.get('filled_quantity') or trade.get('quantity') or 0)
+    filled_qty = effective_filled_quantity(trade)
     if filled_qty <= 0:
         return None
 
@@ -655,6 +670,9 @@ def trade_to_history_row(
     if not lot or not side:
         return None
 
+    if is_unfilled_terminal_trade(trade):
+        return None
+
     ts = entry.get('timestamp') or ''
     date_opened = ts[:10] if ts else date.today().isoformat()
 
@@ -677,7 +695,9 @@ def trade_to_history_row(
         return None
 
     net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
-    quantity = int(trade.get('filled_quantity') or trade.get('quantity') or 1)
+    quantity = effective_filled_quantity(trade)
+    if quantity <= 0:
+        return None
     entry_strategy = entry.get('strategy') or trade.get('strategy')
     from common import trades_layout
 
@@ -711,8 +731,9 @@ def trade_to_history_row(
 
 
 def iter_trade_json_paths(root: str, for_date: Optional[date] = None) -> list[str]:
-    """Active + dated history JSON paths for MEIC and Manual."""
+    """Active + dated history JSON paths for MEIC and Manual (excludes trades/test/)."""
     from common import trades_layout
+    from common.test_trades import is_test_trade_path
 
     paths: list[str] = []
     base = root or trades_layout.project_root()
@@ -735,6 +756,8 @@ def iter_trade_json_paths(root: str, for_date: Optional[date] = None) -> list[st
     out = []
     for p in paths:
         norm = os.path.normpath(p)
+        if is_test_trade_path(norm, root=base):
+            continue
         if norm not in seen:
             seen.add(norm)
             out.append(norm)
@@ -742,8 +765,9 @@ def iter_trade_json_paths(root: str, for_date: Optional[date] = None) -> list[st
 
 
 def iter_all_trade_json_paths(root: str) -> list[str]:
-    """Every trade JSON under active + history trees (recursive)."""
+    """Every production trade JSON under active + history trees (recursive)."""
     from common import trades_layout
+    from common.test_trades import is_test_trade_path
 
     paths: list[str] = []
     base = root or trades_layout.project_root()
@@ -759,6 +783,8 @@ def iter_all_trade_json_paths(root: str) -> list[str]:
     out = []
     for p in paths:
         norm = os.path.normpath(p)
+        if is_test_trade_path(norm, root=base):
+            continue
         if norm not in seen:
             seen.add(norm)
             out.append(norm)

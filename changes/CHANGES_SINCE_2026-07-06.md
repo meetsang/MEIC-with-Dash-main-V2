@@ -45,6 +45,70 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
+## 2026-07-09 — Expanded market watch (design only)
+
+**Status:** design — signed off; **not implemented**  
+**Spec:** [MARKET_DATA_EXPANDED_WATCH_DESIGN.md](MARKET_DATA_EXPANDED_WATCH_DESIGN.md)
+
+### Scope (planned)
+
+- Fix **VIX / VXN** (DXLink `$VIX` / `$VXN` subscribe — explains missing CSVs on Jul 8)
+- Add **TLT**, **GLD** on same tick/OHLC cadence as QQQ; **keep IWM**
+- **OHLCV** for all watch symbols except SPX (volume from Trade prints; `volume=0` if no prints)
+- **SPX 0DTE ladder**: 100 strikes × C/P, refresh every 1 min (8:30–15:00 CT only), no strike prune v1; separate `spx_ladder_symbols.json` + `spx_ladder_quotes.csv`
+
+### Validation
+
+- [x] Operator sign-off on design doc (2026-07-09)
+- [ ] Implement phases 1–3 per spec
+
+---
+
+## 2026-07-08 (EOD) — Test trade isolation + History totals fix
+
+**Status:** implemented; pushed to `origin/master`  
+**Tests:** `uv run pytest tests/test_test_trades_excluded.py tests/test_build_manual_trades.py tests/test_expiry_settlement.py tests/test_history_stale_purge.py -q` → **21 passed**
+
+### What changed
+
+| Area | Files | Behavior |
+|------|-------|----------|
+| **Folder** | `trades/test/active/`, `trades/test/history/`, `trades/test/README.md` | Dedicated home for fixtures; excluded from History totals |
+| **Detection** | `common/test_trades.py` | `is_test_trade()` — path under `trades/test/` or `trades/sandbox/`, known lots (`ms-99`, `ms-100`, `ms-v3`, …), `*_test.json` filenames |
+| **History sync** | `dashboard/history_sync.py` | Skips test trades; `purge_stale_history_rows()` drops ghost SQLite rows on sync |
+| **Dashboard** | `manual_spread/entry.py` | `load_dashboard_manual_trades()` skips test lots |
+| **Scanners** | `common/expiry_settlement.py` | `iter_trade_json_paths()` / `iter_all_trade_json_paths()` skip `trades/test/` |
+| **Filled qty** | `common/expiry_settlement.py`, `dashboard/db.py` | `effective_filled_quantity()` — `filled_quantity=0` means unfilled; skip cancelled/unfilled in `trade_to_history_row()` |
+| **SQLite purge** | `dashboard/db.py` | `delete_trades_by_lots()`, `purge_known_test_trades_from_db()` |
+| **Seed / cleanup** | `scripts/seed_dual_manual_kill_fixture.py`, `scripts/cleanup_test_history_artifacts.py` | Default fixture output → `trades/test/`; script moves stray test JSON out of production history |
+
+### Why — History tab showed $1085 instead of $530
+
+| Issue | Amount | Fix |
+|-------|--------|-----|
+| Test fixtures `ms-99`, `ms-100`, `ms-v3`, `ms1_P_test` in production `trades/history/` and SQLite | **$405** | Moved 11 files → `trades/test/history/`; `purge_known_test_trades_from_db()` |
+| `ms-205` cancelled order (`filled_quantity=0`) settled as qty **5** due to `filled_quantity or quantity` bug | **$150** | `effective_filled_quantity()` + skip cancelled/unfilled |
+| Real trades (4 manual + 7 MEIC legs) | **$530** | ✓ matches brokerage |
+
+**After cleanup:** `daily_summary` for 2026-07-08 = **$530** (11 trades).
+
+### Operator
+
+```powershell
+uv run python scripts/cleanup_test_history_artifacts.py   # re-run if test JSON lands in production history again
+uv run python -c "from dashboard.db import purge_known_test_trades_from_db; print(purge_known_test_trades_from_db())"
+```
+
+Put future fixtures under `trades/test/` (not production `trades/history/`). **Restart dashboard** so live `/api/history` sync uses the `filled_quantity` fix.
+
+### Validation
+
+- [x] pytest test_trades + history_stale_purge + expiry_settlement + build_manual_trades
+- [x] Local History tab → $530 after purge + sync
+- [ ] Next session — confirm no test lots re-sync into SQLite after dashboard restart
+
+---
+
 ## 2026-07-08 (late) — Index OHLC from MQTT ticks on arrival
 
 **Status:** implemented  
@@ -88,7 +152,7 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 **Specs:** [STOP_MONITOR_MQTT_CACHE_FIX_PLAIN_ENGLISH.md](STOP_MONITOR_MQTT_CACHE_FIX_PLAIN_ENGLISH.md), [LIVE_SESSION_2026-07-08.md](LIVE_SESSION_2026-07-08.md)
 
-### What changed (4 commits, not yet pushed to GitHub as of check)
+### What changed (4 commits — pushed to `origin/master`)
 
 | Commit | Area | Summary |
 |--------|------|---------|
@@ -122,6 +186,9 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 - Removed test artifact `trades/history/MANUAL_SPREAD/ms-v3_C_test.json`
 - Removed closed orphans still under `trades/active/` (`ms-188`, `ms-189`, `12-30_P`) — copies remain in `trades/history/`
+- Purged **6** SQLite rows for known test lots (`ms-99`, `ms-100`, `ms-v3`, …) via `purge_known_test_trades_from_db()`
+
+**History / test-trade code:** see section **2026-07-08 (EOD) — Test trade isolation + History totals fix** above.
 
 ### Deferred (unchanged)
 
@@ -601,7 +668,9 @@ uv run python run.py                          # single launcher
 | Item | Status | Since | Notes |
 |------|--------|-------|-------|
 | V3 live validation | **Partial pass** | 2026-07-06 | Jul 7: open/stop/close OK after F-9; MEIC shared-stop fixed evening |
-| Stop monitor MQTT hardening (P0-A/B/C) | **Fixed** | 2026-07-08 | 4 commits local; push pending; live OK after 13:17 restart |
+| Stop monitor MQTT hardening (P0-A/B/C) | **Fixed** | 2026-07-08 | Pushed; live OK after 13:17 restart |
+| Test trade isolation (`trades/test/`) | **Fixed** | 2026-07-08 | EOD commit; exclude from History sync + dashboard |
+| History totals ($1085 → $530) | **Fixed** | 2026-07-08 | `effective_filled_quantity()` + stale row purge |
 | ms-187 $0.05 long-close incident | **Fixed (code)** | 2026-07-08 | REST ladder + MQTT reconnect; restart required after deploy |
 | Heartbeat false “missing” alert | **Fixed** | 2026-07-08 | P0-C atomic write + read retry |
 | F-9 preflight qty sign (Tasty) | **Fixed** | 2026-07-07 | ms-186 validated ~13:16 |
@@ -611,6 +680,7 @@ uv run python run.py                          # single launcher
 | Tranche grid entry/exit times | **Fixed** | 2026-07-07 | MEIC exit only; Manual entry + exit |
 | Option quote snapshots (`options_quotes.csv`) | **Fixed** | 2026-07-07 | 3 min MQTT snapshot, no OHLC |
 | Index OHLC from MQTT ticks (not 30s poll) | **Fixed** | 2026-07-08 | Tick listeners; live validate tomorrow |
+| Expanded market watch (VIX/VXN/TLT/GLD, OHLCV, SPX ladder) | **Design — signed off** | 2026-07-09 | See MARKET_DATA_EXPANDED_WATCH_DESIGN.md |
 | Quiet terminal logging | **Fixed** | 2026-07-07 | See TERMINAL_LOGGING_QUIET.md |
 | Software breach threshold (2× vs 2×+$0.20) | **Deferred** | 2026-07-07 | Afternoon breach review |
 | Software breach execution (spread cap) | **Deferred** | 2026-07-07 | Large slippage on Jul 7 breach exits |

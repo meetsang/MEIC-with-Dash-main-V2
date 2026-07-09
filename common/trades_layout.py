@@ -15,6 +15,13 @@ MEIC_HISTORY = 'trades/history/MEIC_IC'
 MANUAL_ACTIVE = 'trades/active/MANUAL_SPREAD'
 MANUAL_HISTORY = 'trades/history/MANUAL_SPREAD'
 
+# Test fixtures — never scanned for dashboard History / PnL totals.
+TEST_ROOT = 'trades/test'
+TEST_MEIC_ACTIVE = 'trades/test/active/MEIC_IC'
+TEST_MANUAL_ACTIVE = 'trades/test/active/MANUAL_SPREAD'
+TEST_MEIC_HISTORY = 'trades/test/history/MEIC_IC'
+TEST_MANUAL_HISTORY = 'trades/test/history/MANUAL_SPREAD'
+
 
 def project_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -60,6 +67,10 @@ def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
         os.path.join(base, MEIC_HISTORY),
         os.path.join(base, MANUAL_ACTIVE),
         os.path.join(base, MANUAL_HISTORY),
+        os.path.join(base, TEST_MEIC_ACTIVE),
+        os.path.join(base, TEST_MEIC_HISTORY),
+        os.path.join(base, TEST_MANUAL_ACTIVE),
+        os.path.join(base, TEST_MANUAL_HISTORY),
         commands_dir(base),
     ):
         os.makedirs(path, exist_ok=True)

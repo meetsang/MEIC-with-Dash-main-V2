@@ -338,6 +338,13 @@ def _trade_entry_date(trade: Dict[str, Any]) -> str:
     return ts[:10] if len(ts) >= 10 else ''
 
 
+def _is_test_trade_dict(trade: Dict[str, Any], path: str = '') -> bool:
+    from common.test_trades import is_test_trade
+
+    filepath = path or str(trade.get('_filepath') or '')
+    return is_test_trade(trade, filepath)
+
+
 def _iter_manual_history_paths() -> List[str]:
     """JSON paths under manual spread history (flat + YYYY-MM-DD subdirs)."""
     paths: List[str] = []
@@ -416,6 +423,8 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
         return _trade_recency_key(new) >= _trade_recency_key(old)
 
     for st in load_active_trades():
+        if _is_test_trade_dict(st):
+            continue
         key = _trade_dedupe_key(st)
         if _keep(st, by_key.get(key)):
             by_key[key] = st
@@ -423,7 +432,7 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
     for path in _iter_manual_history_paths():
         name = os.path.basename(path)
         st = _load_trade_file(path, name)
-        if not st:
+        if not st or _is_test_trade_dict(st, path):
             continue
         if st.get('status') != 'closed':
             continue
