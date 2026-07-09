@@ -161,6 +161,48 @@ def clear_command_files(root: Optional[str] = None) -> int:
     return removed
 
 
+def settle_expired_active_trades(
+    active_dir: str,
+    root: Optional[str] = None,
+    today: Optional[date] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[int, int]:
+    """Settle or freeze expired open/closing trades in active/. Returns (settled, frozen)."""
+    lg = logger or log
+    root = root or _project_root()
+    today = today or _central_today()
+    settled = 0
+    frozen = 0
+    if not os.path.isdir(active_dir):
+        return settled, frozen
+
+    from blocks.stop import state as state_mod
+    from blocks.stop.expiry_gate import try_settle_or_freeze_trade
+
+    for name in sorted(os.listdir(active_dir)):
+        if not name.endswith('.json'):
+            continue
+        path = os.path.join(active_dir, name)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            lg.warning('Skip settlement for %s — unreadable (%s)', name, exc)
+            continue
+
+        outcome, state = try_settle_or_freeze_trade(state, path=path, root=root)
+        if outcome == 'ok':
+            continue
+        state_mod.save_state(path, state)
+        if outcome == 'settled':
+            settled += 1
+        elif outcome == 'frozen':
+            frozen += 1
+        lg.info('Expiry settlement %s for %s (date=%s)', outcome, name, today.isoformat())
+
+    return settled, frozen
+
+
 def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> Dict[str, Any]:
     """
     Run full cleanup pass.
@@ -192,6 +234,9 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     except Exception as exc:
         lg.warning('Session bootstrap failed: %s', exc)
 
+    meic_settled, meic_frozen = settle_expired_active_trades(meic_active, root, today, lg)
+    manual_settled, manual_frozen = settle_expired_active_trades(manual_active, root, today, lg)
+
     if mode == 'morning':
         mk, ma, mw = archive_active_trades(meic_active, meic_history, today, mode)
         uk, ua, uw = archive_active_trades(manual_active, manual_history, today, mode)
@@ -203,6 +248,10 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     summary = {
         'mode': mode,
         'date': today.isoformat(),
+        'meic_settled': meic_settled,
+        'meic_frozen': meic_frozen,
+        'manual_settled': manual_settled,
+        'manual_frozen': manual_frozen,
         'meic_kept': mk,
         'meic_archived': ma,
         'manual_kept': uk,
@@ -211,8 +260,9 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         'warnings': mw + uw,
     }
     lg.info(
-        'Cleanup done (%s): MEIC archived=%d kept=%d | Manual archived=%d kept=%d | commands=%d',
-        mode, ma, mk, ua, uk, cmds,
+        'Cleanup done (%s): MEIC settled=%d frozen=%d archived=%d kept=%d | '
+        'Manual settled=%d frozen=%d archived=%d kept=%d | commands=%d',
+        mode, meic_settled, meic_frozen, ma, mk, manual_settled, manual_frozen, ua, uk, cmds,
     )
     for w in summary['warnings']:
         lg.warning('Cleanup: %s', w)

@@ -26,12 +26,14 @@ from common.broker_action_window import (
     MEIC_SPX_OPTIONS_RTH_ACTIONS,
     broker_actions_allowed_for_trade,
 )
+from common.broker_stopped_trading import is_instruments_stopped_trading_error
 from common.market_hours import (
     MARKET_CLOSE_HOUR_CT,
     MARKET_CLOSE_MINUTE_CT,
     trade_past_0dte_close,
 )
 from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
+from blocks.stop.expiry_gate import try_settle_or_freeze_trade
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
 from blocks.stop.stop_ownership import has_ownership_conflict
 from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
@@ -164,7 +166,44 @@ class StopMonitor:
         ):
             self.state.pop('stop_rearm_pending', None)
 
+    def _apply_expiry_gate(self) -> str:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        outcome, state = try_settle_or_freeze_trade(
+            self.state,
+            path=self.json_path,
+            root=root,
+        )
+        if outcome != 'ok':
+            self.state = state
+            state_mod.section(self.state, 'recovery')
+            state_mod.save_state(self.json_path, self.state)
+            if outcome == 'settled':
+                log.info('Expiry settlement closed %s', self.json_path)
+            elif outcome == 'frozen':
+                log.info('Expiry settlement pending — frozen %s', self.json_path)
+        return outcome
+
+    def _mark_instruments_stopped_trading(self, message: str) -> None:
+        log.warning('Broker instruments stopped trading for %s: %s', self.json_path, message)
+        self.state['broker_actions_disabled'] = True
+        self.state['broker_actions_disabled_reason'] = 'instruments_stopped_trading'
+        self.state['expiry_settlement_pending'] = True
+        self.state['active_stop'] = None
+        self.state['stop_quantity'] = 0
+        self.state.pop('spread_close_order_id', None)
+        self.state.pop('long_close_order_id', None)
+        self._stop_place_backoff_until = 0.0
+        state_mod.section(self.state, 'recovery')
+        state_mod.save_state(self.json_path, self.state)
+
     def _broker_actions_blocked(self) -> bool:
+        outcome = self._apply_expiry_gate()
+        if outcome in ('settled', 'frozen', 'already_closed'):
+            return True
+        if self.state.get('status') == 'closed':
+            return True
+        if self.state.get('broker_actions_disabled'):
+            return True
         allowed, reason = broker_actions_allowed_for_trade(
             self.state,
             filename=os.path.basename(self.json_path),
@@ -305,6 +344,8 @@ class StopMonitor:
         self._ensure_stop_for_filled_qty_unblocked()
 
     def _ensure_stop_for_filled_qty_unblocked(self) -> None:
+        if self.state.get('broker_actions_disabled'):
+            return
         if state_mod.section(self.state, 'active_stop').get('skip_initial'):
             return
 
@@ -453,7 +494,10 @@ class StopMonitor:
         debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
         result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
         if not result.success:
-            log.error('Spread close order failed: %s', result.message)
+            if is_instruments_stopped_trading_error(result.message):
+                self._mark_instruments_stopped_trading(result.message)
+            else:
+                log.error('Spread close order failed: %s', result.message)
             return
 
         if not self.state.get('close_mechanism'):
@@ -787,7 +831,10 @@ class StopMonitor:
                 qty,
                 result.message,
             )
-            self._stop_place_backoff_until = time.time() + 60
+            if is_instruments_stopped_trading_error(result.message):
+                self._mark_instruments_stopped_trading(result.message)
+            else:
+                self._stop_place_backoff_until = time.time() + 60
             return False
 
         spx = self.prices.get_spx()
