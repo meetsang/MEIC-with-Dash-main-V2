@@ -38,10 +38,14 @@ def indicator_row(closes: Sequence[float]) -> dict:
     return row
 
 
-def ohlc_header() -> List[str]:
+def ohlc_header(symbol: str = 'SPX') -> List[str]:
+    from common.market_watch import symbol_has_volume_column
     from market_data import config
 
-    cols = ['datetime', 'open', 'high', 'low', 'close', 'samples']
+    cols = ['datetime', 'open', 'high', 'low', 'close']
+    if symbol_has_volume_column(symbol):
+        cols.append('volume')
+    cols.append('samples')
     cols.extend(f'sma_{p}' for p in config.SMA_PERIODS)
     cols.extend(f'ema_{p}' for p in config.EMA_PERIODS)
     return cols

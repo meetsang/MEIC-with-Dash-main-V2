@@ -32,6 +32,7 @@ meic0dte/logs/
 streaming/spx_tick_data.csv
 streaming/vix_tick_data.csv
 streaming/optsymbols.json
+streaming/spx_ladder_symbols.json
 *.log
 
 # Cache

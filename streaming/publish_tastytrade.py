@@ -10,36 +10,34 @@ if _root not in sys.path:
 import asyncio
 import json
 import logging
-import threading
 import time
 from datetime import datetime as dt, timezone
 
 import paho.mqtt.publish as publish
 
 from common.broker_factory import get_mqtt_topic_prefix
+from common.market_watch import (
+    SPX_LADDER_VOLUME_ENABLED,
+    TRADE_SIZE_TOPIC_SUFFIX,
+    VOLUME_TOPIC_SUFFIX,
+    WATCH_SYMBOLS,
+    log_sidecar_disabled_once,
+    mqtt_topic_from_dxlink,
+    sidecar_option_collection_enabled,
+)
 from common.session_logs import STREAM_TT_BASE, new_session_log_path, relocate_legacy_log
 from common.streamer_health import write_health
-from common.symbols import to_tastytrade
 from common.tt_auth import create_tastytrade_session
 from meic0dte.app.utilities import central_now, crossed_market_close
 from streaming import config
+from streaming.ladder_subscribe import (
+    LadderSubscribeGuard,
+    build_quote_subscribe_set,
+    build_trade_subscribe_set,
+)
 
 OPTION_SYMBOL_FILE = config.STREAM_SYMBOLS
 TOPIC_PREFIX = get_mqtt_topic_prefix() or 'TASTYTRADE/'
-
-# Index/equity symbols for market_data recorder (MQTT topic = canonical name).
-MARKET_WATCH_SYMBOLS = ('SPX', 'VIX', 'VXN', 'QQQ', 'IWM')
-_TOPIC_ALIASES = {
-    'SPX': 'SPX', '$SPX': 'SPX', '.$SPX': 'SPX',
-    'VIX': 'VIX', '$VIX': 'VIX', '.$VIX': 'VIX',
-    'VXN': 'VXN', '$VXN': 'VXN', '.$VXN': 'VXN',
-    'QQQ': 'QQQ', 'IWM': 'IWM',
-}
-
-
-def _mqtt_symbol(event_symbol: str) -> str:
-    sym = (event_symbol or '').strip()
-    return _TOPIC_ALIASES.get(sym, sym)
 
 
 def _get_logger():
@@ -60,18 +58,13 @@ def _get_logger():
     return log
 
 
-def _get_symbols(slog):
-    while True:
-        try:
-            with open(OPTION_SYMBOL_FILE, 'r') as f:
-                data = json.load(f)
-                syms = set(data.get('SYMBOLS', []))
-                # Convert to TastyTrade format
-                return {to_tastytrade(s) if not s.startswith('.') and s != 'SPX' else s
-                        for s in syms}
-        except Exception as e:
-            slog.info('ERROR reading symbol file: %s', e)
-            time.sleep(5)
+def _read_ladder_meta() -> dict:
+    path = os.path.join(_root, 'streaming', 'spx_ladder_symbols.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 async def _stream_loop(session, slog):
@@ -79,10 +72,18 @@ async def _stream_loop(session, slog):
     from tastytrade.dxfeed import Quote, Trade
 
     session_started = central_now()
-    initial = _get_symbols(slog)
-    # Always include index/equity watchlist for market_data recorder
-    subscribe_set = set(initial) | set(MARKET_WATCH_SYMBOLS)
-    slog.info('Initial symbols: %s', subscribe_set)
+    guard = LadderSubscribeGuard()
+    quote_set, sub_meta = build_quote_subscribe_set()
+    trade_set = build_trade_subscribe_set(quote_set)
+    slog.info(
+        'Initial subscribe — watch+legs+ladder=%d (legs=%d ladder=%d watch=%d)',
+        sub_meta['total'],
+        sub_meta['trade_leg_count'],
+        sub_meta['ladder_count'],
+        sub_meta['watch_count'],
+    )
+    if not sidecar_option_collection_enabled():
+        log_sidecar_disabled_once(slog)
 
     try:
         publish.single(
@@ -91,15 +92,16 @@ async def _stream_loop(session, slog):
             retain=True,
             hostname=config.MQTT_BROKER_ADDR,
         )
-    except Exception as e:
-        slog.info('Kill switch publish error: %s', e)
+    except Exception as exc:
+        slog.info('Kill switch publish error: %s', exc)
 
     last_mids: dict[str, float] = {}
     last_spx_price_ts: str | None = None
+    ladder_last_update: str | None = None
 
     def _mqtt_publish(symbol: str, mid: float) -> None:
         nonlocal last_spx_price_ts
-        symbol = _mqtt_symbol(symbol)
+        symbol = mqtt_topic_from_dxlink(symbol)
         last_mids[symbol] = mid
         if symbol == 'SPX':
             last_spx_price_ts = dt.now(timezone.utc).astimezone().isoformat(timespec='seconds')
@@ -110,14 +112,26 @@ async def _stream_loop(session, slog):
                 retain=True,
                 hostname=config.MQTT_BROKER_ADDR,
             )
-        except Exception as e:
-            slog.info('MQTT publish error %s: %s', symbol, e)
+        except Exception as exc:
+            slog.info('MQTT publish error %s: %s', symbol, exc)
+
+    def _mqtt_publish_aux(topic: str, value: str) -> None:
+        try:
+            publish.single(
+                TOPIC_PREFIX + topic,
+                value,
+                retain=True,
+                hostname=config.MQTT_BROKER_ADDR,
+            )
+        except Exception as exc:
+            slog.info('MQTT aux publish error %s: %s', topic, exc)
 
     async with DXLinkStreamer(session) as streamer:
-        await streamer.subscribe(Quote, list(subscribe_set))
-        await streamer.subscribe(Trade, ['SPX'])
-
-        active = set(subscribe_set)
+        active_quotes = set(quote_set)
+        active_trades = set(trade_set)
+        await streamer.subscribe(Quote, list(active_quotes))
+        if active_trades:
+            await streamer.subscribe(Trade, list(active_trades))
 
         async def _handle_quotes():
             async for quote in streamer.listen(Quote):
@@ -128,16 +142,35 @@ async def _stream_loop(session, slog):
                 if bid <= 0 and ask <= 0:
                     continue
                 mid = (bid + ask) / 2 if bid and ask else (bid or ask)
-                topic_name = _mqtt_symbol(quote.event_symbol)
-                _mqtt_publish(topic_name, mid)
+                _mqtt_publish(quote.event_symbol, mid)
 
         async def _handle_trades():
             async for trade in streamer.listen(Trade):
-                if trade.event_symbol not in ('SPX', '$SPX'):
-                    continue
+                raw_sym = trade.event_symbol
+                mqtt_sym = mqtt_topic_from_dxlink(raw_sym)
                 price = float(trade.price or 0)
-                if price > 0:
-                    _mqtt_publish('SPX', price)
+                if mqtt_sym == 'SPX':
+                    if price > 0:
+                        _mqtt_publish('SPX', price)
+                    continue
+                if mqtt_sym in WATCH_SYMBOLS and mqtt_sym != 'SPX':
+                    size = int(trade.size or 0)
+                    day_vol = int(trade.day_volume or 0)
+                    if size > 0:
+                        _mqtt_publish_aux(f'{mqtt_sym}{TRADE_SIZE_TOPIC_SUFFIX}', str(size))
+                    if day_vol > 0:
+                        _mqtt_publish_aux(f'{mqtt_sym}{VOLUME_TOPIC_SUFFIX}', str(day_vol))
+                    if price > 0 and mqtt_sym not in last_mids:
+                        _mqtt_publish(mqtt_sym, price)
+                elif (
+                    SPX_LADDER_VOLUME_ENABLED
+                    and sidecar_option_collection_enabled()
+                    and str(raw_sym).startswith('.SPXW')
+                    and price > 0
+                ):
+                    day_vol = int(trade.day_volume or 0)
+                    if day_vol > 0:
+                        _mqtt_publish_aux(f'{raw_sym}{VOLUME_TOPIC_SUFFIX}', str(day_vol))
 
         quote_task = asyncio.create_task(_handle_quotes())
         trade_task = asyncio.create_task(_handle_trades())
@@ -154,21 +187,42 @@ async def _stream_loop(session, slog):
 
             tick += 1
             if tick % 5 == 0:
+                ladder_meta = _read_ladder_meta()
+                ladder_last_update = ladder_meta.get('updated_at')
                 write_health(
                     last_spx_price_ts=last_spx_price_ts,
-                    symbols_subscribed=len(active),
+                    symbols_subscribed=len(active_quotes),
                     status='live' if last_spx_price_ts else 'waiting',
+                    ladder_enabled=sidecar_option_collection_enabled(),
+                    ladder_symbol_count=sub_meta.get('ladder_count', 0),
+                    total_subscribed_symbols=len(active_quotes),
+                    ladder_last_update=ladder_last_update,
+                    ladder_last_error=guard.last_error,
                 )
             if tick % 5 == 0 and last_mids:
                 for sym, mid in list(last_mids.items()):
                     _mqtt_publish(sym, mid)
 
-            current = _get_symbols(slog) | set(MARKET_WATCH_SYMBOLS)
-            new_syms = current - active
-            if new_syms:
-                slog.info('Adding symbols: %s', new_syms)
-                await streamer.subscribe(Quote, list(new_syms))
-                active |= new_syms
+            quote_set, sub_meta = build_quote_subscribe_set()
+            trade_set = build_trade_subscribe_set(quote_set)
+            new_quotes = guard.filter_subscribe(quote_set - active_quotes)
+            new_trades = trade_set - active_trades
+            if new_quotes:
+                slog.info('Adding quote symbols: %d', len(new_quotes))
+                try:
+                    await streamer.subscribe(Quote, list(new_quotes))
+                    guard.mark_success(new_quotes)
+                    active_quotes |= new_quotes
+                except Exception as exc:
+                    slog.info('Quote subscribe error: %s', exc)
+                    guard.mark_failed(new_quotes, str(exc))
+            if new_trades:
+                slog.info('Adding trade symbols: %d', len(new_trades))
+                try:
+                    await streamer.subscribe(Trade, list(new_trades))
+                    active_trades |= new_trades
+                except Exception as exc:
+                    slog.info('Trade subscribe error: %s', exc)
 
             await asyncio.sleep(1)
 
@@ -183,7 +237,6 @@ def main():
 
 if __name__ == '__main__':
     from common.process_lock import process_lock
-    from common import tt_config
 
     with process_lock('streamer', command='publish_tastytrade.py'):
         main()

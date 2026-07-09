@@ -1,4 +1,4 @@
-"""Main loop — MQTT ticks → OHLC, option snapshots → data/YYYY-MM-DD/."""
+"""Main loop — MQTT ticks → OHLCV, option snapshots → data/YYYY-MM-DD/."""
 from __future__ import annotations
 
 import logging
@@ -15,26 +15,34 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from common.logging_config import setup_file_only_logging
+from common.market_watch import WATCH_SYMBOLS, sidecar_option_collection_enabled
 from common.session_logs import MARKET_DATA_BASE, new_session_log_path
 from market_data import config
 from market_data.aggregator import SymbolState
 from market_data.mqtt_reader import MqttQuoteReader
 from market_data.option_snapshots import OptionQuoteSnapshotWriter
+from market_data.spx_ladder import SpxLadderWriter
+from market_data.spx_ladder_snapshots import SpxLadderSnapshotWriter
 from market_data.watch_symbols import watch_symbol_from_mqtt_topic
 from meic0dte.app.utilities import central_from_epoch, central_now, crossed_market_close
 
 log = logging.getLogger(__name__)
 
 TickItem = Tuple[str, float, float]
+TradeSizeItem = Tuple[str, int, float]
 
 
 class MarketDataRecorder:
     def __init__(self):
         self._reader = MqttQuoteReader()
         self._option_snapshots = OptionQuoteSnapshotWriter(self._reader.cache)
+        self._ladder_writer = SpxLadderWriter()
+        self._ladder_snapshots = SpxLadderSnapshotWriter(self._reader.cache)
         self._states: dict[str, SymbolState] = {}
         self._tick_queue: queue.SimpleQueue[TickItem] = queue.SimpleQueue()
+        self._trade_size_queue: queue.SimpleQueue[TradeSizeItem] = queue.SimpleQueue()
         self._tick_listener = self._enqueue_tick
+        self._trade_size_listener = self._enqueue_trade_size
         self._stop = False
         self._session_started = central_now()
         self._last_tick_log_mono = 0.0
@@ -61,6 +69,12 @@ class MarketDataRecorder:
             return
         self._tick_queue.put((watch, price, epoch))
 
+    def _enqueue_trade_size(self, topic_symbol: str, size: int, epoch: float) -> None:
+        watch = watch_symbol_from_mqtt_topic(topic_symbol)
+        if watch is None:
+            return
+        self._trade_size_queue.put((watch, size, epoch))
+
     def _drain_ticks(self) -> int:
         count = 0
         while True:
@@ -70,6 +84,18 @@ class MarketDataRecorder:
                 break
             ts = central_from_epoch(epoch)
             self._state_for(sym).record_tick(ts, price)
+            count += 1
+        return count
+
+    def _drain_trade_sizes(self) -> int:
+        count = 0
+        while True:
+            try:
+                sym, size, epoch = self._trade_size_queue.get_nowait()
+            except queue.Empty:
+                break
+            ts = central_from_epoch(epoch)
+            self._state_for(sym).record_trade_size(ts, size)
             count += 1
         return count
 
@@ -99,13 +125,16 @@ class MarketDataRecorder:
         )
         log.info('Market data log: %s', log_path)
         log.info(
-            'Market data recorder starting — symbols=%s ticks=on_arrival option_snapshot=%ss intervals=%s',
-            config.WATCH_SYMBOLS,
+            'Market data recorder starting — symbols=%s ticks=on_arrival '
+            'sidecar_ladder=%s option_snapshot=%ss intervals=%s',
+            WATCH_SYMBOLS,
+            sidecar_option_collection_enabled(),
             config.OPTION_SNAPSHOT_INTERVAL_SEC,
             config.BAR_INTERVALS_MIN,
         )
         self._reader.start()
         self._reader.add_tick_listener(self._tick_listener)
+        self._reader.add_trade_size_listener(self._trade_size_listener)
         if not self._reader.wait_for_any(timeout=180):
             log.warning('No MQTT prices yet — continuing (is streamer running?)')
 
@@ -120,15 +149,20 @@ class MarketDataRecorder:
                     break
 
                 self._drain_ticks()
+                self._drain_trade_sizes()
                 self._tick_minute_boundaries(now)
                 self._maybe_log_tick_summary()
+                self._ladder_writer.maybe_refresh(self._reader.cache, now=now)
                 self._option_snapshots.maybe_write(now, day_path=self._day_path())
+                self._ladder_snapshots.maybe_write(now, day_path=self._day_path())
 
                 time.sleep(0.25)
         finally:
             self._reader.remove_tick_listener(self._tick_listener)
+            self._reader.remove_trade_size_listener(self._trade_size_listener)
 
         self._drain_ticks()
+        self._drain_trade_sizes()
         self._flush_all()
         self._reader.stop()
         log.info('Market data recorder stopped')
@@ -140,6 +174,7 @@ class MarketDataRecorder:
             if st.minute_start and minute > st.minute_start:
                 st._finalize_minute(st.minute_start)
                 st.minute_prices = []
+                st.minute_volume = 0
                 st.minute_start = minute
 
     def _flush_all(self) -> None:

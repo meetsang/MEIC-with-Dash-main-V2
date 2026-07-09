@@ -22,12 +22,22 @@ def write_health(
     symbols_subscribed: int = 0,
     status: str = 'live',
     root: Optional[str] = None,
+    ladder_enabled: Optional[bool] = None,
+    ladder_symbol_count: int = 0,
+    total_subscribed_symbols: int = 0,
+    ladder_last_update: Optional[str] = None,
+    ladder_last_error: Optional[str] = None,
 ) -> None:
     payload = {
         'ts': datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds'),
         'last_spx_price_ts': last_spx_price_ts,
         'symbols_subscribed': symbols_subscribed,
         'status': status,
+        'ladder_enabled': ladder_enabled,
+        'ladder_symbol_count': ladder_symbol_count,
+        'total_subscribed_symbols': total_subscribed_symbols or symbols_subscribed,
+        'ladder_last_update': ladder_last_update,
+        'ladder_last_error': ladder_last_error,
     }
     path = health_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)

@@ -115,3 +115,20 @@ def test_tick_listener_fires_on_message():
     cache._on_message(None, None, msg)
     assert len(seen) == 1
 
+
+def test_trade_size_listener_on_tsize_topic():
+    cache = MqttPriceCache()
+    seen = []
+
+    def listener(symbol, size, epoch):
+        seen.append((symbol, size, epoch))
+
+    cache.add_trade_size_listener(listener)
+    msg = MagicMock()
+    msg.topic = f'{cache._prefix}QQQ__TSIZE'
+    msg.payload = b'25'
+    cache._on_message(None, None, msg)
+    assert seen == [('QQQ', 25, seen[0][2])]
+    assert cache.get('QQQ') is None
+
+

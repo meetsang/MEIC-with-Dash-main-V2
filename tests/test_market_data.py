@@ -118,7 +118,44 @@ def test_watch_symbol_from_mqtt_topic():
     from market_data.watch_symbols import watch_symbol_from_mqtt_topic
 
     assert watch_symbol_from_mqtt_topic('SPX') == 'SPX'
-    assert watch_symbol_from_mqtt_topic('$SPX') == 'SPX'
+    assert watch_symbol_from_mqtt_topic('$VIX') == 'VIX'
     assert watch_symbol_from_mqtt_topic('QQQ') == 'QQQ'
+    assert watch_symbol_from_mqtt_topic('TLT') == 'TLT'
+    assert watch_symbol_from_mqtt_topic('GLD') == 'GLD'
     assert watch_symbol_from_mqtt_topic('.SPXW260708P7400') is None
+    assert watch_symbol_from_mqtt_topic('QQQ__TSIZE') == 'QQQ'
+
+
+def test_spx_ohlc_header_has_no_volume():
+    from market_data.indicators import ohlc_header
+
+    assert 'volume' not in ohlc_header('SPX')
+
+
+def test_qqq_ohlc_header_has_volume():
+    from market_data.indicators import ohlc_header
+
+    assert 'volume' in ohlc_header('QQQ')
+
+
+def test_ohlcv_volume_sums_trade_sizes():
+    import tempfile
+    from market_data.aggregator import SymbolState
+
+    with tempfile.TemporaryDirectory() as tmp:
+        day_path = os.path.join(tmp, '2026-07-01')
+        os.makedirs(day_path)
+        st = SymbolState(symbol='QQQ', day_path=day_path)
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        st.record_tick(base.replace(second=5), 700.0)
+        st.record_trade_size(base.replace(second=10), 100)
+        st.record_trade_size(base.replace(second=20), 50)
+        st.record_tick(datetime(2026, 7, 1, 10, 1, 0), 701.0)
+
+        path_1m = config.ohlc_path(day_path, 'QQQ', 1)
+        with open(path_1m, encoding='utf-8') as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        assert rows[0]['volume'] == '150'
+
 

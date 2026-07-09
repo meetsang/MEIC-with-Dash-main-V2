@@ -3,16 +3,23 @@ from __future__ import annotations
 
 import os
 
+from common.market_watch import (
+    SPX_LADDER_REFRESH_SEC,
+    WATCH_SYMBOLS as _WATCH_SYMBOLS,
+)
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-# Symbols published to MQTT by streamer and consumed here.
-WATCH_SYMBOLS = ('SPX', 'VIX', 'QQQ', 'VXN', 'IWM')
+WATCH_SYMBOLS = _WATCH_SYMBOLS
 
 # Legacy — index OHLC is driven by per-tick MQTT listeners, not interval polling.
 POLL_INTERVAL_SEC = 30
 
-# Snapshot all registered spread option mids to one CSV (no OHLC).
+# Snapshot all registered spread option mids to one CSV (no OHLC) — trade legs only.
 OPTION_SNAPSHOT_INTERVAL_SEC = 180
+
+# Sidecar ladder snapshot cadence (aligned with ladder JSON refresh).
+SPX_LADDER_SNAPSHOT_SEC = SPX_LADDER_REFRESH_SEC
 
 # Completed OHLC bar intervals (minutes).
 BAR_INTERVALS_MIN = (1, 3, 5, 10, 30, 60)
@@ -38,5 +45,10 @@ def ohlc_path(day_path: str, symbol: str, interval_min: int) -> str:
 
 
 def options_quotes_path(day_path: str) -> str:
-    """All spread-leg MQTT mids per snapshot — long CSV, no OHLC."""
+    """MEIC/Manual trade legs only — snapshot_ts,symbol,mid."""
     return os.path.join(day_path, 'options_quotes.csv')
+
+
+def spx_ladder_quotes_path(day_path: str) -> str:
+    """Sidecar SPX 0DTE ladder mids (and optional volume)."""
+    return os.path.join(day_path, 'spx_ladder_quotes.csv')

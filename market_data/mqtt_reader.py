@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Dict, Optional
+from typing import Dict, Optional
 
 from common.broker_factory import get_mqtt_topic_prefix
-from common.mqtt_prices import MqttPriceCache, TickListener
+from common.market_watch import WATCH_SYMBOLS
+from common.mqtt_prices import MqttPriceCache, TickListener, TradeSizeListener
 from market_data import config
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,12 @@ class MqttQuoteReader:
 
     def remove_tick_listener(self, listener: TickListener) -> None:
         self._cache.remove_tick_listener(listener)
+
+    def add_trade_size_listener(self, listener: TradeSizeListener) -> None:
+        self._cache.add_trade_size_listener(listener)
+
+    def remove_trade_size_listener(self, listener: TradeSizeListener) -> None:
+        self._cache.remove_trade_size_listener(listener)
 
     def poll_changed(self) -> Dict[str, float]:
         """Return {symbol: price} for symbols with new mids since last poll."""

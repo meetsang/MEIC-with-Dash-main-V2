@@ -10,10 +10,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 TickListener = Callable[[str, float, float], None]
+TradeSizeListener = Callable[[str, int, float], None]
 
 import paho.mqtt.client as mqtt
 
 from common.broker_factory import get_mqtt_topic_prefix
+from common.market_watch import TRADE_SIZE_TOPIC_SUFFIX, VOLUME_TOPIC_SUFFIX
 from common.symbols import mqtt_topic_symbol, to_tastytrade
 from common.trades_layout import ops_path
 from streaming import config as stream_config
@@ -42,6 +44,7 @@ class MqttPriceCache:
         self._prefix = topic_prefix or get_mqtt_topic_prefix() or stream_config.TOPIC_PREFIX
         self._stale_threshold_sec = float(stale_threshold_sec)
         self._prices: Dict[str, float] = {}
+        self._day_volumes: Dict[str, int] = {}
         self._overrides: Dict[str, float] = {}
         self._last_symbol_at: Dict[str, float] = {}
         self._lock = threading.Lock()
@@ -54,6 +57,7 @@ class MqttPriceCache:
         self._last_error: Optional[str] = None
         self._last_stale_warn_at: float = 0.0
         self._tick_listeners: List[TickListener] = []
+        self._trade_size_listeners: List[TradeSizeListener] = []
         self._listener_lock = threading.Lock()
         self.kill_switch: bool = False
 
@@ -189,6 +193,36 @@ class MqttPriceCache:
             except Exception:
                 log.exception('MQTT tick listener failed for %s', symbol)
 
+    def add_trade_size_listener(self, listener: TradeSizeListener) -> None:
+        """Register callback(symbol, trade_size, epoch_sec) on MQTT __TSIZE updates."""
+        with self._listener_lock:
+            if listener not in self._trade_size_listeners:
+                self._trade_size_listeners.append(listener)
+
+    def remove_trade_size_listener(self, listener: TradeSizeListener) -> None:
+        with self._listener_lock:
+            try:
+                self._trade_size_listeners.remove(listener)
+            except ValueError:
+                pass
+
+    def _notify_trade_size_listeners(self, symbol: str, size: int, epoch: float) -> None:
+        with self._listener_lock:
+            listeners = list(self._trade_size_listeners)
+        for listener in listeners:
+            try:
+                listener(symbol, size, epoch)
+            except Exception:
+                log.exception('MQTT trade-size listener failed for %s', symbol)
+
+    def get_day_volume(self, symbol: str) -> Optional[int]:
+        keys = self._lookup_keys(symbol)
+        with self._lock:
+            for k in keys:
+                if k in self._day_volumes:
+                    return self._day_volumes[k]
+        return None
+
     def _on_message(self, client, userdata, msg) -> None:
         try:
             topic = msg.topic
@@ -198,8 +232,25 @@ class MqttPriceCache:
             if not topic.startswith(self._prefix):
                 return
             symbol = topic[len(self._prefix):]
-            price = float(msg.payload.decode())
             now = time.time()
+            payload = msg.payload.decode()
+
+            if symbol.endswith(TRADE_SIZE_TOPIC_SUFFIX):
+                base = symbol[: -len(TRADE_SIZE_TOPIC_SUFFIX)]
+                size = int(float(payload))
+                if size > 0:
+                    self._notify_trade_size_listeners(base, size, now)
+                return
+
+            if symbol.endswith(VOLUME_TOPIC_SUFFIX):
+                base = symbol[: -len(VOLUME_TOPIC_SUFFIX)]
+                day_vol = int(float(payload))
+                with self._lock:
+                    self._day_volumes[base] = day_vol
+                    self._last_msg_at = now
+                return
+
+            price = float(payload)
             with self._lock:
                 self._prices[symbol] = price
                 self._last_symbol_at[symbol] = now

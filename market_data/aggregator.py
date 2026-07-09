@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from common.market_watch import symbol_has_volume_column
 from market_data import config
 from market_data.indicators import indicator_row, ohlc_header
 
@@ -31,6 +32,8 @@ class OhlcBar:
     low: float
     close: float
     samples: int = 0
+    volume: int = 0
+    track_volume: bool = False
 
     def absorb(self, price: float) -> None:
         self.high = max(self.high, price)
@@ -38,10 +41,14 @@ class OhlcBar:
         self.close = price
         self.samples += 1
 
-    def to_row(self, closes_history: Sequence[float]) -> dict:
+    def absorb_volume(self, size: int) -> None:
+        if size > 0:
+            self.volume += int(size)
+
+    def to_row(self, closes_history: Sequence[float], *, symbol: str) -> dict:
         series = list(closes_history) + [self.close]
         ind = indicator_row(series)
-        return {
+        row = {
             'datetime': self.start.strftime('%Y-%m-%d %H:%M:%S'),
             'open': round(self.open, 4),
             'high': round(self.high, 4),
@@ -50,6 +57,9 @@ class OhlcBar:
             'samples': self.samples,
             **ind,
         }
+        if symbol_has_volume_column(symbol):
+            row['volume'] = self.volume
+        return row
 
 
 @dataclass
@@ -57,6 +67,7 @@ class SymbolState:
     symbol: str
     day_path: str
     minute_prices: List[Tuple[datetime, float]] = field(default_factory=list)
+    minute_volume: int = 0
     minute_start: Optional[datetime] = None
     closes_1m: List[float] = field(default_factory=list)
     partial_bars: Dict[int, OhlcBar] = field(default_factory=dict)
@@ -91,6 +102,7 @@ class SymbolState:
         self.day_path = day_path
         os.makedirs(day_path, exist_ok=True)
         self.minute_prices.clear()
+        self.minute_volume = 0
         self.minute_start = None
         self.partial_bars.clear()
         self._load_1m_closes()
@@ -100,6 +112,23 @@ class SymbolState:
 
     def record_tick(self, ts: datetime, price: float) -> None:
         """Record one MQTT mid arrival — drives OHLC and raw tick log."""
+        self._roll_minute(ts)
+        self.minute_prices.append((ts, price))
+        self._append_tick_row(ts, price)
+
+    def record_trade_size(self, ts: datetime, size: int) -> None:
+        """Add Trade.size increment to current minute volume bucket."""
+        if not symbol_has_volume_column(self.symbol):
+            return
+        self._roll_minute(ts)
+        if size > 0:
+            self.minute_volume += int(size)
+
+    def record_poll(self, ts: datetime, price: float) -> None:
+        """Backward-compatible alias for record_tick."""
+        self.record_tick(ts, price)
+
+    def _roll_minute(self, ts: datetime) -> None:
         minute = ts.replace(second=0, microsecond=0)
         if self.minute_start is None:
             self.minute_start = minute
@@ -107,12 +136,7 @@ class SymbolState:
             self._finalize_minute(self.minute_start)
             self.minute_start = minute
             self.minute_prices = []
-        self.minute_prices.append((ts, price))
-        self._append_tick_row(ts, price)
-
-    def record_poll(self, ts: datetime, price: float) -> None:
-        """Backward-compatible alias for record_tick."""
-        self.record_tick(ts, price)
+            self.minute_volume = 0
 
     def _append_tick_row(self, ts: datetime, price: float) -> None:
         path = config.polls_path(self.day_path, self.symbol)
@@ -130,6 +154,7 @@ class SymbolState:
         if not self.minute_prices:
             return
         prices = [p for _, p in self.minute_prices]
+        track_vol = symbol_has_volume_column(self.symbol)
         bar = OhlcBar(
             interval_min=1,
             start=minute_start,
@@ -138,6 +163,8 @@ class SymbolState:
             low=min(prices),
             close=prices[-1],
             samples=len(prices),
+            volume=self.minute_volume if track_vol else 0,
+            track_volume=track_vol,
         )
         self._write_bar(bar, interval_min=1)
         self.closes_1m.append(bar.close)
@@ -147,6 +174,7 @@ class SymbolState:
         if self.minute_start and self.minute_prices:
             self._finalize_minute(self.minute_start)
             self.minute_prices = []
+            self.minute_volume = 0
             self.minute_start = None
 
     def _write_bar(self, bar: OhlcBar, interval_min: int) -> None:
@@ -154,11 +182,15 @@ class SymbolState:
             closes = self.closes_1m
         else:
             closes = self.closes_by_interval.setdefault(interval_min, [])
-        row = bar.to_row(closes)
+        row = bar.to_row(closes, symbol=self.symbol)
         path = config.ohlc_path(self.day_path, self.symbol, interval_min)
         exists = os.path.isfile(path)
         with open(path, 'a', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=ohlc_header(), extrasaction='ignore')
+            writer = csv.DictWriter(
+                f,
+                fieldnames=ohlc_header(self.symbol),
+                extrasaction='ignore',
+            )
             if not exists:
                 writer.writeheader()
             writer.writerow(row)
@@ -182,6 +214,8 @@ class SymbolState:
                     low=bar_1m.low,
                     close=bar_1m.close,
                     samples=bar_1m.samples,
+                    volume=bar_1m.volume,
+                    track_volume=bar_1m.track_volume,
                 )
                 self.partial_bars[interval] = partial
             else:
@@ -189,6 +223,7 @@ class SymbolState:
                 partial.low = min(partial.low, bar_1m.low)
                 partial.close = bar_1m.close
                 partial.samples += bar_1m.samples
+                partial.volume += bar_1m.volume
 
             if _is_bucket_complete(bar_1m.start, interval):
                 if partial.samples > 0:

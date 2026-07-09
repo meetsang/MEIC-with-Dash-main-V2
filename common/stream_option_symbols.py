@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 # Indices/equities always subscribed by streamer — not spread legs.
 _INDEX_WATCH = frozenset({
-    'SPX', 'VIX', 'VXN', 'QQQ', 'IWM',
+    'SPX', 'VIX', 'VXN', 'QQQ', 'IWM', 'TLT', 'GLD',
     '$SPX', '.$SPX', '$VIX', '.$VIX', '$VXN', '.$VXN',
 })
 

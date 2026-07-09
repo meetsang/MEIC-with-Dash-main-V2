@@ -45,22 +45,63 @@ After any meaningful change (code merge, live session finding, incident, config 
 
 ---
 
-## 2026-07-09 — Expanded market watch (design only)
+## 2026-07-09 — Expanded market watch + sidecar SPX ladder (implemented)
 
-**Status:** design — signed off; **not implemented**  
+**Status:** implemented  
+**Tests:** `uv run pytest tests/test_market_data.py tests/test_spx_ladder.py tests/test_mqtt_prices_resilience.py -q` → **30 passed**
+
 **Spec:** [MARKET_DATA_EXPANDED_WATCH_DESIGN.md](MARKET_DATA_EXPANDED_WATCH_DESIGN.md)
 
-### Scope (planned)
+### What changed
 
-- Fix **VIX / VXN** (DXLink `$VIX` / `$VXN` subscribe — explains missing CSVs on Jul 8)
-- Add **TLT**, **GLD** on same tick/OHLC cadence as QQQ; **keep IWM**
-- **OHLCV** for all watch symbols except SPX (volume from Trade prints; `volume=0` if no prints)
-- **SPX 0DTE ladder**: 100 strikes × C/P, refresh every 1 min (8:30–15:00 CT only), no strike prune v1; separate `spx_ladder_symbols.json` + `spx_ladder_quotes.csv`
+| Area | Files | Behavior |
+|------|-------|----------|
+| **Watch universe** | `common/market_watch.py`, `market_data/config.py`, `market_data/watch_symbols.py` | `SPX, VIX, VXN, QQQ, IWM, TLT, GLD` — single source of truth |
+| **DXLink / streamer** | `streaming/publish_tastytrade.py`, `streaming/ladder_subscribe.py` | `$VIX`/`$VXN` Quote; Trade → `__TSIZE` / `__VOL` aux topics; ladder union with cap + quarantine |
+| **OHLCV** | `market_data/aggregator.py`, `market_data/indicators.py`, `common/mqtt_prices.py` | Non-SPX bars get `volume` column (sum `Trade.size`); SPX stays OHLC |
+| **Sidecar ladder** | `market_data/spx_ladder.py`, `market_data/spx_ladder_snapshots.py`, `common/stream_ladder_symbols.py` | 200-symbol 0DTE grid → `streaming/spx_ladder_symbols.json` + `spx_ladder_quotes.csv` |
+| **Trade legs unchanged** | `options_quotes.csv`, `optsymbols.json`, `blocks/stop/*` | Still 3 columns; MEIC/Manual registration untouched |
+| **Health** | `common/streamer_health.py` | `ladder_enabled`, `ladder_symbol_count`, `total_subscribed_symbols`, `ladder_last_update`, `ladder_last_error` |
 
-### Validation
+### Sidecar option collection kill switch
 
-- [x] Operator sign-off on design doc (2026-07-09)
-- [ ] Implement phases 1–3 per spec
+**Default: ON.** Disable only for the session:
+
+```powershell
+$env:MEIC_SIDE_OPTION_COLLECTION="0"   # OFF — no ladder JSON, no ladder subscribe, no ladder CSV
+$env:MEIC_SIDE_OPTION_COLLECTION="1"   # ON  (explicit; same as unset)
+```
+
+When OFF, market_data logs once: `sidecar_option_collection_disabled`.  
+**Watch symbols (VIX/VXN/QQQ/IWM/TLT/GLD OHLCV) keep recording** — only the SPX ladder sidecar stops.
+
+Config defaults (`common/market_watch.py`):
+
+```python
+MARKET_DATA_OPTION_COLLECTION_ENABLED = True
+SPX_LADDER_ENABLED = True
+SPX_LADDER_QUOTES_ENABLED = True
+SPX_LADDER_VOLUME_ENABLED = False   # ladder Quote-only by default
+SPX_LADDER_MAX_ACTIVE_SYMBOLS = 500
+SPX_LADDER_REFRESH_SEC = 60
+```
+
+### Live validation
+
+**Ladder ON (default)** — after `run.py` restart during session:
+
+- [ ] `VIX_1m.csv`, `VXN_1m.csv`, `TLT_1m.csv`, `GLD_1m.csv` growing
+- [ ] QQQ/IWM/TLT/GLD/VIX/VXN bars have `volume` column; SPX does not
+- [ ] `streaming/spx_ladder_symbols.json` updates ~60s; ~200 symbols
+- [ ] `data/YYYY-MM-DD/spx_ladder_quotes.csv` growing (5 columns: mid only)
+- [ ] `options_quotes.csv` still 3 columns (trade legs only)
+- [ ] MEIC entry + stop monitor MQTT unchanged
+
+**Ladder OFF** — set `MEIC_SIDE_OPTION_COLLECTION=0`, restart:
+
+- [ ] Log line `sidecar_option_collection_disabled`
+- [ ] No `spx_ladder_symbols.json` updates / no `spx_ladder_quotes.csv`
+- [ ] Trade legs still stream; watch OHLCV still records
 
 ---
 
@@ -680,7 +721,7 @@ uv run python run.py                          # single launcher
 | Tranche grid entry/exit times | **Fixed** | 2026-07-07 | MEIC exit only; Manual entry + exit |
 | Option quote snapshots (`options_quotes.csv`) | **Fixed** | 2026-07-07 | 3 min MQTT snapshot, no OHLC |
 | Index OHLC from MQTT ticks (not 30s poll) | **Fixed** | 2026-07-08 | Tick listeners; live validate tomorrow |
-| Expanded market watch (VIX/VXN/TLT/GLD, OHLCV, SPX ladder) | **Design — signed off** | 2026-07-09 | See MARKET_DATA_EXPANDED_WATCH_DESIGN.md |
+| Expanded market watch (VIX/VXN/TLT/GLD, OHLCV, SPX ladder) | **Fixed** | 2026-07-09 | Sidecar ON by default; `MEIC_SIDE_OPTION_COLLECTION=0` kills ladder only |
 | Quiet terminal logging | **Fixed** | 2026-07-07 | See TERMINAL_LOGGING_QUIET.md |
 | Software breach threshold (2× vs 2×+$0.20) | **Deferred** | 2026-07-07 | Afternoon breach review |
 | Software breach execution (spread cap) | **Deferred** | 2026-07-07 | Large slippage on Jul 7 breach exits |
