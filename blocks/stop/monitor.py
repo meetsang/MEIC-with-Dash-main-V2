@@ -22,12 +22,18 @@ from blocks.stop.fill_sync import (
     sync_open_order,
 )
 from blocks.stop.mqtt_prices import MqttPriceCache
+from common.broker_action_window import (
+    MEIC_SPX_OPTIONS_RTH_ACTIONS,
+    broker_actions_allowed_for_trade,
+)
+from common.broker_stopped_trading import is_instruments_stopped_trading_error
 from common.market_hours import (
     MARKET_CLOSE_HOUR_CT,
     MARKET_CLOSE_MINUTE_CT,
     trade_past_0dte_close,
 )
 from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
+from blocks.stop.expiry_gate import try_settle_or_freeze_trade
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
 from blocks.stop.stop_ownership import has_ownership_conflict
 from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
@@ -91,6 +97,7 @@ class StopMonitor:
         self._stop_place_backoff_until = 0.0
         self._stale_warned = False
         self._0dte_freeze_logged = False
+        self._broker_window_pause_logged = False
         self._breach_missing_prices_logged = False
         self._breach_stale_logged = False
         self._breach_last_near_log = 0.0
@@ -114,11 +121,108 @@ class StopMonitor:
             self.json_path,
         )
 
-    def _broker_actions_frozen(self) -> bool:
-        if not self._0dte_past_market_close():
+    def _broker_action_profile(self):
+        return MEIC_SPX_OPTIONS_RTH_ACTIONS
+
+    def _protection_incomplete(self) -> bool:
+        if self.state.get('status') != 'open':
             return False
-        self._log_0dte_freeze_once()
+        if stop_qty_for_state(self.state) <= 0:
+            return False
+        return not stop_is_current(
+            self.state,
+            ownership_conflict=has_ownership_conflict(self.state),
+        )
+
+    def _apply_broker_pause_markers(self, reason: str) -> None:
+        self.state['broker_actions_paused'] = True
+        self.state['broker_actions_pause_reason'] = reason
+        if self._protection_incomplete():
+            self.state['stop_rearm_pending'] = True
+
+    def _clear_broker_pause_markers(self) -> None:
+        self.state.pop('broker_actions_paused', None)
+        self.state.pop('broker_actions_pause_reason', None)
+
+    def _log_broker_window_pause_once(self, reason: str) -> None:
+        if self._broker_window_pause_logged:
+            return
+        self._broker_window_pause_logged = True
+        log.info(
+            'Broker actions paused (%s) for %s',
+            reason,
+            self.json_path,
+        )
+
+    def _maybe_rearm_after_window_open(self) -> None:
+        if self.state.get('status') != 'open':
+            return
+        if not (self.state.get('stop_rearm_pending') or self._protection_incomplete()):
+            return
+        self._ensure_stop_for_filled_qty_unblocked()
+        if stop_is_current(
+            self.state,
+            ownership_conflict=has_ownership_conflict(self.state),
+        ):
+            self.state.pop('stop_rearm_pending', None)
+
+    def _apply_expiry_gate(self) -> str:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        outcome, state = try_settle_or_freeze_trade(
+            self.state,
+            path=self.json_path,
+            root=root,
+        )
+        if outcome != 'ok':
+            self.state = state
+            state_mod.section(self.state, 'recovery')
+            state_mod.save_state(self.json_path, self.state)
+            if outcome == 'settled':
+                log.info('Expiry settlement closed %s', self.json_path)
+            elif outcome == 'frozen':
+                log.info('Expiry settlement pending — frozen %s', self.json_path)
+        return outcome
+
+    def _mark_instruments_stopped_trading(self, message: str) -> None:
+        log.warning('Broker instruments stopped trading for %s: %s', self.json_path, message)
+        self.state['broker_actions_disabled'] = True
+        self.state['broker_actions_disabled_reason'] = 'instruments_stopped_trading'
+        self.state['expiry_settlement_pending'] = True
+        self.state['active_stop'] = None
+        self.state['stop_quantity'] = 0
+        self.state.pop('spread_close_order_id', None)
+        self.state.pop('long_close_order_id', None)
+        self._stop_place_backoff_until = 0.0
+        state_mod.section(self.state, 'recovery')
+        state_mod.save_state(self.json_path, self.state)
+
+    def _broker_actions_blocked(self) -> bool:
+        outcome = self._apply_expiry_gate()
+        if outcome in ('settled', 'frozen', 'already_closed'):
+            return True
+        if self.state.get('status') == 'closed':
+            return True
+        if self.state.get('broker_actions_disabled'):
+            return True
+        allowed, reason = broker_actions_allowed_for_trade(
+            self.state,
+            filename=os.path.basename(self.json_path),
+            profile=self._broker_action_profile(),
+        )
+        if allowed:
+            self._broker_window_pause_logged = False
+            self._clear_broker_pause_markers()
+            return False
+        if reason == 'expired_option':
+            self._log_0dte_freeze_once()
+            return True
+        self._apply_broker_pause_markers(reason)
+        self._log_broker_window_pause_once(reason)
         return True
+
+    def _broker_actions_frozen(self) -> bool:
+        """True when broker placement must not run (expiry cutoff or RTH window)."""
+        return self._broker_actions_blocked()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -134,6 +238,8 @@ class StopMonitor:
             self._stop_event.wait(interval)
 
     def _drain_fill_queue(self) -> None:
+        if self._broker_actions_blocked():
+            return
         while not self.fill_queue.empty():
             try:
                 event = self.fill_queue.get_nowait()
@@ -161,6 +267,8 @@ class StopMonitor:
         if self._broker_actions_frozen():
             state_mod.save_state(self.json_path, self.state)
             return
+
+        self._maybe_rearm_after_window_open()
 
         if self.state.get('close_only_mode'):
             self._recover_closing_on_load()
@@ -192,6 +300,8 @@ class StopMonitor:
 
     def _recover_closing_on_load(self) -> None:
         """G8: resume long close after stop_monitor restart."""
+        if self._broker_actions_blocked():
+            return
         if self.state.get('status') != 'closing':
             return
 
@@ -229,6 +339,13 @@ class StopMonitor:
 
     def _ensure_stop_for_filled_qty(self) -> None:
         """Place or resize exchange stop only for filled spread units (both legs)."""
+        if self._broker_actions_blocked():
+            return
+        self._ensure_stop_for_filled_qty_unblocked()
+
+    def _ensure_stop_for_filled_qty_unblocked(self) -> None:
+        if self.state.get('broker_actions_disabled'):
+            return
         if state_mod.section(self.state, 'active_stop').get('skip_initial'):
             return
 
@@ -336,6 +453,8 @@ class StopMonitor:
 
     def replace_with_spread_close(self, reason: str = 'manual_close') -> None:
         """Kill path — close both legs in one spread order (not leg-by-leg)."""
+        if self._broker_actions_blocked():
+            return
         active = self.state.get('active_stop') or {}
         oid = active.get('order_id')
         if oid:
@@ -375,7 +494,10 @@ class StopMonitor:
         debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
         result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
         if not result.success:
-            log.error('Spread close order failed: %s', result.message)
+            if is_instruments_stopped_trading_error(result.message):
+                self._mark_instruments_stopped_trading(result.message)
+            else:
+                log.error('Spread close order failed: %s', result.message)
             return
 
         if not self.state.get('close_mechanism'):
@@ -484,6 +606,8 @@ class StopMonitor:
             self._maybe_merge_disk_stop_state()
             state_mod.save_state(self.json_path, self.state)
             return
+
+        self._maybe_rearm_after_window_open()
 
         now = time.time()
 
@@ -707,7 +831,10 @@ class StopMonitor:
                 qty,
                 result.message,
             )
-            self._stop_place_backoff_until = time.time() + 60
+            if is_instruments_stopped_trading_error(result.message):
+                self._mark_instruments_stopped_trading(result.message)
+            else:
+                self._stop_place_backoff_until = time.time() + 60
             return False
 
         spx = self.prices.get_spx()
@@ -933,6 +1060,8 @@ class StopMonitor:
         return 'failed'
 
     def replace_with_limit_close(self, reason: str = 'spread_stop_breach') -> None:
+        if self._broker_actions_blocked():
+            return
         active = self.state.get('active_stop') or {}
         oid = active.get('order_id')
         phase = active.get('phase', 1)
@@ -1016,6 +1145,8 @@ class StopMonitor:
         )
 
     def execute_spx_proximity_close(self) -> None:
+        if self._broker_actions_blocked():
+            return
         if self.state['phases'].get('phase3_activated_at') is None:
             self.state['phases']['phase3_activated_at'] = state_mod.now_iso()
 

@@ -20,6 +20,7 @@ from blocks.stop.stop_ownership import (
     scan_duplicate_stop_ownership,
 )
 from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
+from blocks.stop.expiry_gate import try_settle_or_freeze_trade
 from blocks.stop.mqtt_prices import MqttPriceCache
 from common.mqtt_prices import mqtt_cache_is_stale, write_mqtt_cache_health
 from blocks.stop.pending_fill_sync import sync_pending_fills
@@ -155,6 +156,10 @@ class StopSupervisor:
     @staticmethod
     def _slot_eligible(st: dict) -> bool:
         status = st.get('status')
+        if st.get('broker_actions_disabled'):
+            return False
+        if st.get('expiry_settlement_pending') and status != 'closed':
+            return False
         if status not in ('open', 'closing'):
             return False
         filled = int(st.get('filled_quantity') or 0)
@@ -187,6 +192,13 @@ class StopSupervisor:
             except Exception as exc:
                 log.warning('Skip slot %s — load failed: %s', path, exc)
                 continue
+
+            root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+            outcome, st = try_settle_or_freeze_trade(st, path=path, root=root)
+            if outcome != 'ok':
+                state_mod.section(st, 'recovery')
+                state_mod.save_state(path, st)
+                log.info('Expiry gate %s for %s — skip slot', outcome, path)
 
             if not self._slot_eligible(st):
                 continue

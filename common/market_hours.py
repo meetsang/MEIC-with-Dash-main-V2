@@ -67,11 +67,23 @@ def trade_past_0dte_close(
     *,
     now: Optional[datetime] = None,
 ) -> bool:
-    """Block broker placement: 0DTE trade after regular Central close."""
-    return (
-        trade_expiry_on_or_before_today(state, filename)
-        and is_after_market_close_ct(now)
-    )
+    """Block broker placement: expired prior-day options or same-day after close."""
+    from common.session_cleanup import trade_expiry_date
+    from meic0dte.app.utilities import central_now
+
+    now = now or central_now()
+    expiry = trade_expiry_date(state, filename)
+    if expiry is None:
+        return False
+
+    today = now.date()
+    if expiry > today:
+        return False
+    if expiry < today:
+        return True
+
+    close = time(MARKET_CLOSE_HOUR_CT, MARKET_CLOSE_MINUTE_CT)
+    return now.time() >= close
 
 
 def session_row_past_0dte_close(row, *, strategy: str, now: Optional[datetime] = None) -> bool:

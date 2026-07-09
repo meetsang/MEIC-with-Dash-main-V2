@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 from brokers.base import BrokerBase
 from common import tt_config
 from blocks.stop.alerts import AlertListener
+from blocks.stop.expiry_gate import try_settle_or_freeze_trade
 from blocks.stop.monitor import StopMonitor
 from blocks.stop.mqtt_prices import get_shared_cache
 from blocks.stop.pending_fill_sync import sync_pending_fills
@@ -129,6 +130,14 @@ class MonitorRunner:
             st = state_mod.load_state(json_path)
         except Exception as exc:
             log.warning('Skip monitor for %s — cannot load state: %s', json_path, exc)
+            return
+
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        outcome, st = try_settle_or_freeze_trade(st, path=json_path, root=root)
+        if outcome != 'ok':
+            state_mod.section(st, 'recovery')
+            state_mod.save_state(json_path, st)
+            log.info('Expiry gate %s for %s — skip monitor', outcome, json_path)
             return
 
         status = st.get('status')

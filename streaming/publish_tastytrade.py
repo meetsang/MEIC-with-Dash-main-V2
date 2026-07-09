@@ -28,7 +28,7 @@ from common.market_watch import (
 from common.session_logs import STREAM_TT_BASE, new_session_log_path, relocate_legacy_log
 from common.streamer_health import write_health
 from common.tt_auth import create_tastytrade_session
-from meic0dte.app.utilities import central_now, crossed_market_close
+from meic0dte.app.utilities import central_now
 from streaming import config
 from streaming.ladder_subscribe import (
     LadderSubscribeGuard,
@@ -71,7 +71,7 @@ async def _stream_loop(session, slog):
     from tastytrade import DXLinkStreamer
     from tastytrade.dxfeed import Quote, Trade
 
-    session_started = central_now()
+    _session_started = central_now()
     guard = LadderSubscribeGuard()
     quote_set, sub_meta = build_quote_subscribe_set()
     trade_set = build_trade_subscribe_set(quote_set)
@@ -177,13 +177,8 @@ async def _stream_loop(session, slog):
 
         tick = 0
         while True:
-            if not os.environ.get('MEIC_INTEGRATION', '').lower() in ('1', 'true', 'yes'):
-                now = central_now()
-                if crossed_market_close(session_started, now):
-                    slog.info('3:00 PM CT — stopping stream')
-                    quote_task.cancel()
-                    trade_task.cancel()
-                    return
+            # Session lifecycle is owned by run.py (or another launcher profile).
+            # Do not self-stop at cash close — overnight/futures streamers may run longer.
 
             tick += 1
             if tick % 5 == 0:

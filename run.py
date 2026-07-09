@@ -31,7 +31,8 @@ from strategies.validate import StrategyConfigError, validate_startup_config
 from common.session_logs import LAUNCHER_BASE, MARKET_DATA_BASE, new_session_log_path, relocate_all_legacy_logs
 from common.logging_config import setup_session_logging, terminal_info
 from common.service_health import check_mqtt_cache_health, check_stop_monitor_health, check_streamer_health, scan_price_gate_trades
-from meic0dte.app.utilities import central_now, crossed_market_close
+from meic0dte.app.utilities import central_now
+from common.runtime_session import MEIC_SPX_0DTE, runtime_should_stop_for_session
 
 # Tranches moved to strategies/meic/strategy.py (MEIC_TRANCHE_SLOTS) — loaded via Orchestrator.
 
@@ -398,6 +399,24 @@ def main(
         log.info(f"Waiting until {STREAM_START_HOUR:02d}:{STREAM_START_MIN:02d} to start streamer ...")
         wait_until(STREAM_START_HOUR, STREAM_START_MIN)
 
+    session_started = _central_now()
+    if (
+        not force
+        and not tranche_now
+        and runtime_should_stop_for_session(
+            session_started,
+            session_started,
+            profile=MEIC_SPX_0DTE,
+        )
+    ):
+        log.info(
+            'MEIC session already closed before service start — '
+            'skipping streamer, stop_monitor, and market_data recorder.'
+        )
+        _run_eod_cleanup_if_due(log)
+        _write_status('stopped', 'Session already closed before service start.')
+        return
+
     streamer = start_streamer()
     market_data = start_market_data_recorder()
     stop_mon = None if no_stop_monitor else start_stop_monitor(paper=paper)
@@ -441,14 +460,17 @@ def main(
 
     # Token refresh is handled by the global thread started in __main__
 
-    session_started = _central_now()
     try:
         while True:
             now = _central_now()
 
-            # Stop at 3 PM only if this session started before market close
-            if crossed_market_close(session_started, now, close_hour=STREAM_STOP_HOUR):
-                log.info("3:00 PM reached — shutting down.")
+            # MEIC SPX 0DTE daytime session — not a global platform shutdown rule.
+            if runtime_should_stop_for_session(
+                session_started,
+                now,
+                profile=MEIC_SPX_0DTE,
+            ):
+                log.info("MEIC SPX 0DTE session end — shutting down trading runtime.")
                 break
 
             # --- Health checks: restart crashed subprocesses ---

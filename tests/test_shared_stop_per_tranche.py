@@ -67,6 +67,22 @@ def _broker_order_raw(stop_trigger: float, limit_price: float, qty: int = 1):
 
 
 class TestSharedStopPerTranche(unittest.TestCase):
+    def setUp(self):
+        self._broker_window = patch(
+            'blocks.stop.monitor.broker_actions_allowed_for_trade',
+            return_value=(True, 'allowed'),
+        )
+        self._expiry_gate = patch(
+            'blocks.stop.monitor.try_settle_or_freeze_trade',
+            side_effect=lambda state, **kwargs: ('ok', state),
+        )
+        self._broker_window.start()
+        self._expiry_gate.start()
+
+    def tearDown(self):
+        self._broker_window.stop()
+        self._expiry_gate.stop()
+
     def test_two_same_strike_tranches_place_separate_stops(self):
         broker = MagicMock()
         broker.get_order_status.return_value = OrderResult(True, 'x', 'filled')
@@ -316,6 +332,22 @@ class TestSharedStopPerTranche(unittest.TestCase):
 
 
 class TestManualKillPerTranche(unittest.TestCase):
+    def setUp(self):
+        self._broker_window = patch(
+            'blocks.stop.monitor.broker_actions_allowed_for_trade',
+            return_value=(True, 'allowed'),
+        )
+        self._expiry_gate = patch(
+            'blocks.stop.monitor.try_settle_or_freeze_trade',
+            side_effect=lambda state, **kwargs: ('ok', state),
+        )
+        self._broker_window.start()
+        self._expiry_gate.start()
+
+    def tearDown(self):
+        self._broker_window.stop()
+        self._expiry_gate.stop()
+
     def test_spread_close_cancels_only_own_stop_not_all_btc(self):
         st = _make_open_state(
             lot='01-45',
