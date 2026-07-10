@@ -12,6 +12,9 @@ class OrderResult:
     order_id: Optional[str]
     status: str  # filled, working, rejected, cancelled, partial
     filled_price: Optional[float] = None
+    filled_price_source: Optional[str] = None
+    order_limit_price: Optional[float] = None
+    broker_aggregate_fill_price: Optional[float] = None
     filled_quantity: Optional[int] = None
     order_quantity: Optional[int] = None
     remaining_quantity: Optional[int] = None

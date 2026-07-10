@@ -144,10 +144,6 @@ class StopSupervisor:
             pass
 
     def _sync_pending_fills(self) -> None:
-        now = time.time()
-        if now - self._last_pending_sync < SLOW_INTERVAL:
-            return
-        self._last_pending_sync = now
         try:
             sync_pending_fills(self.broker)
         except Exception:

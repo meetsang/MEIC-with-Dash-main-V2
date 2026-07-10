@@ -303,16 +303,6 @@ def _read_active_trades():
     trades = []
     try:
         from blocks.stop import state as state_mod
-        from blocks.stop.pending_fill_sync import sync_pending_fills
-        from common.broker_factory import get_shared_broker
-        from dashboard.broker_fill_sync import maybe_sync_active_trades
-
-        maybe_sync_active_trades(
-            read_json=read_json_safe,
-            iter_paths=state_mod.iter_active_trade_paths,
-            get_broker_fn=get_shared_broker,
-            sync_fn=sync_pending_fills,
-        )
 
         for fpath in state_mod.iter_active_trade_paths():
             state = read_json_safe(fpath)

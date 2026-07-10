@@ -216,12 +216,22 @@ def _order_result_from_placed_order(order) -> OrderResult:
 
     remaining = max(0, order_qty - filled_qty) if order_qty else None
     spread_credit = None
+    filled_price_source = None
+    order_limit_price = None
+    broker_aggregate_fill_price = None
+
+    if order.price is not None:
+        order_limit_price = round(abs(float(order.price)), 2)
+
     if short_fill is not None and long_fill is not None:
         spread_credit = round(short_fill - long_fill, 2)
+        filled_price_source = 'broker_leg_math'
     elif single_leg_fill is not None:
         spread_credit = single_leg_fill
-    elif order.price is not None and filled_qty > 0:
-        spread_credit = round(abs(float(order.price)), 2)
+        filled_price_source = 'broker_leg_fill'
+    elif order_limit_price is not None and filled_qty > 0:
+        spread_credit = order_limit_price
+        filled_price_source = 'order_limit_fallback'
 
     if filled_qty > 0 and status == 'working':
         status = 'partial'
@@ -249,6 +259,9 @@ def _order_result_from_placed_order(order) -> OrderResult:
         order_id=order_id,
         status=status,
         filled_price=spread_credit,
+        filled_price_source=filled_price_source,
+        order_limit_price=order_limit_price,
+        broker_aggregate_fill_price=broker_aggregate_fill_price,
         filled_quantity=filled_qty,
         order_quantity=order_qty or None,
         remaining_quantity=remaining,

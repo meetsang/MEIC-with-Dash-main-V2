@@ -24,6 +24,11 @@ class TestStopMonitor0DteFreeze(unittest.TestCase):
             'short_leg': {'symbol': '.SPXW260626P7320', 'strike': 7320, 'fill_price': 2.0},
             'long_leg': {'symbol': '.SPXW260626P7295', 'strike': 7295, 'fill_price': 0.5},
             'phases': {},
+            'recovery': {
+                'module_start_count': 0,
+                'last_heartbeat': '2026-06-26T10:00:00-05:00',
+                'state_loaded_from_disk': False,
+            },
         }
         with patch('blocks.stop.monitor.state_mod.load_state', return_value=state):
             return StopMonitor(path, broker, prices, phases=[])
@@ -32,9 +37,10 @@ class TestStopMonitor0DteFreeze(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
             path = tmp.name
         monitor = self._monitor(path)
-        with patch('blocks.stop.monitor.try_settle_or_freeze_trade', return_value=('ok', monitor.state)):
-            with patch.object(monitor, '_0dte_past_market_close', return_value=True):
-                ok = monitor._place_short_stop(4.0, 4.1, phase=1, reason='test')
+        with patch('blocks.stop.monitor.try_settle_or_freeze_trade', return_value=('ok', monitor.state)), \
+             patch('blocks.stop.monitor.broker_actions_allowed_for_trade', return_value=(False, 'expired_option')), \
+             patch('blocks.stop.monitor.state_mod.save_state'):
+            ok = monitor._place_short_stop(4.0, 4.1, phase=1, reason='test')
         self.assertFalse(ok)
         monitor.broker.place_stop_order.assert_not_called()
 

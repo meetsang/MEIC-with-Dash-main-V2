@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import List
 
 from blocks.stop import state as state_mod
+from blocks.stop.fill_provenance import ensure_fill_sync, is_fill_sync_terminal
 from blocks.stop.fill_sync import sync_open_order
 from brokers.base import BrokerBase
 from common.streamer_symbols import register_spread_symbols
@@ -21,12 +23,22 @@ def needs_open_order_sync(state: dict) -> bool:
     if not state.get('open_order_id'):
         return False
 
+    fs = ensure_fill_sync(state)
+    phase = fs.get('phase', 'fast')
+    if phase == 'resolved_estimated' and not fs.get('audit_attempted'):
+        due = fs.get('audit_due_epoch')
+        if due is not None and time.time() >= float(due):
+            return True
+
+    if is_fill_sync_terminal(state):
+        return False
+
     short_px = float((state.get('short_leg') or {}).get('fill_price') or 0)
     long_px = float((state.get('long_leg') or {}).get('fill_price') or 0)
     if short_px > 0 and long_px > 0:
         filled = int(state.get('filled_quantity') or 0)
         target = int(state.get('quantity') or 0)
-        if not target or filled >= target:
+        if target and filled >= target:
             open_order = state.get('open_order') or {}
             if open_order.get('fully_filled'):
                 return False
