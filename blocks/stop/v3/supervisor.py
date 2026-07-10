@@ -19,8 +19,15 @@ from blocks.stop.stop_ownership import (
     has_ownership_conflict,
     scan_duplicate_stop_ownership,
 )
-from blocks.stop.monitor import StopMonitor, SLOW_INTERVAL
+from blocks.stop.reconcile_policy import (
+    is_working_stop_reconcile_due,
+    schedule_next_working_stop_reconcile,
+)
+from common.broker_cooldown import should_skip_priority
+from common.rest_metrics import write_metrics_snapshot
+from common.rest_operations import OPERATION_ALERT_CONFIRM, PRIORITY_HIGH, PRIORITY_LOW
 from blocks.stop.expiry_gate import try_settle_or_freeze_trade
+from blocks.stop.monitor import StopMonitor
 from blocks.stop.mqtt_prices import MqttPriceCache
 from common.mqtt_prices import mqtt_cache_is_stale, write_mqtt_cache_health
 from blocks.stop.pending_fill_sync import sync_pending_fills
@@ -140,6 +147,7 @@ class StopSupervisor:
                 f.flush()
             os.replace(tmp, hb_path)
             write_mqtt_cache_health(self.prices, root=root)
+            write_metrics_snapshot(root=root)
         except Exception:
             pass
 
@@ -358,7 +366,11 @@ class StopSupervisor:
             active['status'] = status
             if status != 'filled':
                 continue
-            result = self.broker.get_order_status(order_id)
+            result = self.broker.get_order_status(
+                order_id,
+                priority=PRIORITY_HIGH,
+                op=OPERATION_ALERT_CONFIRM,
+            )
             if stop_order_fully_filled(slot.state, result):
                 self._enqueue_exchange_stop_filled(
                     slot, stop=active, broker_result=result,
@@ -567,11 +579,34 @@ class StopSupervisor:
         mon._refresh_breach_watch(streamer_stale, mqtt_cache_stale=mqtt_cache_stale)
 
         now = time.time()
-        if now - slot.last_broker_sync >= SLOW_INTERVAL:
+        mqtt_healthy = not (mqtt_cache_stale or streamer_stale)
+        if is_working_stop_reconcile_due(
+            slot.state,
+            now,
+            mqtt_healthy=mqtt_healthy,
+            status='open',
+            close_only_mode=bool(slot.state.get('close_only_mode')),
+        ):
+            if not should_skip_priority(PRIORITY_LOW):
+                if self._slow_broker_sync(slot):
+                    schedule_next_working_stop_reconcile(
+                        slot.state,
+                        now,
+                        mqtt_healthy=mqtt_healthy,
+                        status='open',
+                        close_only_mode=bool(slot.state.get('close_only_mode')),
+                    )
+                    slot.last_broker_sync = now
+                    save_slot(slot)
+                    return
+            schedule_next_working_stop_reconcile(
+                slot.state,
+                now,
+                mqtt_healthy=mqtt_healthy,
+                status='open',
+                close_only_mode=bool(slot.state.get('close_only_mode')),
+            )
             slot.last_broker_sync = now
-            if self._slow_broker_sync(slot):
-                save_slot(slot)
-                return
 
         if mqtt_cache_stale:
             self._lifecycle_section(slot)['breach_arm_status'] = 'stale_mqtt'

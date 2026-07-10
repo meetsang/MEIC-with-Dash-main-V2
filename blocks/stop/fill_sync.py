@@ -111,7 +111,14 @@ def sync_open_order(
 
     ensure_fill_sync(state)
     if is_fill_sync_terminal(state):
-        skip_audit, _ = maybe_run_fill_audit(state, broker)
+        from common.broker_cooldown import should_skip_priority
+        from common.rest_operations import PRIORITY_LOW
+
+        skip_audit, _ = maybe_run_fill_audit(
+            state,
+            broker,
+            skip_low_priority=should_skip_priority(PRIORITY_LOW),
+        )
         if skip_audit:
             _promote_open_if_ready(state)
             return True, None
@@ -137,7 +144,11 @@ def sync_open_order(
     if confirm_poll and not fs.get('confirm_attempted'):
         fs['confirm_attempted'] = True
 
-    result = broker.get_order_status(str(oid))
+    result = broker.get_order_status(
+        str(oid),
+        priority='HIGH',
+        op='pending_fill_status',
+    )
     fs['poll_count'] = int(fs.get('poll_count') or 0) + 1
     open_order['last_sync_epoch'] = now
     log_order_diagnostics(result, lot=str(state.get('lot', '?')))

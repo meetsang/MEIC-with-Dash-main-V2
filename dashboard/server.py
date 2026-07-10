@@ -805,6 +805,8 @@ def broker_health():
     from common.broker_factory import shared_broker_stats
     from dashboard.broker_fill_sync import fill_sync_stats
 
+    from common.rest_metrics import metrics_snapshot
+
     locks = [
         {
             'name': lk.name,
@@ -818,6 +820,7 @@ def broker_health():
         'fill_sync': fill_sync_stats(),
         'cooldown': broker_cooldown.cooldown_snapshot(),
         'rest': get_rest_limiter().stats(),
+        'rest_metrics': metrics_snapshot(),
         'shared_broker': shared_broker_stats(),
         'locks': locks,
         'launcher_active': _launcher_active(),

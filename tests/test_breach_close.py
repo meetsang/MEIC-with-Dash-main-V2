@@ -75,7 +75,7 @@ class TestBreachLimitClose(unittest.TestCase):
         broker = MockBroker()
         mon = self._make_monitor(broker)
 
-        def stuck_status(order_id):
+        def stuck_status(order_id, **kwargs):
             return OrderResult(True, order_id, 'working')
 
         broker.get_order_status = stuck_status

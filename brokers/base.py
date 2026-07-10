@@ -76,7 +76,13 @@ class BrokerBase(ABC):
         ...
 
     @abstractmethod
-    def get_order_status(self, order_id: str) -> OrderResult:
+    def get_order_status(
+        self,
+        order_id: str,
+        *,
+        priority: str = 'NORMAL',
+        op: str = 'get_order',
+    ) -> OrderResult:
         ...
 
     @abstractmethod

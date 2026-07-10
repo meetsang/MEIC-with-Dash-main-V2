@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 from brokers.base import OrderResult
 from blocks.stop import state as state_mod
 from common.option_ticks import round_spx_option_price
+from common.rest_operations import OPERATION_FILL_AUDIT, PRIORITY_LOW
 
 log = logging.getLogger(__name__)
 
@@ -478,7 +479,11 @@ def maybe_run_fill_audit(
         return False, None
 
     fs['audit_attempted'] = True
-    result = broker.get_order_status(str(oid))
+    result = broker.get_order_status(
+        str(oid),
+        priority=PRIORITY_LOW,
+        op=OPERATION_FILL_AUDIT,
+    )
     if result.success:
         apply_broker_leg_updates(state, result)
         apply_audit_correction(state, result)

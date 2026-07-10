@@ -306,14 +306,27 @@ class TastyTradeBroker(BrokerBase):
 
     def _run(self, coro, timeout: float = 120, *, priority: str = 'NORMAL', op: str = ''):
         """Thread-safe: monitors call broker from parallel threads."""
+        from common.rest_metrics import record_429, record_failure, record_skipped_cooldown
+
+        operation = op or 'broker'
         if should_skip_priority(priority):
-            raise BrokerCooldownActive(f'cooldown active — skipped {op or "broker_call"}')
-        get_rest_limiter().acquire(priority=priority, name=op or 'broker')
+            try:
+                record_skipped_cooldown(operation, priority)
+            except Exception:
+                pass
+            raise BrokerCooldownActive(f'cooldown active — skipped {operation}')
+        get_rest_limiter().acquire(priority=priority, name=operation)
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             return future.result(timeout=timeout)
         except Exception as exc:
-            self._maybe_enter_cooldown(exc, op=op)
+            try:
+                record_failure(operation, exc)
+                if '429' in str(exc).lower():
+                    record_429()
+            except Exception:
+                pass
+            self._maybe_enter_cooldown(exc, op=operation)
             raise
 
     def _maybe_enter_cooldown(self, exc: Exception, *, op: str = '') -> None:
@@ -671,15 +684,21 @@ class TastyTradeBroker(BrokerBase):
                 self.validate_session()
             return OrderResult(False, order_id, 'rejected', message=msg)
 
-    def get_order_status(self, order_id: str) -> OrderResult:
+    def get_order_status(
+        self,
+        order_id: str,
+        *,
+        priority: str = 'NORMAL',
+        op: str = 'get_order',
+    ) -> OrderResult:
         try:
             for o in self.get_live_orders_cached():
                 if str(o.id) == str(order_id):
                     return _order_result_from_placed_order(o)
             order = self._run(
                 self.account.get_order(self.session, int(order_id)),
-                priority='NORMAL',
-                op='get_order',
+                priority=priority,
+                op=op,
             )
             return _order_result_from_placed_order(order)
         except Exception as exc:

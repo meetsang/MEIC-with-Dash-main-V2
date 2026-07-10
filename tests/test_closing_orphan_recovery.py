@@ -85,7 +85,7 @@ class TestClosingOrphanRecovery(unittest.TestCase):
 
             broker = MagicMock()
 
-            def _order_status(oid):
+            def _order_status(oid, **kwargs):
                 if str(oid) == '478000002':
                     return OrderResult(True, '478000002', 'filled', filled_price=0.12)
                 return OrderResult(False, '', 'unknown')

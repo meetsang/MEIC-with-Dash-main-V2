@@ -51,7 +51,7 @@ class TestJul9MissingLegScenario(unittest.TestCase):
     def _broker_missing_long(self):
         broker = MagicMock()
 
-        def status(_oid):
+        def status(_oid, **kwargs):
             return OrderResult(
                 True,
                 '482348463',
