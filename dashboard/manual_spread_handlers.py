@@ -13,6 +13,11 @@ from manual_spread import entry as ms_entry
 from blocks.stop import state as state_mod
 from blocks.stop.close_fills import slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
+from dashboard.runtime_display import (
+    breach_readiness_label,
+    decorate_entry_label,
+    quote_source_label,
+)
 from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
 from blocks.stop.stop_math import stop_multiplier_for_state
 
@@ -110,6 +115,7 @@ def build_manual_trades(
                 status,
                 close_mechanism,
                 strategy=entry.get('strategy'),
+                trade=trade,
             )
         )
 
@@ -133,7 +139,10 @@ def build_manual_trades(
         if status == 'pending_fill':
             entry_label = f'lim {limit_credit:.2f} ({filled}/{quantity})'
         elif filled > 0:
-            entry_label = _leg_fill_label(net, short_fill, long_fill)
+            entry_label = decorate_entry_label(
+                trade,
+                _leg_fill_label(net, short_fill, long_fill),
+            )
 
         exit_label = ''
         if exit_short is not None:
@@ -184,6 +193,8 @@ def build_manual_trades(
             'stop_order_id': stop_order_id,
             'state': row_state,
             'status': status,
+            'entry_quote_source_label': quote_source_label(trade),
+            'breach_readiness_label': breach_readiness_label(trade),
             '_filename': trade.get('_filename', ''),
             'entry_time': trade_entry_time_iso(trade),
             'exit_time': trade_exit_time_iso(trade),
