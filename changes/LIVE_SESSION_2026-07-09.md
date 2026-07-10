@@ -59,57 +59,44 @@ Put spreads showed **2× breach** on the grid even when positions were profitabl
 
 ---
 
-## 2. SPX price out of sync ~11 AM (operator correction)
+## 2. SPX / PCS out of sync ~11:20–11:30 AM (operator correction)
 
 ### Operator symptom (revised)
 
-**Not** the 08:36 cold-start gap. Around **11 AM**, after the 11-00 entry and **11-00_C** exchange stop (~11:05), both **PCS marks and SPX** on the dashboard looked out of sync with the broker.
+**Not** the 08:36 cold-start gap, and **not** exactly at 11:00. Around **11:20–11:30 AM**, with **11-00_C already stopped** (~11:05), **PCS marks and SPX** on the dashboard looked out of sync with the broker.
 
-### What the data shows
+### What the data shows (11:20–11:39 CT)
 
-| Source | 10:59–11:10 CT |
-|--------|----------------|
-| `SPX_polls.csv` | Continuous ticks, **no gaps >30s**. `10:59:21 → 7517.625`; `11:00:01 → 7520.7`; `11:05:07 → 7521.74` (matches 11-00_C stop JSON `spx_price_at_event`) |
-| `SPX_1m.csv` | `10:59` bar close `7520.7`; `11:05` close `7519.2` — up to ~1 min behind live polls |
+| Source | Finding |
+|--------|---------|
+| `SPX_polls.csv` | **1,413 ticks**, **0 gaps >30s**, range **7524.2 – 7529.4** |
+| `SPX_1m.csv` | 1-minute bar closes track polls within ~1 min (e.g. `11:25` close `7525.6`) |
 | `mqtt_cache_health.json` | Connected, 251 prices, `stale: false` end of day |
-| `options_quotes.csv` | Trade-leg snapshots every **180s** — first 11-00 P snapshot at `11:02:10`, not at fill time |
+| `options_quotes.csv` | 180s snapshots — at `11:20` 11-00 P legs still show inflated spread (P7495 **$2.85** / P7470 **$1.08** → ~$1.77 vs ~$1.00 healthy later) |
 
-**SPX MQTT was healthy at 11 AM.** There is no evidence of a multi-minute SPX stream failure during this window.
+**SPX MQTT was healthy at 11:20–11:30.** No evidence of a multi-minute SPX stream failure in this window.
 
-### What actually caused the “out of sync” feeling at 11 AM
+### What actually caused the “out of sync” feeling
 
-The operator was seeing **two different data paths on one screen**:
+The operator was seeing **two different data paths on one screen**, now **~20–30 minutes after** the false breach:
 
-| Dashboard area | Data source at 11 AM | What it showed |
-|----------------|----------------------|----------------|
-| **SPX header** | Live MQTT (`live_prices` / index topic) | Correct ~7520 |
-| **PCS spread / PnL / breach** | Frozen `breach_watch` from false breach on **11-00_P** | Spread **$2.90**, 2× breach, wrong PnL |
+| Dashboard area | Data source | What it showed |
+|----------------|-------------|----------------|
+| **SPX header** | Live MQTT (`live_prices` / index topic) | ~7524–7529 ✓ |
+| **PCS spread / PnL / breach** | Frozen `breach_watch` from false breach on **11-00_P** at `10:59:21` | Spread **$2.90**, 2× breach, wrong PnL |
 
-So SPX looked fine while PCS looked broken — not because SPX lagged, but because **option display was pinned to a stale snapshot** from the instant of fill.
+**11-00_C** was already **closed** (exchange stop @ 11:05). The grid mixed a **closed call** with a **put still open** in `close_only_mode` from the false breach — so the PCS side of the picture looked especially wrong while SPX header looked fine.
 
 **Contributing factors:**
 
-1. **11-00_P false breach** at `10:59:21` froze `breach_watch` (see §5).
-2. **11-00_C** exchange stop at `11:05` closed the call side — grid now mixes a **closed CCS** with a **PCS still in `close_only_mode`** from the false breach.
-3. **Dashboard overlay** (`dashboard/server.py` ~419–427): when `breach_watch` says both legs have MQTT, `cur_short` is derived from frozen `spread_mid` instead of live leg marks.
-4. **Quote-type mismatch** (minor): streamer uses bid/ask mid; broker UI often shows last trade — a few SPX points is normal and does not explain the PCS breach display.
-
-### Ladder snapshots vs live at 11 AM
-
-`spx_ladder_quotes.csv` is 60s-sampled, so it also showed **inflated spreads** right after fill (not tick-accurate):
-
-| Time (CT) | P7495 mid | P7470 mid | Spread |
-|-----------|-----------|-----------|--------|
-| `10:58:57` | 4.55 | 1.775 | 2.775 |
-| `10:59:57` | 3.95 | 1.475 | 2.475 |
-| `11:02:10` (options_quotes) | 4.15 | 1.625 | 2.525 |
-| `11:41:12` | 1.725 | 0.725 | **~1.00** (healthy) |
-
-The breach engine used MQTT at fill time; ladder CSV confirms option mids were still settling for minutes after entry.
+1. **11-00_P false breach** at `10:59:21` froze `breach_watch` for the rest of the day (see §6).
+2. **Dashboard overlay** (`dashboard/server.py` ~419–427): derives `cur_short` from frozen `spread_mid` instead of live leg marks.
+3. **Ladder / options_quotes** at 11:20 still showed **elevated put mids** (settling after open volatility) — reinforces wrong PCS display even though true spread was recovering.
+4. **Quote-type mismatch** (minor for SPX): streamer uses bid/ask **mid**; broker UI often shows **last trade** — a few SPX points is normal and does not explain the PCS breach column.
 
 ### Conclusion
 
-Morning “SPX out of sync at 11 AM” was **a display-layer mismatch**: live SPX header vs frozen PCS overlay from false breach — **not** an SPX stream outage. Settlement captured correctly at 15:00: **7542.895**.
+“SPX out of sync at 11:20–11:30” was still **primarily a display-layer mismatch**: live SPX header vs frozen PCS overlay from the 10:59 false breach, with CCS already stopped. **Not** an SPX stream outage. Settlement captured correctly at 15:00: **7542.895**.
 
 ---
 
@@ -140,17 +127,9 @@ Morning “SPX out of sync at 11 AM” was **a display-layer mismatch**: live SP
 
 The **live MQTT cache** for ladder symbols updates every tick (`market_data/spx_ladder.py` + streamer). Only the **CSV writer** samples at 60s. Research/history files trade disk space for a manageable grid.
 
-### Can we dump ticks as-is?
+### Operator decision: keep 60s sampling
 
-**Yes, architecturally** — but it is a deliberate design choice today:
-
-1. Add a tick listener on ladder symbols (same pattern as `SymbolState.record_tick` for GLD/SPX).
-2. New schema: `event_ts` + strike + side + symbol + mid (not `snapshot_ts`).
-3. File rotation / compression — 75K rows becomes millions per day.
-4. Optional: keep 60s snapshots for light queries; add `spx_ladder_ticks.csv` for full firehose.
-5. Config flag (e.g. `SPX_LADDER_TICK_MODE=1`) and disk budget review.
-
-See [MARKET_DATA_EXPANDED_WATCH_DESIGN.md](MARKET_DATA_EXPANDED_WATCH_DESIGN.md) for the sidecar ladder design context.
+**Leave ladder at 1-minute snapshots for now.** The live MQTT cache still updates every tick for trading and monitoring; only the research CSV is sampled. Tick-dump mode is deferred unless disk/query needs change later.
 
 ### Actual gaps found
 
@@ -316,7 +295,45 @@ Entry terminated: 01-45 P: no in-band credit (empty scan)
 1. **Broker cooldown** blocked TastyTrade REST calls during the 01-45 window.
 2. Entry scan got **0/67 option quotes** → empty credit scan.
 3. Both **01-45 C** and **01-45 P** failed pick after retries.
-4. `RuntimeWarning: coroutine 'get_market_data_by_type' was never awaited` at `spread_scan.py:302` is a **misleading stack line** (points at a `yield` in `_iter_spread_legs`). The real failure is REST cooldown; MQTT fallback also logged failures at `13:46:27` / `13:46:33`.
+4. `RuntimeWarning: coroutine 'get_market_data_by_type' was never awaited` at `spread_scan.py:302` is a **misleading stack line** (points at a `yield` in `_iter_spread_legs`). The real failure is REST cooldown; MQTT fallback for SPX worked but **not for option scan** (see below).
+
+### Operator question: is cooldown because we're streaming too much?
+
+**Partly related, but different channels.**
+
+| Channel | What happened Jul 9 |
+|---------|---------------------|
+| **MQTT streamer** | Separate websocket path — kept running. At 13:46:27 SPX **MQTT fallback succeeded** when REST was blocked. |
+| **REST API** | TastyTrade returned **`429 Too Many Requests`** (nginx). `runtime/broker_cooldown.json` records this. Cooldown = **5 minutes** blocking NORMAL/LOW REST calls. |
+
+So the throttle was **HTTP REST rate limiting**, not “too many MQTT subscriptions.” Streaming ~231 symbols did not directly trigger the 429.
+
+**What piled up REST calls:** entry scans (`fetch_option_mids_api` in batches of 40), fill sync (`get_order_status` every ~3s per trade), stop monitor order polls, live orders cache, etc. — **multiple processes sharing one broker REST budget** (`common/rest_limiter.py` caps ~1 req/s per process, but aggregate still hit TT’s limit).
+
+### Operator question: use streamer / ladder for entry scan fallback?
+
+**Yes — but only live cache with freshness gates, not stale data.**
+
+Today MEIC entry defaults to `quote_source='api'` (`blocks/entry/config.py`):
+
+| Step | REST (`api`, default) | MQTT (`mqtt`, legacy) |
+|------|-------------------------|------------------------|
+| SPX price | REST; **MQTT fallback** if REST empty | MQTT only |
+| Option mids for scan | REST batches via `_fetch_option_mids_robust` | Register symbols → `broker.get_option_price()` from **live cache** |
+| During cooldown | **All REST blocked** → **0/67 quotes** | Would still read cache (if symbols subscribed) |
+
+At 01-45, REST was in cooldown → scan got **0/67** even though streamer had live prices. SPX fell back to MQTT; **option scan did not.**
+
+**Recommended direction (backlog #5):**
+
+1. On REST cooldown or low coverage, **auto-fallback to live MQTT cache** for scan legs (reuse `quote_source='mqtt'` path or hybrid).
+2. **Freshness gates** (operator concern about stale data is valid — see 11-00_P false breach):
+   - Require price age **< N seconds** (e.g. 5–10s).
+   - Require symbol **actively subscribed** in streamer.
+   - Reject spread if **> N× entry credit band** sanity check before pick.
+3. **Do not** use the 60s `spx_ladder_quotes.csv` file for entry — that is sampled history, not live trading input.
+
+The sidecar ladder already maintains a **live** ~197-strike cache updated per MQTT tick; entry should consume that cache during REST outages, with the same anti-stale rules we need for breach detection.
 
 ### 02-00
 
@@ -365,8 +382,8 @@ Files: `dashboard/server.py`, `dashboard/templates/index.html`, `blocks/entry/ru
 | 2 | Keep `breach_watch` fresh during exit jobs; fix dashboard stale spread overlay | P0 |
 | 3 | Dashboard **Expired** status for `expiry_settlement` | P1 (operator request) |
 | 4 | 01-15_P long-fill sync — infer long from `short − credit` when broker omits leg | P1 |
-| 5 | 01-45 broker cooldown + ensure MQTT fallback works during cooldown | P1 |
-| 6 | Optional: `spx_ladder_ticks.csv` tick-dump mode (vs 60s sampling) | P2 |
+| 5 | 01-45: MQTT cache fallback for entry scan during REST cooldown + freshness gates | P1 |
+| 6 | ~~`spx_ladder_ticks.csv` tick-dump~~ — **deferred**; keep 60s sampling per operator | — |
 | 7 | Session plan window times + Save All / Apply on all UI | **Done** 2026-07-09 |
 
 ---
@@ -378,7 +395,8 @@ Files: `dashboard/server.py`, `dashboard/templates/index.html`, `blocks/entry/ru
 | False breach trade | `trades/active/MEIC_IC/11-00_P_20260709T105904.json` |
 | Missing stop trade | `trades/active/MEIC_IC/01-15_P_20260709T131405.json` |
 | 01-45 failure | Terminal launcher log ~13:46 CT; `blocks/entry/spread_scan.py` |
-| SPX health ~11am | `data/2026-07-09/SPX_polls.csv`, `SPX_1m.csv` |
+| SPX health ~11:20–11:30 | `data/2026-07-09/SPX_polls.csv`, `SPX_1m.csv` |
+| REST cooldown evidence | `runtime/broker_cooldown.json` (429 Too Many Requests) |
 | Ladder sampling | `market_data/spx_ladder_snapshots.py`, `common/market_watch.py` |
 | Fill sync / stop arm | `blocks/stop/fill_sync.py`, `blocks/stop/monitor.py` |
 | SPX settlement | `data/2026-07-09/spx_mqtt_settlement.json` |
