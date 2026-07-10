@@ -53,6 +53,7 @@ class MqttPriceCache:
         self._prices: Dict[str, float] = {}
         self._quote_snapshots: Dict[str, QuoteSnapshot] = {}
         self._pending_meta: Dict[str, dict] = {}
+        self._last_event_kind: Dict[str, str] = {}
         self._current_stream_session_id: Optional[str] = None
         self._last_heartbeat_at: float = 0.0
         self._day_volumes: Dict[str, int] = {}
@@ -323,6 +324,7 @@ class MqttPriceCache:
         if event_kind == REPLAY_EVENT_KIND:
             with self._lock:
                 self._last_symbol_at[symbol] = now
+                self._last_event_kind[symbol] = REPLAY_EVENT_KIND
             return
         if is_genuine_event_kind(event_kind):
             self._commit_genuine_quote(symbol, price, meta, now)
@@ -350,6 +352,7 @@ class MqttPriceCache:
             self._quote_snapshots[symbol] = snapshot
             self._prices[symbol] = price
             self._last_symbol_at[symbol] = source_epoch
+            self._last_event_kind[symbol] = snapshot.event_kind
         self._notify_tick_listeners(symbol, price, source_epoch)
 
     def set_override(self, symbol: str, price: float) -> None:
@@ -408,12 +411,25 @@ class MqttPriceCache:
                     return self._prices[k]
         return None
 
+    def last_event_kind(self, symbol: str) -> Optional[str]:
+        keys = self._lookup_keys(symbol)
+        with self._lock:
+            for k in keys:
+                if k in self._last_event_kind:
+                    return self._last_event_kind[k]
+        return None
+
+    def current_stream_session_id(self) -> Optional[str]:
+        with self._lock:
+            return self._current_stream_session_id
+
     def get_quote(
         self,
         symbol: str,
         *,
         require_current_session: bool = True,
         allow_override: bool = False,
+        allow_pre_subscription: bool = False,
     ) -> Optional[QuoteSnapshot]:
         """Trading quote with provenance — freshness from source_event_epoch."""
         keys = self._lookup_keys(symbol)
@@ -443,7 +459,7 @@ class MqttPriceCache:
                 if require_current_session and current_session:
                     if snapshot.stream_session_id != current_session:
                         continue
-                if quote_is_pre_subscription(snapshot):
+                if not allow_pre_subscription and quote_is_pre_subscription(snapshot):
                     continue
                 return snapshot
         return None

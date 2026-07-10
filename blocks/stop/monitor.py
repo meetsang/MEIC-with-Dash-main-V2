@@ -632,6 +632,7 @@ class StopMonitor:
                         daemon=True,
                     )
                     t.start()
+            self._refresh_breach_watch_display_only()
             self._maybe_merge_disk_stop_state()
             state_mod.save_state(self.json_path, self.state)
             return
@@ -753,8 +754,36 @@ class StopMonitor:
     def current_stop_price(self) -> float:
         return spread_breach_threshold(self.state)
 
-    def _refresh_breach_watch(self, streamer_stale: bool, *, mqtt_cache_stale: bool = False) -> None:
+    def _mqtt_cache_stale(self) -> bool:
+        from common.mqtt_prices import mqtt_cache_is_stale
+        return mqtt_cache_is_stale(self.prices)
+
+    def _refresh_breach_watch_display_only(self) -> None:
+        """Refresh breach_watch snapshot without evaluating breach transitions."""
+        streamer_stale = self._streamer_prices_stale()
+        mqtt_cache_stale = self._mqtt_cache_stale()
+        self._refresh_breach_watch(streamer_stale, mqtt_cache_stale=mqtt_cache_stale, evaluate_transitions=False)
+
+    def _refresh_breach_watch(
+        self,
+        streamer_stale: bool,
+        *,
+        mqtt_cache_stale: bool = False,
+        evaluate_transitions: bool = True,
+    ) -> None:
         """Persist spread vs software breach threshold; rate-limited diagnostics."""
+        from blocks.stop.breach import spread_breach_triggered
+        from blocks.stop.breach_quote import (
+            evaluate_quote_pair_readiness,
+            readiness_to_watch_fields,
+            reset_breach_confirmation,
+            update_breach_confirmation,
+        )
+        from blocks.stop.breach_config import BREACH_CONFIRM_OBSERVATIONS
+        from blocks.stop.fill_reference import ensure_fill_reference_epoch
+        from blocks.stop.stop_math import spread_breach_threshold
+
+        ensure_fill_reference_epoch(self.state)
         short_sym = self.state['short_leg']['symbol']
         long_sym = self.state['long_leg']['symbol']
         if mqtt_cache_stale:
@@ -763,6 +792,32 @@ class StopMonitor:
         else:
             short_p = self.prices.get_market_mid(short_sym)
             long_p = self.prices.get_market_mid(long_sym)
+
+        readiness = evaluate_quote_pair_readiness(
+            self.state,
+            self.prices,
+            streamer_stale=streamer_stale,
+            mqtt_cache_stale=mqtt_cache_stale,
+        )
+        if evaluate_transitions and readiness.software_breach_ready and readiness.spread_mid is not None:
+            threshold = spread_breach_threshold(self.state)
+            spread_breached = spread_breach_triggered(readiness.spread_mid, threshold)
+            confirmation = update_breach_confirmation(
+                self.state,
+                readiness,
+                spread_breached=spread_breached,
+            )
+        else:
+            if evaluate_transitions:
+                reset_breach_confirmation(self.state)
+            confirmation = {
+                'breach_confirmation_count': 0,
+                'breach_confirmation_required': BREACH_CONFIRM_OBSERVATIONS,
+                'breach_confirmation_reason': readiness.quote_pair_reason,
+                'software_breach_confirmed': False,
+            }
+
+        readiness_fields = readiness_to_watch_fields(readiness, confirmation)
         watch = build_breach_watch_snapshot(
             self.state,
             short_p=short_p,
@@ -770,6 +825,7 @@ class StopMonitor:
             streamer_stale=streamer_stale,
             mqtt_cache_stale=mqtt_cache_stale,
             now_iso=state_mod.now_iso(),
+            readiness=readiness_fields,
         )
         self.state['breach_watch'] = watch
         log_breach_watch(self, watch)

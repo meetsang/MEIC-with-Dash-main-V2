@@ -376,6 +376,7 @@ def mark_resolved(
     phase: str,
     *,
     now: Optional[float] = None,
+    broker_filled_at: Optional[float] = None,
 ) -> None:
     fs = ensure_fill_sync(state)
     ts = now if now is not None else time.time()
@@ -385,6 +386,9 @@ def mark_resolved(
     if phase == 'resolved_estimated':
         fs['audit_due_epoch'] = ts + FILL_ESTIMATE_AUDIT_DELAY_SEC
         fs['audit_attempted'] = False
+    from blocks.stop.fill_reference import ensure_fill_reference_epoch
+
+    ensure_fill_reference_epoch(state, broker_filled_at=broker_filled_at)
 
 
 def should_poll_now(state: Dict[str, Any], *, force: bool = False) -> bool:

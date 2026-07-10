@@ -57,6 +57,9 @@ def _mock_prices():
     prices.get_spx.return_value = 7483.0
     prices.get_market_mid = MagicMock(return_value=0.20)
     prices.get = prices.get_market_mid
+    prices.get_quote = MagicMock(return_value=None)
+    prices.current_stream_session_id = MagicMock(return_value=None)
+    prices.last_event_kind = MagicMock(return_value=None)
     prices.kill_switch = False
     prices.is_stale.return_value = False
     prices.start = MagicMock()

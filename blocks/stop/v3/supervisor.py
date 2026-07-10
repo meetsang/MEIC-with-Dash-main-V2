@@ -419,12 +419,14 @@ class StopSupervisor:
             return False, 'stale_mqtt'
         if wstatus == 'stale':
             return False, 'stale_mqtt' if watch.get('mqtt_cache_stale') else 'waiting_mqtt'
-        if wstatus == 'no_prices':
-            return False, 'waiting_mqtt'
-
-        short_sym = st['short_leg']['symbol']
-        long_sym = st['long_leg']['symbol']
-        if mon.prices.get_market_mid(short_sym) is None or mon.prices.get_market_mid(long_sym) is None:
+        if not watch.get('software_breach_ready', False):
+            reason = str(watch.get('quote_pair_reason') or 'waiting_mqtt')
+            if reason == 'fill_grace':
+                return False, 'fill_grace'
+            if reason in ('missing_quote', 'no_prices', 'pre_subscription', 'pre_fill', 'old_session', 'replay_event'):
+                return False, 'waiting_mqtt'
+            if reason in ('source_stale', 'pair_skew', 'nonpositive_price', 'negative_spread', 'spread_over_width'):
+                return False, 'waiting_mqtt'
             return False, 'waiting_mqtt'
 
         return True, 'armed'
@@ -555,6 +557,9 @@ class StopSupervisor:
 
         if self.exit_pool.has_job(slot.path):
             slot.exit_job_id = 'active'
+            mon._refresh_breach_watch_display_only()
+            slot.state = mon.state
+            save_slot(slot)
             return
 
         streamer_stale = mon._streamer_prices_stale()
@@ -662,6 +667,11 @@ class StopSupervisor:
 
         if self.exit_pool.has_job(slot.path):
             slot.exit_job_id = 'active'
+            if slot.status == 'open':
+                mon = self._legacy_monitor(slot)
+                mon._refresh_breach_watch_display_only()
+                slot.state = mon.state
+            save_slot(slot)
             return
 
         route = resolve_exit_recovery_route(slot)
