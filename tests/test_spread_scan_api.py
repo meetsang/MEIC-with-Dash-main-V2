@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
+
+import pytest
 
 from common.symbols import build_tastytrade_symbol, to_tastytrade
 from blocks.entry.spread_scan import scan_credit_spreads
 from tests.mock_broker import MockBroker
 
+
+@pytest.fixture(autouse=True)
+def _disable_mqtt_entry_fallback():
+    with patch('blocks.entry.entry_scan_config.ENTRY_MQTT_FALLBACK_ENABLED', False):
+        yield
 
 def test_manual_scan_api_returns_closest_to_target():
     broker = MockBroker()

@@ -807,6 +807,7 @@ class TastyTradeBroker(BrokerBase):
 
     def fetch_option_mids_api(self, symbols: List[str]) -> Dict[str, float]:
         from tastytrade.market_data import get_market_data_by_type
+        from common.rest_operations import OPERATION_ENTRY_MARKET_DATA_REST
 
         # REST /market-data/by-type expects Schwab/OCC symbols, not DXLink streamer symbols.
         tt_keys = list(dict.fromkeys(to_tastytrade(s) for s in symbols if s))
@@ -816,7 +817,11 @@ class TastyTradeBroker(BrokerBase):
             batch = api_symbols[i:i + 100]
             try:
                 items = _retry_on_transient(
-                    lambda b=batch: self._run(get_market_data_by_type(self.session, options=b))
+                    lambda b=batch: self._run(
+                        get_market_data_by_type(self.session, options=b),
+                        priority='NORMAL',
+                        op=OPERATION_ENTRY_MARKET_DATA_REST,
+                    )
                 )
             except Exception as exc:
                 log.warning('fetch_option_mids_api batch failed: %s', exc)

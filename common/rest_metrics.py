@@ -17,6 +17,7 @@ KNOWN_OPERATIONS = (
     'pending_fill_status',
     'working_stop_reconcile',
     'entry_market_data',
+    'entry_market_data_rest',
     'spread_close_status',
     'long_close_status',
     'get_order',
