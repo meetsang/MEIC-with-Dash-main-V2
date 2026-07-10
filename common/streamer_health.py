@@ -27,6 +27,7 @@ def write_health(
     total_subscribed_symbols: int = 0,
     ladder_last_update: Optional[str] = None,
     ladder_last_error: Optional[str] = None,
+    stream_session_id: Optional[str] = None,
 ) -> None:
     payload = {
         'ts': datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds'),
@@ -38,6 +39,7 @@ def write_health(
         'total_subscribed_symbols': total_subscribed_symbols or symbols_subscribed,
         'ladder_last_update': ladder_last_update,
         'ladder_last_error': ladder_last_error,
+        'stream_session_id': stream_session_id,
     }
     path = health_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)

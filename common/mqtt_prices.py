@@ -15,7 +15,14 @@ TradeSizeListener = Callable[[str, int, float], None]
 import paho.mqtt.client as mqtt
 
 from common.broker_factory import get_mqtt_topic_prefix
+from common.market_quote import (
+    REPLAY_EVENT_KIND,
+    QuoteSnapshot,
+    is_genuine_event_kind,
+    quote_is_pre_subscription,
+)
 from common.market_watch import TRADE_SIZE_TOPIC_SUFFIX, VOLUME_TOPIC_SUFFIX
+from common.mqtt_stream_provenance import HEARTBEAT_TOPIC, META_TOPIC_SUFFIX, SESSION_TOPIC
 from common.symbols import mqtt_topic_symbol, to_tastytrade
 from common.trades_layout import ops_path
 from streaming import config as stream_config
@@ -44,6 +51,10 @@ class MqttPriceCache:
         self._prefix = topic_prefix or get_mqtt_topic_prefix() or stream_config.TOPIC_PREFIX
         self._stale_threshold_sec = float(stale_threshold_sec)
         self._prices: Dict[str, float] = {}
+        self._quote_snapshots: Dict[str, QuoteSnapshot] = {}
+        self._pending_meta: Dict[str, dict] = {}
+        self._current_stream_session_id: Optional[str] = None
+        self._last_heartbeat_at: float = 0.0
         self._day_volumes: Dict[str, int] = {}
         self._overrides: Dict[str, float] = {}
         self._last_symbol_at: Dict[str, float] = {}
@@ -235,6 +246,13 @@ class MqttPriceCache:
             now = time.time()
             payload = msg.payload.decode()
 
+            if symbol == SESSION_TOPIC:
+                self._handle_session(payload, now)
+                return
+            if symbol == HEARTBEAT_TOPIC:
+                self._handle_heartbeat(payload, now)
+                return
+
             if symbol.endswith(TRADE_SIZE_TOPIC_SUFFIX):
                 base = symbol[: -len(TRADE_SIZE_TOPIC_SUFFIX)]
                 size = int(float(payload))
@@ -250,14 +268,89 @@ class MqttPriceCache:
                     self._last_msg_at = now
                 return
 
+            if symbol.endswith(META_TOPIC_SUFFIX):
+                base = symbol[: -len(META_TOPIC_SUFFIX)]
+                self._handle_meta(base, payload, now)
+                return
+
             price = float(payload)
-            with self._lock:
-                self._prices[symbol] = price
-                self._last_symbol_at[symbol] = now
-                self._last_msg_at = now
-            self._notify_tick_listeners(symbol, price, now)
-        except (ValueError, UnicodeDecodeError):
+            self._handle_scalar(symbol, price, now)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             pass
+
+    def _handle_session(self, payload: str, now: float) -> None:
+        data = json.loads(payload)
+        session_id = data.get('stream_session_id')
+        with self._lock:
+            if session_id:
+                self._current_stream_session_id = session_id
+            self._last_msg_at = now
+            self._last_heartbeat_at = now
+
+    def _handle_heartbeat(self, payload: str, now: float) -> None:
+        data = json.loads(payload)
+        session_id = data.get('stream_session_id')
+        with self._lock:
+            if session_id and not self._current_stream_session_id:
+                self._current_stream_session_id = session_id
+            self._last_msg_at = now
+            self._last_heartbeat_at = now
+
+    def _handle_meta(self, symbol: str, payload: str, now: float) -> None:
+        meta = json.loads(payload)
+        event_kind = str(meta.get('event_kind', ''))
+        session_id = meta.get('stream_session_id')
+        with self._lock:
+            if session_id and not self._current_stream_session_id:
+                self._current_stream_session_id = session_id
+            self._pending_meta[symbol] = meta
+            self._last_msg_at = now
+            price = self._prices.get(symbol)
+        if price is not None and is_genuine_event_kind(event_kind):
+            self._commit_genuine_quote(symbol, price, meta, now)
+
+    def _handle_scalar(self, symbol: str, price: float, now: float) -> None:
+        with self._lock:
+            self._prices[symbol] = price
+            self._last_msg_at = now
+            meta = self._pending_meta.pop(symbol, None)
+        if meta is None:
+            with self._lock:
+                self._last_symbol_at[symbol] = now
+            self._notify_tick_listeners(symbol, price, now)
+            return
+        event_kind = str(meta.get('event_kind', ''))
+        if event_kind == REPLAY_EVENT_KIND:
+            with self._lock:
+                self._last_symbol_at[symbol] = now
+            return
+        if is_genuine_event_kind(event_kind):
+            self._commit_genuine_quote(symbol, price, meta, now)
+
+    def _commit_genuine_quote(
+        self,
+        symbol: str,
+        price: float,
+        meta: dict,
+        now: float,
+    ) -> None:
+        source_epoch = float(meta['source_event_epoch'])
+        snapshot = QuoteSnapshot(
+            symbol=symbol,
+            price=price,
+            source_event_epoch=source_epoch,
+            received_epoch=now,
+            published_epoch=float(meta.get('published_epoch', now)),
+            stream_session_id=str(meta.get('stream_session_id', '')),
+            subscription_epoch=float(meta.get('subscription_epoch', 0.0)),
+            sequence=int(meta.get('sequence', 0)),
+            event_kind=str(meta.get('event_kind', '')),
+        )
+        with self._lock:
+            self._quote_snapshots[symbol] = snapshot
+            self._prices[symbol] = price
+            self._last_symbol_at[symbol] = source_epoch
+        self._notify_tick_listeners(symbol, price, source_epoch)
 
     def set_override(self, symbol: str, price: float) -> None:
         """Inject a synthetic mid (breach simulation tests only)."""
@@ -315,6 +408,46 @@ class MqttPriceCache:
                     return self._prices[k]
         return None
 
+    def get_quote(
+        self,
+        symbol: str,
+        *,
+        require_current_session: bool = True,
+        allow_override: bool = False,
+    ) -> Optional[QuoteSnapshot]:
+        """Trading quote with provenance — freshness from source_event_epoch."""
+        keys = self._lookup_keys(symbol)
+        with self._lock:
+            if allow_override:
+                for k in keys:
+                    if k in self._overrides:
+                        price = self._overrides[k]
+                        now = time.time()
+                        return QuoteSnapshot(
+                            symbol=k,
+                            price=price,
+                            source_event_epoch=now,
+                            received_epoch=now,
+                            published_epoch=now,
+                            stream_session_id='override',
+                            subscription_epoch=0.0,
+                            sequence=0,
+                            event_kind='override',
+                            source='override',
+                        )
+            current_session = self._current_stream_session_id
+            for k in keys:
+                snapshot = self._quote_snapshots.get(k)
+                if snapshot is None:
+                    continue
+                if require_current_session and current_session:
+                    if snapshot.stream_session_id != current_session:
+                        continue
+                if quote_is_pre_subscription(snapshot):
+                    continue
+                return snapshot
+        return None
+
     def get_spx(self) -> Optional[float]:
         return self.get('SPX')
 
@@ -343,6 +476,15 @@ class MqttPriceCache:
                 'prefix': self._prefix,
                 'topics': [f'{self._prefix}#', f'{self._prefix}MEIC_Close_All'],
                 'price_count': len(self._prices),
+                'quote_count': len(self._quote_snapshots),
+                'stream_session_id': self._current_stream_session_id,
+                'last_heartbeat_at': (
+                    None
+                    if self._last_heartbeat_at <= 0
+                    else datetime.fromtimestamp(self._last_heartbeat_at, tz=timezone.utc)
+                    .astimezone()
+                    .isoformat(timespec='seconds')
+                ),
                 'last_error': self._last_error,
             }
 
