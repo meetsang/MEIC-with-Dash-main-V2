@@ -31,6 +31,15 @@ def _is_after_market_close_for_tests(now: datetime | None = None) -> bool:
 
 
 @pytest.fixture(autouse=True)
+def _clear_broker_cooldown_file():
+    """Prevent runtime/broker_cooldown.json from leaking into unrelated tests."""
+    from common import broker_cooldown
+    broker_cooldown.clear_cooldown()
+    yield
+    broker_cooldown.clear_cooldown()
+
+
+@pytest.fixture(autouse=True)
 def _session_before_market_close(request):
     """Stop-monitor broker tests assume regular session; avoid 3 PM CT flake."""
     mod = getattr(request.node.module, '__name__', '')
