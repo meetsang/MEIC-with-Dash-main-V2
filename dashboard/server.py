@@ -49,6 +49,12 @@ from gex_handlers import register_gex_routes
 from common.trade_pick import pick_best_trade
 from blocks.stop.close_fills import display_close_prices, slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
+from dashboard.runtime_display import (
+    breach_readiness_label,
+    decorate_entry_label,
+    is_expired_trade,
+    quote_source_label,
+)
 from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
 from blocks.stop.stop_math import stop_multiplier_for_state
 from brokers.base import BrokerBase
@@ -198,8 +204,11 @@ def _slot_state_from_trade(
     close_mechanism: Optional[str],
     *,
     strategy: Optional[str] = None,
+    trade: Optional[dict] = None,
 ) -> str:
     if status == 'closed':
+        if is_expired_trade(trade, close_mechanism):
+            return 'expired'
         if close_mechanism in KILL_MECHANISMS:
             if strategy == STRATEGY_MANUAL:
                 return 'closed'
@@ -372,6 +381,7 @@ def _session_display_state(row, trade) -> str:
                 trade_status,
                 trade.get('close_mechanism'),
                 strategy=entry.get('strategy'),
+                trade=trade,
             )
     if row.state == 'entering':
         return 'entering'
@@ -383,6 +393,7 @@ def _session_display_state(row, trade) -> str:
             trade.get('status', 'unknown'),
             trade.get('close_mechanism'),
             strategy=entry.get('strategy'),
+            trade=trade,
         )
     if row.state == 'entered':
         return 'entered'
@@ -434,7 +445,10 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
     active_stop = _resolve_active_stop(trade)
     stop_order_id = active_stop.get('order_id') or ''
 
-    entry_label = _leg_fill_label(net_credit, short_fill, long_fill)
+    entry_label = decorate_entry_label(
+        trade,
+        _leg_fill_label(net_credit, short_fill, long_fill),
+    )
     exit_label = ''
     if exit_short is not None:
         le = float(long_close) if long_close is not None else float(cur_long)
@@ -479,6 +493,8 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
         'limit_price': active_stop.get('limit_price'),
         'stop_label': _stop_price_label(active_stop),
         'close_mechanism': close_mechanism or '',
+        'entry_quote_source_label': quote_source_label(trade),
+        'breach_readiness_label': breach_readiness_label(trade),
         '_filename': trade.get('_filename', ''),
         **breach_fields,
     })
@@ -575,6 +591,7 @@ def build_summary():
                 trade.get('status', 'unknown'),
                 trade.get('close_mechanism'),
                 strategy=entry.get('strategy'),
+                trade=trade,
             )
         else:
             slot['state'] = 'pending'

@@ -136,6 +136,7 @@
   .state-killed   { color:#ef4444; }
   .state-paused   { color:#eab308; }
   .state-breached { color:#f97316; }
+  .state-expired  { color:#a78bfa; }
 
   .state-bg-pending  { }
   .state-bg-open     { background:rgba(34,197,94,.06); }
@@ -144,6 +145,7 @@
   .state-bg-killed   { background:rgba(239,68,68,.08); }
   .state-bg-paused   { background:rgba(234,179,8,.06); }
   .state-bg-breached { background:rgba(249,115,22,.08); }
+  .state-bg-expired  { background:rgba(167,139,250,.08); }
 
   /* Manual spread — scan candidates (Bootstrap text-muted is too dark on #1a1d27) */
   #ms-candidates tr.ms-cand-row td {
@@ -220,6 +222,7 @@
   #strategy-manual #ms-active-tbody .ms-state.state-open { color: #4ade80; }
   #strategy-manual #ms-active-tbody .ms-state.state-closing { color: #60a5fa; }
   #strategy-manual #ms-active-tbody .ms-state.state-closed { color: #94a3b8; }
+  #strategy-manual #ms-active-tbody .ms-state.state-expired { color: #a78bfa; }
 
   /* GEX tab */
   .gex-regime-banner {
@@ -1170,11 +1173,13 @@ const LOTS  = ['11-00','12-00','12-30','01-15','01-45','02-00'];
 const SIDES = ['C','P'];
 const STATE_DOT = {
   pending:'dot-grey', open:'dot-green', closing:'dot-blue', working:'dot-yellow',
-  closed:'dot-grey', killed:'dot-red', paused:'dot-yellow', breached:'dot-orange'
+  closed:'dot-grey', killed:'dot-red', paused:'dot-yellow', breached:'dot-orange',
+  expired:'dot-grey'
 };
 const STATE_LABEL = {
   pending:'Pending', open:'Open', closing:'Closing', working:'Working',
-  closed:'Closed', killed:'Killed', paused:'Paused', breached:'Breached'
+  closed:'Closed', killed:'Killed', paused:'Paused', breached:'Breached',
+  expired:'Expired'
 };
 
 let msSelected = null;
@@ -1593,10 +1598,13 @@ function spreadGridDataCells(s, hasData, showLive, opts = {}) {
     ? `<td class="small font-monospace grid-dim">${hasData ? fmtTime(s.exit_time) : '&ndash;'}</td>`
     : '';
   const breachCell = hasData && s.breach_label
-    ? `<td class="small font-monospace ${s.breach_class || 'grid-dim'}">${s.breach_label}</td>`
+    ? `<td class="small font-monospace ${s.breach_class || 'grid-dim'}">${s.breach_label}${s.breach_readiness_label ? `<div class="grid-dim" style="font-size:.65rem;">${s.breach_readiness_label}</div>` : ''}</td>`
     : '<td class="small font-monospace grid-dim">&ndash;</td>';
+  const entryHint = (hasData && s.entry_quote_source_label)
+    ? `<div class="grid-dim" style="font-size:.65rem;">${s.entry_quote_source_label}</div>`
+    : '';
   return `
-      <td class="text-info font-monospace small">${hasData ? (s.entry_label || fmtPrice(s.entry_credit)) : '&ndash;'}</td>
+      <td class="text-info font-monospace small">${hasData ? (s.entry_label || fmtPrice(s.entry_credit)) : '&ndash;'}${entryHint}</td>
       ${entryTimeCell}
       <td class="fw-bold ${hasData ? (s.pnl_class || '') : ''}">${hasData ? fmtPnl(s.live_pnl || 0) : '&ndash;'}</td>
       <td class="text-warning font-monospace small">${s.exit_label || '&ndash;'}</td>
