@@ -52,8 +52,17 @@ class EntryMonitorRunner:
             if manual:
                 if not self._should_fire_manual(row, now):
                     continue
-            elif not self._should_fire_meic(row, now.time(), now):
-                continue
+            else:
+                # Operator may reset failed→pending via session plan window edit.
+                with self._lock:
+                    if (
+                        row.state == 'pending'
+                        and row.slot_key in self._fired
+                        and row.slot_key not in self._handles
+                    ):
+                        self._fired.discard(row.slot_key)
+                if not self._should_fire_meic(row, now.time(), now):
+                    continue
             with self._lock:
                 if row.slot_key in self._handles:
                     continue

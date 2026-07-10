@@ -44,5 +44,28 @@ class TestEntryRunner(unittest.TestCase):
             self.assertIn('11-00_P', runner._fired)
 
 
+    def test_refires_after_operator_reset_failed_to_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bootstrap_meic_session_if_missing(
+                tmp,
+                slots=[TrancheSlot('11-00', time(10, 59), time(11, 5))],
+            )
+            plan = load_meic_session_today(tmp)
+            plan.update_row('11-00_P', state='failed')
+            plan.save()
+
+            runner = EntryMonitorRunner(root=tmp)
+            runner._fired.add('11-00_P')
+            plan.update_row('11-00_P', state='pending', entry_window_start='10:59', entry_window_end='11:05')
+            plan.save()
+
+            now = datetime(2026, 6, 25, 11, 0, 0)
+            with patch.object(runner, '_run_worker'):
+                runner.tick(now)
+            plan = load_meic_session_today(tmp)
+            self.assertEqual(plan.row_by_slot_key('11-00_P').state, 'entering')
+            self.assertIn('11-00_P', runner._fired)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -910,6 +910,52 @@ def api_session_meic():
     return jsonify({'rows': [r.to_dict() for r in plan.rows], 'path': plan.path})
 
 
+_SESSION_ROW_ALLOWED = frozenset({
+    'paused', 'skip', 'quantity', 'stop_multiplier', 'stop_percent',
+    'width', 'credit_min', 'credit_max', 'chase1_mode', 'chase1_max',
+    'chase2_mode', 'chase2_max', 'fill_wait_sec', 'max_attempts',
+    'entry_window_start', 'entry_window_end',
+})
+_SESSION_WINDOW_KEYS = frozenset({'entry_window_start', 'entry_window_end'})
+_SESSION_FIELD_EDITABLE_STATES = frozenset({'pending', 'entering'})
+_SESSION_WINDOW_EDITABLE_STATES = frozenset({'pending', 'entering', 'failed', 'skipped'})
+
+
+def _normalize_session_window_fields(updates: dict) -> tuple[dict | None, str | None]:
+    from blocks.session.plan import format_time_field, parse_time_field
+
+    out = dict(updates)
+    for time_key in _SESSION_WINDOW_KEYS:
+        if time_key not in out:
+            continue
+        try:
+            out[time_key] = format_time_field(parse_time_field(str(out[time_key])))
+        except ValueError as exc:
+            return None, str(exc)
+    return out, None
+
+
+def _session_row_patch_allowed(state: str, updates: dict) -> bool:
+    """Paused-only edits are always allowed; window fields also on failed/skipped."""
+    non_pause = {k for k in updates if k != 'paused'}
+    if not non_pause:
+        return True
+    if non_pause.issubset(_SESSION_WINDOW_KEYS) and state in _SESSION_WINDOW_EDITABLE_STATES:
+        return True
+    return state in _SESSION_FIELD_EDITABLE_STATES
+
+
+def _session_row_patch_extras(state: str, updates: dict) -> dict:
+    """Re-arm failed/skipped rows when operator shifts today's entry window."""
+    extras: dict = {}
+    if (
+        state in ('failed', 'skipped')
+        and _SESSION_WINDOW_KEYS.intersection(updates)
+    ):
+        extras['state'] = 'pending'
+    return extras
+
+
 @app.route('/api/session/row', methods=['PATCH'])
 def api_session_row_patch():
     data = request.get_json(force=True) or {}
@@ -928,31 +974,65 @@ def api_session_row_patch():
     if row is None:
         return jsonify({'error': f'unknown slot_key: {slot_key}'}), 404
 
-    allowed = {
-        'paused', 'skip', 'quantity', 'stop_multiplier', 'stop_percent',
-        'width', 'credit_min', 'credit_max', 'chase1_mode', 'chase1_max',
-        'chase2_mode', 'chase2_max', 'fill_wait_sec', 'max_attempts',
-        'entry_window_start', 'entry_window_end',
-    }
-    updates = {k: v for k, v in fields.items() if k in allowed}
+    updates = {k: v for k, v in fields.items() if k in _SESSION_ROW_ALLOWED}
     if not updates:
         return jsonify({'error': 'no valid fields'}), 400
 
-    from blocks.session.plan import parse_time_field, format_time_field
+    updates, err = _normalize_session_window_fields(updates)
+    if err:
+        return jsonify({'error': err}), 400
 
-    for time_key in ('entry_window_start', 'entry_window_end'):
-        if time_key in updates:
-            try:
-                updates[time_key] = format_time_field(parse_time_field(str(updates[time_key])))
-            except ValueError as exc:
-                return jsonify({'error': str(exc)}), 400
-
-    if row.state not in ('pending', 'entering') and any(k != 'paused' for k in updates):
+    if not _session_row_patch_allowed(row.state, updates):
         return jsonify({'error': f'row state {row.state} is not editable'}), 400
 
+    updates.update(_session_row_patch_extras(row.state, updates))
     plan.update_row(slot_key, **updates)
     plan.save()
     return jsonify({'status': 'ok', 'row': plan.row_by_slot_key(slot_key).to_dict()})
+
+
+@app.route('/api/session/lot-window', methods=['PATCH'])
+def api_session_lot_window_patch():
+    """Apply entry window to all editable rows in a lot (today's session CSV only)."""
+    data = request.get_json(force=True) or {}
+    strategy = data.get('strategy', trades_layout.STRATEGY_MEIC)
+    lot = (data.get('lot') or '').strip()
+    fields = data.get('fields') or {}
+    if not lot:
+        return jsonify({'error': 'lot required'}), 400
+    if strategy != trades_layout.STRATEGY_MEIC:
+        return jsonify({'error': 'only MEIC_IC supported in 4c'}), 400
+
+    updates = {k: v for k, v in fields.items() if k in _SESSION_WINDOW_KEYS}
+    if len(updates) != 2:
+        return jsonify({'error': 'entry_window_start and entry_window_end required'}), 400
+
+    plan = _meic_session_rows()
+    if plan is None:
+        return jsonify({'error': 'session plan not found'}), 404
+
+    updates, err = _normalize_session_window_fields(updates)
+    if err:
+        return jsonify({'error': err}), 400
+
+    updated: list[str] = []
+    skipped: list[str] = []
+    for row in plan.rows:
+        if row.lot != lot:
+            continue
+        if not _session_row_patch_allowed(row.state, updates):
+            skipped.append(row.slot_key)
+            continue
+        patch = dict(updates)
+        patch.update(_session_row_patch_extras(row.state, patch))
+        plan.update_row(row.slot_key, **patch)
+        updated.append(row.slot_key)
+
+    if not updated:
+        return jsonify({'error': f'no editable rows for lot {lot}'}), 400
+
+    plan.save()
+    return jsonify({'status': 'ok', 'lot': lot, 'updated': updated, 'skipped': skipped})
 
 
 _MASTER_PLAN_FIELDS = frozenset({

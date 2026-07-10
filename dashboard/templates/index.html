@@ -639,8 +639,9 @@
       </div>
       <div id="setup-logs-panel" class="d-none">
         <div class="card-body p-0 border-bottom border-secondary">
-          <div class="px-3 py-2">
-            <small class="text-muted">Edit the <strong>All tranches</strong> row to set qty, width, credits, stop, and chase for every slot at once. Per-row window times and pause/skip stay on each tranche. Use <strong>Sel</strong> for Pause/Unpause Selected.</small>
+          <div class="px-3 py-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <small class="text-muted">Set shared values on <strong>All tranches</strong> then <strong>Apply on all</strong> (local). Edit per-row fields, then <strong>Save All</strong> to write today&rsquo;s session CSV. Use <strong>Sel</strong> for Pause/Unpause Selected.</small>
+            <button type="button" class="btn btn-sm btn-success" onclick="savePlanAll()" title="Persist all session plan edits for today">Save All</button>
           </div>
           <div class="table-responsive" id="session-plan-table-wrap">
             <table class="table table-sm mb-0">
@@ -1186,6 +1187,10 @@ let planSelectedSlots = new Set();
 let gridSelectedSlots = new Set();
 /** Unsaved session-plan field values — survives 2–3s summary poll / socket push. */
 let planDraftBySlot = {};
+const PLAN_MASTER_APPLY_FIELDS = [
+  'quantity', 'width', 'credit_min', 'credit_max',
+  'chase1_mode', 'chase1_max', 'chase2_mode', 'chase2_max',
+];
 /** Unsaved master-row values (shared across all tranches). */
 let planMasterDraft = null;
 const PLAN_MASTER_FIELDS = [
@@ -1701,6 +1706,12 @@ function planEditable(s) {
   return st === 'pending' || st === 'entering';
 }
 
+/** Window times editable for today's not-yet-entered rows (incl. failed/skipped retry). */
+function planWindowEditable(s) {
+  const st = s.session_state || 'pending';
+  return ['pending', 'entering', 'failed', 'skipped'].includes(st);
+}
+
 function planInput(disabled, extraCls = '') {
   const dis = disabled ? ' disabled' : '';
   return `class="plan-input ${extraCls}"${dis}`;
@@ -1743,9 +1754,9 @@ function capturePlanDraftsFromDom() {
 
 function onPlanFieldEdit(ev) {
   const el = ev.target;
-  if (!el.dataset || !el.dataset.field) return;
+  if (!el.dataset) return;
   const masterRow = el.closest('tr[data-plan-master]');
-  if (masterRow) {
+  if (masterRow && el.dataset.field) {
     if (!planMasterDraft) planMasterDraft = {};
     const key = el.dataset.field;
     if (el.type === 'checkbox') planMasterDraft[key] = el.checked;
@@ -1753,6 +1764,7 @@ function onPlanFieldEdit(ev) {
     else planMasterDraft[key] = el.value;
     return;
   }
+  if (!el.dataset.field) return;
   const row = el.closest('tr[data-plan-slot]');
   if (!row) return;
   const sk = row.dataset.planSlot;
@@ -1762,6 +1774,7 @@ function onPlanFieldEdit(ev) {
   if (el.type === 'checkbox') planDraftBySlot[sk][key] = el.checked;
   else if (el.type === 'number') planDraftBySlot[sk][key] = el.value === '' ? '' : Number(el.value);
   else planDraftBySlot[sk][key] = el.value;
+  row.classList.add('plan-row-draft');
 }
 
 function planFieldValue(slotKey, field, serverVal) {
@@ -1823,9 +1836,43 @@ function renderPlanMasterRow(grid) {
       <select ${planInput(false)} data-field="chase2_mode" style="width:5.5rem;margin-bottom:2px;">${planChaseOpts(chase2Mode)}</select>
       <input type="number" min="0" max="20" ${planInput(false)} data-field="chase2_max" value="${chase2Max}" style="width:2.5rem;">
     </td>
-    <td colspan="3" class="text-muted small">Window / pause / skip per row below</td>
-    <td><button class="btn btn-sm btn-warning plan-save-btn" onclick="savePlanMaster()" title="Apply to all pending/entering rows">Save all</button></td>
+    <td colspan="3" class="text-muted small">Per-row window below · pause/skip per row</td>
+    <td><button class="btn btn-sm btn-outline-warning plan-save-btn" onclick="applyPlanMaster()" title="Copy credits, qty, width, stop, and chase to editable rows — use Save All to persist">Apply on all</button></td>
   </tr>`;
+}
+
+function applyPlanMaster() {
+  const fields = collectPlanMasterFields();
+  if (!fields) return;
+  let n = 0;
+  document.querySelectorAll('#session-plan-tbody tr[data-plan-slot]').forEach(row => {
+    const sk = row.dataset.planSlot;
+    if (!sk) return;
+    const qtyEl = row.querySelector('[data-field="quantity"]');
+    const rowEditable = qtyEl && !qtyEl.disabled;
+    if (!planDraftBySlot[sk]) planDraftBySlot[sk] = {};
+    if (rowEditable) {
+      PLAN_MASTER_APPLY_FIELDS.forEach(key => {
+        if (fields[key] === undefined) return;
+        planDraftBySlot[sk][key] = fields[key];
+        const el = row.querySelector(`[data-field="${key}"]`);
+        if (!el || el.disabled) return;
+        if (el.tagName === 'SELECT') el.value = fields[key];
+        else el.value = fields[key];
+      });
+      n += 1;
+    }
+    if (fields.stop_multiplier !== undefined) {
+      const stopEl = row.querySelector('[data-field="stop_multiplier"]');
+      if (stopEl) {
+        stopEl.value = fields.stop_multiplier;
+        planDraftBySlot[sk].stop_multiplier = fields.stop_multiplier;
+      }
+    }
+  });
+  toast(n
+    ? `Applied to ${n} editable row(s) — click Save All to persist`
+    : 'Stop× applied — click Save All to persist', 'success');
 }
 
 function collectPlanMasterFields() {
@@ -1841,29 +1888,74 @@ function collectPlanMasterFields() {
   return fields;
 }
 
-async function savePlanMaster() {
-  const fields = collectPlanMasterFields();
-  if (!fields) return;
-  if (!confirm('Apply qty, width, credits, stop, and chase from this row to all pending/entering tranche slots?')) return;
-  try {
-    const r = await fetch('/api/session/bulk', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({strategy: 'MEIC_IC', fields}),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || 'Bulk save failed', 'error'); return; }
-    const skipped = (d.skipped || []).length;
-    const msg = skipped
-      ? `Updated ${d.updated.length} row(s); ${skipped} entered row(s) unchanged`
-      : `Updated ${d.updated.length} row(s)`;
-    toast(msg, 'success');
-    planDraftBySlot = {};
-    planMasterDraft = null;
-    await refreshSummary();
-  } catch (e) {
-    toast('Bulk save error: ' + e.message, 'error');
+async function _patchPlanRow(slotKey, fields) {
+  const r = await fetch('/api/session/row', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({strategy: 'MEIC_IC', slot_key: slotKey, fields}),
+  });
+  const d = await r.json();
+  return { ok: r.ok, data: d };
+}
+
+function collectPlanFieldsForPatch(slotKey) {
+  const row = document.querySelector(`tr[data-plan-slot="${slotKey}"]`);
+  if (!row) return null;
+  const all = collectPlanFields(slotKey);
+  if (!all) return null;
+  const st = row.dataset.sessionState || 'pending';
+  if (st === 'pending' || st === 'entering') return all;
+  if (st === 'failed' || st === 'skipped') {
+    const out = { paused: all.paused };
+    if (all.entry_window_start && all.entry_window_end) {
+      out.entry_window_start = all.entry_window_start;
+      out.entry_window_end = all.entry_window_end;
+    }
+    if (all.skip !== undefined) out.skip = all.skip;
+    return out;
   }
+  if (st === 'entered') {
+    const out = { paused: all.paused };
+    if (all.stop_multiplier !== undefined) out.stop_multiplier = all.stop_multiplier;
+    return out;
+  }
+  return { paused: all.paused };
+}
+
+async function savePlanAll() {
+  capturePlanDraftsFromDom();
+  const rows = [...document.querySelectorAll('#session-plan-tbody tr[data-plan-slot]')];
+  if (!rows.length) {
+    toast('No session plan rows', 'warning');
+    return;
+  }
+  let saved = 0;
+  const errors = [];
+  for (const row of rows) {
+    const sk = row.dataset.planSlot;
+    if (!sk) continue;
+    const fields = collectPlanFieldsForPatch(sk);
+    if (!fields || !Object.keys(fields).length) continue;
+    try {
+      const { ok, data } = await _patchPlanRow(sk, fields);
+      if (!ok) {
+        errors.push(`${sk}: ${data.error || 'failed'}`);
+        continue;
+      }
+      saved += 1;
+      clearPlanDraft(sk);
+    } catch (e) {
+      errors.push(`${sk}: ${e.message}`);
+    }
+  }
+  if (errors.length) {
+    toast(`Saved ${saved}; ${errors.length} failed — ${errors[0]}`, saved ? 'warning' : 'error');
+  } else {
+    toast(`Saved ${saved} row(s) to today's session plan`, 'success');
+  }
+  planDraftBySlot = {};
+  planMasterDraft = null;
+  await refreshSummary();
 }
 
 function syncPlanSelFromDom() {
@@ -1903,13 +1995,9 @@ function renderSessionPlan(grid) {
     return;
   }
   let html = renderPlanMasterRow(grid);
-  let currentLot = '';
   for (const s of grid) {
-    if (s.lot !== currentLot) {
-      currentLot = s.lot;
-      html += `<tr class="tranche-group-header"><td colspan="15">${s.lot} CT</td></tr>`;
-    }
     const editable = planEditable(s);
+    const windowEditable = planWindowEditable(s);
     const locked = !editable && (s.session_state || '') !== 'entered';
     const rowCls = locked ? 'plan-row-locked' : '';
     const st = s.session_state || 'pending';
@@ -1932,23 +2020,21 @@ function renderSessionPlan(grid) {
       : '<span class="badge bg-warning text-dark" style="font-size:.7rem;">CALL</span>';
     const chaseOpts = planChaseOpts;
     let action = '';
-    if (editable) {
-      action = `<button class="btn btn-sm btn-outline-info plan-save-btn" onclick="savePlanRow('${sk}')">Save</button>`;
-    } else if (st === 'entered' || s.state === 'open') {
+    if (st === 'entered' || s.state === 'open') {
       action = `<button class="btn btn-sm btn-outline-warning plan-save-btn" onclick="applyPlanStop('${sk}')" title="Update stop on open trade (Q6)">Apply Stop</button>`;
     } else {
       action = '<span class="text-muted small">—</span>';
     }
     const planChecked = planSelectedSlots.has(sk) ? ' checked' : '';
     const draftMark = planDraftBySlot[sk] ? ' plan-row-draft' : '';
-    html += `<tr class="tranche-row ${rowCls}${draftMark}" data-plan-slot="${sk}">
+    html += `<tr class="tranche-row ${rowCls}${draftMark}" data-plan-slot="${sk}" data-session-state="${st}">
       <td class="text-center"><input type="checkbox" class="form-check-input plan-sel-cb" data-slot="${sk}"${planChecked} onchange="planSelCheckboxChange(this)" style="cursor:pointer;" title="Select for Pause/Unpause"></td>
       <td><span class="badge-lot">${s.lot}</span></td>
       <td>${sideBadge}</td>
       <td class="font-monospace small">
-        <input type="time" ${planInput(!editable)} data-field="entry_window_start" value="${winStart}" style="width:5.5rem;display:inline-block;">
+        <input type="time" ${planInput(!windowEditable)} data-field="entry_window_start" value="${winStart}" style="width:5.5rem;display:inline-block;">
         <span class="text-muted mx-1">–</span>
-        <input type="time" ${planInput(!editable)} data-field="entry_window_end" value="${winEnd}" style="width:5.5rem;display:inline-block;">
+        <input type="time" ${planInput(!windowEditable)} data-field="entry_window_end" value="${winEnd}" style="width:5.5rem;display:inline-block;">
       </td>
       <td><input type="number" min="1" max="99" ${planInput(!editable)} data-field="quantity" value="${qty}" style="width:3rem;"></td>
       <td><input type="text" ${planInput(!editable)} data-field="width" value="${width}" style="width:4rem;" title="e.g. 25 or 25-35"></td>
@@ -1963,7 +2049,7 @@ function renderSessionPlan(grid) {
         <select ${planInput(!editable)} data-field="chase2_mode" style="width:5.5rem;margin-bottom:2px;">${chaseOpts(chase2Mode)}</select>
         <input type="number" min="0" max="20" ${planInput(!editable)} data-field="chase2_max" value="${chase2Max}" style="width:2.5rem;">
       </td>
-      <td class="text-center"><input type="checkbox" class="form-check-input" data-field="paused" ${paused ? 'checked' : ''} title="Pause this slot (save row or use Pause Selected)"></td>
+      <td class="text-center"><input type="checkbox" class="form-check-input" data-field="paused" ${paused ? 'checked' : ''} title="Pause this slot (Save All or Pause Selected)"></td>
       <td class="text-center"><input type="checkbox" class="form-check-input" data-field="skip" ${skip ? 'checked' : ''} ${editable ? '' : 'disabled'}></td>
       <td><span class="state-${st} small fw-semibold">${STATE_LABEL[st] || st}</span>${paused ? ' <span class="badge bg-secondary" style="font-size:.6rem;">paused</span>' : ''}</td>
       <td>${action}</td>
@@ -1985,22 +2071,30 @@ function collectPlanFields(slotKey) {
   return fields;
 }
 
-async function savePlanRow(slotKey) {
-  const fields = collectPlanFields(slotKey);
+function collectPlanWindowFields(slotKey) {
+  const row = document.querySelector(`tr[data-plan-slot="${slotKey}"]`);
+  if (!row) return null;
+  const fields = {};
+  row.querySelectorAll('[data-field="entry_window_start"], [data-field="entry_window_end"]').forEach(el => {
+    fields[el.dataset.field] = el.value;
+  });
+  return Object.keys(fields).length === 2 ? fields : null;
+}
+
+async function savePlanRow(slotKey, opts = {}) {
+  const fields = opts.windowOnly ? collectPlanWindowFields(slotKey) : collectPlanFieldsForPatch(slotKey);
   if (!fields) return;
   try {
-    const r = await fetch('/api/session/row', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({strategy: 'MEIC_IC', slot_key: slotKey, fields}),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || 'Save failed', 'error'); return; }
-    toast(`Saved ${slotKey}`, 'success');
+    const { ok, data } = await _patchPlanRow(slotKey, fields);
+    if (!ok) {
+      if (!opts.silent) toast(data.error || 'Save failed', 'error');
+      return;
+    }
+    if (!opts.silent) toast(`Saved ${slotKey}`, 'success');
     clearPlanDraft(slotKey);
     await refreshSummary();
   } catch (e) {
-    toast('Save error: ' + e.message, 'error');
+    if (!opts.silent) toast('Save error: ' + e.message, 'error');
   }
 }
 
