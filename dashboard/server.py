@@ -303,16 +303,6 @@ def _read_active_trades():
     trades = []
     try:
         from blocks.stop import state as state_mod
-        from blocks.stop.pending_fill_sync import sync_pending_fills
-        from common.broker_factory import get_shared_broker
-        from dashboard.broker_fill_sync import maybe_sync_active_trades
-
-        maybe_sync_active_trades(
-            read_json=read_json_safe,
-            iter_paths=state_mod.iter_active_trade_paths,
-            get_broker_fn=get_shared_broker,
-            sync_fn=sync_pending_fills,
-        )
 
         for fpath in state_mod.iter_active_trade_paths():
             state = read_json_safe(fpath)
@@ -815,6 +805,8 @@ def broker_health():
     from common.broker_factory import shared_broker_stats
     from dashboard.broker_fill_sync import fill_sync_stats
 
+    from common.rest_metrics import metrics_snapshot
+
     locks = [
         {
             'name': lk.name,
@@ -828,6 +820,7 @@ def broker_health():
         'fill_sync': fill_sync_stats(),
         'cooldown': broker_cooldown.cooldown_snapshot(),
         'rest': get_rest_limiter().stats(),
+        'rest_metrics': metrics_snapshot(),
         'shared_broker': shared_broker_stats(),
         'locks': locks,
         'launcher_active': _launcher_active(),

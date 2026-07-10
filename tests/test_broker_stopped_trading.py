@@ -9,10 +9,15 @@ from unittest.mock import MagicMock, patch
 
 from brokers.base import OrderResult
 from blocks.stop.monitor import StopMonitor
+from blocks.stop import state as state_mod
 from common.broker_stopped_trading import is_instruments_stopped_trading_error
+from tests.fill_sync_fixtures import spxw_option_symbol, today_expiry_yymmdd
 
 
 def _intraday_open_trade() -> dict:
+    expiry = today_expiry_yymmdd()
+    short_sym = spxw_option_symbol(7320, 'P', expiry_yymmdd=expiry)
+    long_sym = spxw_option_symbol(7295, 'P', expiry_yymmdd=expiry)
     return {
         'status': 'open',
         'quantity': 1,
@@ -21,17 +26,22 @@ def _intraday_open_trade() -> dict:
         'spread_type': 'credit',
         'entry': {'side': 'P', 'net_credit': 1.4, 'strategy': 'MEIC_IC'},
         'short_leg': {
-            'symbol': '.SPXW260709P7320',
+            'symbol': short_sym,
             'strike': 7320,
             'fill_price': 2.0,
             'two_x_short': 4.0,
         },
         'long_leg': {
-            'symbol': '.SPXW260709P7295',
+            'symbol': long_sym,
             'strike': 7295,
             'fill_price': 0.5,
         },
         'phases': {},
+        'recovery': {
+            'module_start_count': 0,
+            'last_heartbeat': state_mod.now_iso(),
+            'state_loaded_from_disk': False,
+        },
     }
 
 

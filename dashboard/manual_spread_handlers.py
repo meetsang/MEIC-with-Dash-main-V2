@@ -14,7 +14,6 @@ from blocks.stop import state as state_mod
 from blocks.stop.close_fills import slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
 from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
-from blocks.stop.pending_fill_sync import sync_pending_fills
 from blocks.stop.stop_math import stop_multiplier_for_state
 
 log = logging.getLogger(__name__)
@@ -62,11 +61,6 @@ def build_manual_trades(
     spx_settle=None,
 ):
     """Return (rows, day_pnl, open_count, day_slippage) for Manual Spread active trades."""
-    try:
-        sync_pending_fills(get_shared_broker())
-    except Exception:
-        log.exception('Manual trade fill sync failed')
-
     rows = []
     day_pnl = 0.0
     day_slippage = 0.0

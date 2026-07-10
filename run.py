@@ -23,8 +23,6 @@ from common.broker_factory import get_streamer_script, use_thin_tranches
 from common.session_cleanup import run_session_cleanup
 from common.trades_layout import ops_path
 from blocks.entry.runner import EntryMonitorRunner
-from blocks.stop.pending_fill_sync import sync_pending_fills
-from common.broker_factory import get_shared_broker
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
 from strategies.loader import load_enabled_strategies
 from strategies.validate import StrategyConfigError, validate_startup_config
@@ -437,11 +435,6 @@ def main(
 
     bootstrap_meic_session_if_missing(ROOT)
     entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
-    try:
-        fill_sync_broker = get_shared_broker()
-    except Exception as exc:
-        fill_sync_broker = None
-        log.warning('Pending fill sync disabled — broker unavailable: %s', exc)
 
     if tranche_now:
         log.info('Tranche-now: firing entry workers for lot via app_main ...')
@@ -499,11 +492,7 @@ def main(
 
             # Entry monitor — one worker per session CSV row (replaces Orchestrator)
             entry_runner.tick(now)
-            if fill_sync_broker is not None:
-                try:
-                    sync_pending_fills(fill_sync_broker)
-                except Exception:
-                    log.exception('Pending fill sync failed')
+            # Fill sync is owned solely by stop_monitor (see BROKER_REST_RESILIENCE spec §9)
 
             if once and entry_runner.any_fired():
                 log.info('--once: entry worker fired, shutting down.')

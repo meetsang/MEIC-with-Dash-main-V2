@@ -8,6 +8,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from brokers.base import BrokerBase
 from blocks.stop import state as state_mod
+from common.broker_cooldown import should_skip_priority
+from common.rest_operations import (
+    OPERATION_LONG_CLOSE_STATUS,
+    OPERATION_RECOVERY_RECONCILE,
+    PRIORITY_HIGH,
+)
 from blocks.stop.v3 import config as v3_config
 from blocks.stop.v3.trade_slot import TradeSlot, save_slot
 
@@ -271,7 +277,11 @@ def reconcile_stalled_exit(slot: TradeSlot, broker: BrokerBase) -> Tuple[bool, s
 
     sc_oid = st.get('spread_close_order_id')
     if sc_oid:
-        result = broker.get_order_status(str(sc_oid))
+        result = broker.get_order_status(
+            str(sc_oid),
+            priority=PRIORITY_HIGH,
+            op=OPERATION_RECOVERY_RECONCILE,
+        )
         if result.success:
             status = str(result.status).lower()
             notes.append(f'spread_close={status}')
@@ -289,7 +299,11 @@ def reconcile_stalled_exit(slot: TradeSlot, broker: BrokerBase) -> Tuple[bool, s
 
     lc_oid = st.get('long_close_order_id')
     if lc_oid and st.get('status') == 'closing':
-        result = broker.get_order_status(str(lc_oid))
+        result = broker.get_order_status(
+            str(lc_oid),
+            priority=PRIORITY_HIGH,
+            op=OPERATION_LONG_CLOSE_STATUS,
+        )
         if result.success:
             status = str(result.status).lower()
             notes.append(f'long_close={status}')
@@ -302,7 +316,11 @@ def reconcile_stalled_exit(slot: TradeSlot, broker: BrokerBase) -> Tuple[bool, s
     active = st.get('active_stop') or {}
     stop_oid = active.get('order_id')
     if stop_oid and st.get('status') == 'open':
-        result = broker.get_order_status(str(stop_oid))
+        result = broker.get_order_status(
+            str(stop_oid),
+            priority=PRIORITY_HIGH,
+            op=OPERATION_RECOVERY_RECONCILE,
+        )
         if result.success:
             notes.append(f'stop={result.status}')
             active['status'] = result.status

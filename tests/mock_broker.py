@@ -92,7 +92,7 @@ class MockBroker(BrokerBase):
       self.orders[order_id] = OrderResult(True, order_id, 'cancelled')
     return OrderResult(True, order_id, 'cancelled')
 
-  def get_order_status(self, order_id) -> OrderResult:
+  def get_order_status(self, order_id, *, priority: str = 'NORMAL', op: str = 'get_order') -> OrderResult:
     if order_id not in self.orders:
       return OrderResult(False, order_id, 'unknown')
     return self.orders[order_id]

@@ -48,6 +48,7 @@ def build_breach_watch_snapshot(
     streamer_stale: bool,
     mqtt_cache_stale: bool = False,
     now_iso: str,
+    readiness: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     threshold = spread_breach_threshold(state)
     active = state.get('active_stop') or {}
@@ -69,7 +70,7 @@ def build_breach_watch_snapshot(
         gap_to_breach=gap,
     )
 
-    return {
+    watch = {
         'threshold': threshold,
         'spread_mid': spread_mid,
         'gap_to_breach': gap,
@@ -80,7 +81,24 @@ def build_breach_watch_snapshot(
         'exchange_stop': exchange_stop,
         'status': status,
         'updated_at': now_iso,
+        'quote_pair_valid': False,
+        'quote_pair_reason': 'missing_quote' if not (short_mqtt and long_mqtt) else 'ready',
+        'software_breach_ready': False,
+        'short_source_epoch': None,
+        'long_source_epoch': None,
+        'short_sequence': None,
+        'long_sequence': None,
+        'pair_skew_sec': None,
+        'stream_session_id': None,
+        'breach_confirmation_count': 0,
+        'breach_confirmation_required': 2,
     }
+    if readiness:
+        watch.update(readiness)
+        if readiness.get('spread_mid') is not None and watch.get('spread_mid') is None:
+            watch['spread_mid'] = readiness['spread_mid']
+            watch['gap_to_breach'] = round(threshold - float(readiness['spread_mid']), 2)
+    return watch
 
 
 def breach_label_from_watch(watch: Dict[str, Any]) -> str:
@@ -288,6 +306,31 @@ def log_breach_watch(monitor: 'StopMonitor', watch: Dict[str, Any]) -> None:
             monitor._breach_missing_prices_logged = True
         return
     monitor._breach_missing_prices_logged = False
+
+    pair_reason = watch.get('quote_pair_reason')
+    if pair_reason and pair_reason not in ('ready', 'confirmation_pending'):
+        if pair_reason == 'fill_grace':
+            if not getattr(monitor, '_breach_fill_grace_logged', False):
+                log.info(
+                    'Breach watch %s: fill grace active (%.1fs remaining) — software breach frozen',
+                    tag,
+                    float(watch.get('fill_grace_remaining_sec') or 0),
+                )
+                monitor._breach_fill_grace_logged = True
+            return
+        monitor._breach_fill_grace_logged = False
+        if pair_reason not in ('missing_quote', 'no_prices'):
+            if not getattr(monitor, '_breach_pair_reason_logged', False) or pair_reason != getattr(monitor, '_breach_last_pair_reason', None):
+                log.warning(
+                    'Breach watch %s: quote pair not ready (%s) — software breach frozen',
+                    tag,
+                    pair_reason,
+                )
+                monitor._breach_pair_reason_logged = True
+                monitor._breach_last_pair_reason = pair_reason
+            return
+    monitor._breach_pair_reason_logged = False
+    monitor._breach_fill_grace_logged = False
 
     spread = watch.get('spread_mid')
     threshold = watch.get('threshold')

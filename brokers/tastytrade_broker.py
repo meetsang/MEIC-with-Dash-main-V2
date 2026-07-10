@@ -216,12 +216,22 @@ def _order_result_from_placed_order(order) -> OrderResult:
 
     remaining = max(0, order_qty - filled_qty) if order_qty else None
     spread_credit = None
+    filled_price_source = None
+    order_limit_price = None
+    broker_aggregate_fill_price = None
+
+    if order.price is not None:
+        order_limit_price = round(abs(float(order.price)), 2)
+
     if short_fill is not None and long_fill is not None:
         spread_credit = round(short_fill - long_fill, 2)
+        filled_price_source = 'broker_leg_math'
     elif single_leg_fill is not None:
         spread_credit = single_leg_fill
-    elif order.price is not None and filled_qty > 0:
-        spread_credit = round(abs(float(order.price)), 2)
+        filled_price_source = 'broker_leg_fill'
+    elif order_limit_price is not None and filled_qty > 0:
+        spread_credit = order_limit_price
+        filled_price_source = 'order_limit_fallback'
 
     if filled_qty > 0 and status == 'working':
         status = 'partial'
@@ -249,6 +259,9 @@ def _order_result_from_placed_order(order) -> OrderResult:
         order_id=order_id,
         status=status,
         filled_price=spread_credit,
+        filled_price_source=filled_price_source,
+        order_limit_price=order_limit_price,
+        broker_aggregate_fill_price=broker_aggregate_fill_price,
         filled_quantity=filled_qty,
         order_quantity=order_qty or None,
         remaining_quantity=remaining,
@@ -293,14 +306,27 @@ class TastyTradeBroker(BrokerBase):
 
     def _run(self, coro, timeout: float = 120, *, priority: str = 'NORMAL', op: str = ''):
         """Thread-safe: monitors call broker from parallel threads."""
+        from common.rest_metrics import record_429, record_failure, record_skipped_cooldown
+
+        operation = op or 'broker'
         if should_skip_priority(priority):
-            raise BrokerCooldownActive(f'cooldown active — skipped {op or "broker_call"}')
-        get_rest_limiter().acquire(priority=priority, name=op or 'broker')
+            try:
+                record_skipped_cooldown(operation, priority)
+            except Exception:
+                pass
+            raise BrokerCooldownActive(f'cooldown active — skipped {operation}')
+        get_rest_limiter().acquire(priority=priority, name=operation)
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             return future.result(timeout=timeout)
         except Exception as exc:
-            self._maybe_enter_cooldown(exc, op=op)
+            try:
+                record_failure(operation, exc)
+                if '429' in str(exc).lower():
+                    record_429()
+            except Exception:
+                pass
+            self._maybe_enter_cooldown(exc, op=operation)
             raise
 
     def _maybe_enter_cooldown(self, exc: Exception, *, op: str = '') -> None:
@@ -658,15 +684,21 @@ class TastyTradeBroker(BrokerBase):
                 self.validate_session()
             return OrderResult(False, order_id, 'rejected', message=msg)
 
-    def get_order_status(self, order_id: str) -> OrderResult:
+    def get_order_status(
+        self,
+        order_id: str,
+        *,
+        priority: str = 'NORMAL',
+        op: str = 'get_order',
+    ) -> OrderResult:
         try:
             for o in self.get_live_orders_cached():
                 if str(o.id) == str(order_id):
                     return _order_result_from_placed_order(o)
             order = self._run(
                 self.account.get_order(self.session, int(order_id)),
-                priority='NORMAL',
-                op='get_order',
+                priority=priority,
+                op=op,
             )
             return _order_result_from_placed_order(order)
         except Exception as exc:
@@ -775,6 +807,7 @@ class TastyTradeBroker(BrokerBase):
 
     def fetch_option_mids_api(self, symbols: List[str]) -> Dict[str, float]:
         from tastytrade.market_data import get_market_data_by_type
+        from common.rest_operations import OPERATION_ENTRY_MARKET_DATA_REST
 
         # REST /market-data/by-type expects Schwab/OCC symbols, not DXLink streamer symbols.
         tt_keys = list(dict.fromkeys(to_tastytrade(s) for s in symbols if s))
@@ -784,7 +817,11 @@ class TastyTradeBroker(BrokerBase):
             batch = api_symbols[i:i + 100]
             try:
                 items = _retry_on_transient(
-                    lambda b=batch: self._run(get_market_data_by_type(self.session, options=b))
+                    lambda b=batch: self._run(
+                        get_market_data_by_type(self.session, options=b),
+                        priority='NORMAL',
+                        op=OPERATION_ENTRY_MARKET_DATA_REST,
+                    )
                 )
             except Exception as exc:
                 log.warning('fetch_option_mids_api batch failed: %s', exc)

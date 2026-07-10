@@ -119,6 +119,15 @@ def create_pending_state(
             'last_sync': now_iso(),
             'last_sync_epoch': 0,
             'fully_filled': False,
+            'fill_sync': {
+                'schema_version': 2,
+                'phase': 'fast',
+                'poll_count': 0,
+                'confirm_attempted': False,
+                'next_poll_epoch': 0.0,
+                'audit_due_epoch': None,
+                'audit_attempted': False,
+            },
         },
         'entry': {
             'strategy': strategy,

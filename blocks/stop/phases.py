@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, List
 
 import meic0dte.app.config as app_config
-from blocks.stop.breach import spread_breach_triggered, spread_mark_price
+from blocks.stop.breach import spread_mark_price
 
 if TYPE_CHECKING:
     from blocks.stop.monitor import StopMonitor
@@ -63,6 +63,7 @@ class Phase1InitialStop(PhaseBase):
 
     def _exit_required(self, monitor: 'StopMonitor') -> bool:
         from blocks.stop import state as state_mod
+        from blocks.stop.breach_quote import evaluate_software_breach_exit
 
         state = monitor.state
         active = state.get('active_stop') or {}
@@ -70,15 +71,15 @@ class Phase1InitialStop(PhaseBase):
             return False
         if not active.get('order_id') or active.get('type') != 'STOP_LIMIT':
             return False
-        short_p = monitor.prices.get(state['short_leg']['symbol'])
-        long_p = monitor.prices.get(state['long_leg']['symbol'])
-        if short_p is None or long_p is None:
-            return False
-        spread_price = spread_mark_price(short_p, long_p)
-        stop_price = monitor.current_stop_price()
-        return bool(
-            spread_breach_triggered(spread_price, stop_price) or monitor.kill_switch
+
+        streamer_stale = monitor._streamer_prices_stale()
+        mqtt_cache_stale = monitor._mqtt_cache_stale()
+        should_exit, _readiness, _confirmation = evaluate_software_breach_exit(
+            monitor,
+            streamer_stale=streamer_stale,
+            mqtt_cache_stale=mqtt_cache_stale,
         )
+        return should_exit
 
     def _maintenance_needed(self, monitor: 'StopMonitor') -> bool:
         from blocks.stop import state as state_mod
@@ -117,15 +118,25 @@ class Phase1InitialStop(PhaseBase):
         if short_p is not None and long_p is not None and state_mod.section(state, 'active_stop').get('order_id'):
             if stop.get('type') != 'STOP_LIMIT':
                 return
-            spread_price = spread_mark_price(short_p, long_p)
-            stop_price = monitor.current_stop_price()
-            if spread_breach_triggered(spread_price, stop_price) or monitor.kill_switch:
+            from blocks.stop.breach_quote import evaluate_software_breach_exit
+
+            streamer_stale = monitor._streamer_prices_stale()
+            mqtt_cache_stale = monitor._mqtt_cache_stale()
+            should_exit, readiness, confirmation = evaluate_software_breach_exit(
+                monitor,
+                streamer_stale=streamer_stale,
+                mqtt_cache_stale=mqtt_cache_stale,
+            )
+            if should_exit and readiness.spread_mid is not None:
+                stop_price = monitor.current_stop_price()
                 log.info(
-                    'Software breach %s %s: spread %.2f >= threshold %.2f (2× credit + offset)',
+                    'Software breach %s %s: spread %.2f >= threshold %.2f (2× credit + offset) confirmations=%s/%s',
                     state.get('lot', '?'),
                     (state.get('entry') or {}).get('side', '?'),
-                    spread_price,
+                    readiness.spread_mid,
                     stop_price,
+                    confirmation.get('breach_confirmation_count'),
+                    confirmation.get('breach_confirmation_required'),
                 )
                 monitor.replace_with_limit_close(reason='spread_stop_breach')
                 return

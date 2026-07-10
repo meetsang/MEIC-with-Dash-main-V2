@@ -25,7 +25,8 @@ class RestLimiter:
 
   def acquire(self, *, priority: str = 'NORMAL', name: str = '') -> bool:
     """Block until a token is available. Returns False if skipped by caller."""
-    del name  # reserved for metrics
+    from common.rest_metrics import record_call
+
     with self._lock:
       now = time.time()
       self._evict_old(now)
@@ -46,7 +47,11 @@ class RestLimiter:
       self._calls_1m.append(now)
       self._calls_5m.append(now)
       self._total += 1
-      return True
+    try:
+      record_call(name or 'broker', priority)
+    except Exception:
+      pass
+    return True
 
   def _evict_old(self, now: float) -> None:
     while self._timestamps and now - self._timestamps[0] > 1.0:
@@ -57,16 +62,23 @@ class RestLimiter:
       self._calls_5m.popleft()
 
   def stats(self) -> dict:
+    from common.rest_metrics import metrics_snapshot
+
     with self._lock:
       now = time.time()
       self._evict_old(now)
-      return {
+      base = {
         'total_calls': self._total,
         'calls_last_1m': len(self._calls_1m),
         'calls_last_5m': len(self._calls_5m),
         'max_per_sec': self._max_per_sec,
         'burst': self._burst,
       }
+    try:
+      base['metrics'] = metrics_snapshot()
+    except Exception:
+      pass
+    return base
 
 
 _global_limiter: Optional[RestLimiter] = None

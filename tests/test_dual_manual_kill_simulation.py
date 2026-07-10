@@ -35,7 +35,7 @@ class SerializingBroker(MockBroker):
         self._record(f'cancel:{order_id}')
         return super().cancel_order(order_id)
 
-    def get_order_status(self, order_id) -> OrderResult:
+    def get_order_status(self, order_id, **kwargs) -> OrderResult:
         self._record(f'status:{order_id}')
         return super().get_order_status(order_id)
 

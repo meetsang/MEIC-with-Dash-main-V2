@@ -27,6 +27,7 @@ class SpreadCandidate:
     distance_from_target: float = 0.0
     overlap_warning: Optional[str] = None
     overlap_shifts: int = 0
+    candidate_source: Optional[str] = None
 
 
 # When overlap shift lands outside session credit band, relax min/max by this fraction.
@@ -104,7 +105,23 @@ def _resolve_overlap_candidate(
         merged.update(extra)
         price_map = merged
 
-    short_p, long_p = _leg_prices(broker, short_sym, long_sym, quote_source, price_map)
+    if quote_source == 'mqtt_fallback':
+        from blocks.entry.mqtt_entry_fallback import evaluate_mqtt_entry_pair
+
+        if price_map is None or price_map.get('_scan_request_epoch') is None:
+            return candidate
+        pair = evaluate_mqtt_entry_pair(
+            broker,
+            short_sym,
+            long_sym,
+            scan_request_epoch=float(price_map['_scan_request_epoch']),
+            spread_width=abs(ss - ls),
+        )
+        if pair is None:
+            return candidate
+        short_p, long_p = pair
+    else:
+        short_p, long_p = _leg_prices(broker, short_sym, long_sym, quote_source, price_map)
     if short_p is None or long_p is None:
         log.warning(
             'Overlap shift %s/%s -> %s/%s: missing quotes — keeping original strikes',
@@ -341,6 +358,8 @@ def _leg_prices(
         short_p = price_map.get(to_tastytrade(short_symbol))
         long_p = price_map.get(to_tastytrade(long_symbol))
         return short_p, long_p
+    if quote_source == 'mqtt_fallback':
+        return None, None
     short_p = broker.get_option_price(short_symbol, timeout=2.0)
     long_p = broker.get_option_price(long_symbol, timeout=2.0)
     return short_p, long_p
@@ -445,27 +464,90 @@ def scan_credit_spreads(
 
     legs = list(_iter_spread_legs(widths, opt_type, spx_price, expiry, otm_min, otm_max))
     price_map: Optional[Dict[str, float]] = None
+    active_quote_source = quote_source
+    scan_request_epoch: Optional[float] = None
+    diagnostics = None
 
-    if quote_source == 'mqtt':
+    if quote_source == 'api':
+        from blocks.entry.entry_scan_config import ENTRY_MQTT_FALLBACK_ENABLED
+        from blocks.entry.mqtt_entry_fallback import (
+            EntryScanDiagnostics,
+            attempt_rest_entry_quotes,
+            evaluate_mqtt_entry_pair,
+            prepare_mqtt_entry_fallback,
+        )
+
+        symbols = [sym for _, _, _, short_sym, long_sym in legs for sym in (short_sym, long_sym)]
+        if ENTRY_MQTT_FALLBACK_ENABLED:
+            diagnostics = EntryScanDiagnostics()
+            rest_out = attempt_rest_entry_quotes(broker, symbols, log)
+            diagnostics.rest_symbols_requested = rest_out.requested
+            diagnostics.rest_symbols_valid = rest_out.valid
+            diagnostics.cooldown = rest_out.cooldown
+            diagnostics.rate_limited = rest_out.rate_limited
+            if rest_out.should_fallback:
+                use_mqtt = (
+                    rest_out.cooldown
+                    or rest_out.rate_limited
+                    or getattr(broker, '_prices', None) is not None
+                )
+                if use_mqtt:
+                    active_quote_source = 'mqtt_fallback'
+                    scan_request_epoch = prepare_mqtt_entry_fallback(
+                        broker,
+                        expiry=expiry,
+                        opt_type=opt_type,
+                        spx_price=spx_price,
+                        lot=lot,
+                        logger=log,
+                        spread_widths=widths,
+                        otm_min=otm_min,
+                        otm_max=otm_max,
+                        diagnostics=diagnostics,
+                    )
+                    price_map = {'_scan_request_epoch': scan_request_epoch}
+                else:
+                    price_map = rest_out.price_map
+                    active_quote_source = 'api'
+            else:
+                price_map = rest_out.price_map
+                active_quote_source = 'api'
+        else:
+            price_map = _fetch_option_mids_robust(broker, symbols, log)
+            active_quote_source = 'api'
+    elif quote_source == 'mqtt':
         _register_scan_symbols(
             broker, expiry, opt_type, spx_price, lot, log,
             spread_widths=widths, otm_min=otm_min, otm_max=otm_max,
         )
-    else:
-        symbols = [sym for _, _, _, short_sym, long_sym in legs for sym in (short_sym, long_sym)]
-        price_map = _fetch_option_mids_robust(broker, symbols, log)
 
     candidates: List[SpreadCandidate] = []
     for short_strike, long_strike, width, short_symbol, long_symbol in legs:
-        short_p, long_p = _leg_prices(broker, short_symbol, long_symbol, quote_source, price_map)
-        if short_p is None or long_p is None:
-            if target_credit is None and credit_min is not None:
-                raw_try = None
-                if short_p is not None and long_p is not None:
-                    raw_try = short_p - long_p
-                if raw_try is not None and raw_try < (credit_min or config.CREDIT_MIN):
-                    break
-            continue
+        if active_quote_source == 'mqtt_fallback':
+            assert scan_request_epoch is not None
+            pair = evaluate_mqtt_entry_pair(
+                broker,
+                short_symbol,
+                long_symbol,
+                scan_request_epoch=scan_request_epoch,
+                spread_width=width,
+                diagnostics=diagnostics,
+            )
+            if pair is None:
+                continue
+            short_p, long_p = pair
+        else:
+            short_p, long_p = _leg_prices(
+                broker, short_symbol, long_symbol, active_quote_source, price_map,
+            )
+            if short_p is None or long_p is None:
+                if target_credit is None and credit_min is not None:
+                    raw_try = None
+                    if short_p is not None and long_p is not None:
+                        raw_try = short_p - long_p
+                    if raw_try is not None and raw_try < (credit_min or config.CREDIT_MIN):
+                        break
+                continue
 
         candidate = _evaluate_spread(
             short_symbol=short_symbol,
@@ -492,13 +574,15 @@ def scan_credit_spreads(
             opt_type,
             expiry,
             log,
-            quote_source=quote_source,
+            quote_source=active_quote_source,
             price_map=price_map,
             target_credit=target_credit,
             credit_min=credit_min,
             credit_max=credit_max,
             min_market_credit=min_market_credit,
         )
+        if active_quote_source in ('api', 'mqtt_fallback'):
+            candidate.candidate_source = 'mqtt_fallback' if active_quote_source == 'mqtt_fallback' else 'rest'
 
         log.info(
             '%s - %.2f | %s - %.2f = %.2f',
@@ -531,6 +615,8 @@ def scan_credit_spreads(
         return [clean]
 
     if not candidates:
+        if diagnostics is not None:
+            log.warning(diagnostics.format_failure())
         return []
 
     for candidate in candidates:
@@ -541,7 +627,7 @@ def scan_credit_spreads(
                 opt_type,
                 expiry,
                 log,
-                quote_source=quote_source,
+                quote_source=active_quote_source,
                 price_map=price_map,
                 target_credit=target_credit,
                 credit_min=credit_min,

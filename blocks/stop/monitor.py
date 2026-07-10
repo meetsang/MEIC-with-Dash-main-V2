@@ -32,7 +32,19 @@ from common.market_hours import (
     MARKET_CLOSE_MINUTE_CT,
     trade_past_0dte_close,
 )
-from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
+from blocks.stop.reconcile_policy import (
+    is_working_stop_reconcile_due,
+    schedule_next_working_stop_reconcile,
+)
+from common.rest_operations import (
+    OPERATION_ALERT_CONFIRM,
+    OPERATION_LONG_CLOSE_STATUS,
+    OPERATION_SPREAD_CLOSE_STATUS,
+    OPERATION_STOP_CANCEL,
+    OPERATION_WORKING_STOP_RECONCILE,
+    PRIORITY_HIGH,
+    PRIORITY_LOW,
+)
 from blocks.stop.expiry_gate import try_settle_or_freeze_trade
 from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
 from blocks.stop.stop_ownership import has_ownership_conflict
@@ -249,7 +261,11 @@ class StopMonitor:
                     status = str(event.get('status', 'filled')).lower()
                     active['status'] = status
                     if status == 'filled':
-                        result = self.broker.get_order_status(order_id)
+                        result = self.broker.get_order_status(
+                            order_id,
+                            priority=PRIORITY_HIGH,
+                            op=OPERATION_ALERT_CONFIRM,
+                        )
                         self.handle_stop_order_update(active, broker_result=result)
             except queue.Empty:
                 break
@@ -277,7 +293,11 @@ class StopMonitor:
 
         active = self.state.get('active_stop')
         if active and active.get('order_id'):
-            result = self.broker.get_order_status(active['order_id'])
+            result = self.broker.get_order_status(
+                active['order_id'],
+                priority=PRIORITY_LOW,
+                op=OPERATION_WORKING_STOP_RECONCILE,
+            )
             if result.success:
                 st = str(result.status).lower()
                 if st in ('cancelled', 'canceled', 'rejected', 'expired'):
@@ -311,7 +331,11 @@ class StopMonitor:
 
         oid = self.state.get('long_close_order_id')
         if oid:
-            result = self.broker.get_order_status(str(oid))
+            result = self.broker.get_order_status(
+                str(oid),
+                priority=PRIORITY_HIGH,
+                op=OPERATION_LONG_CLOSE_STATUS,
+            )
             if result.success and str(result.status).lower() == 'filled':
                 self.state['long_close_price'] = result.filled_price
                 self._finalize_close(reason=self.state.get('close_mechanism') or 'stop_filled')
@@ -434,7 +458,11 @@ class StopMonitor:
         oid = self.state.get('spread_close_order_id')
         if not oid:
             return False
-        result = self.broker.get_order_status(str(oid))
+        result = self.broker.get_order_status(
+            str(oid),
+            priority=PRIORITY_HIGH,
+            op=OPERATION_SPREAD_CLOSE_STATUS,
+        )
         if not result.success:
             return True
         status = str(result.status).lower()
@@ -460,7 +488,11 @@ class StopMonitor:
         if oid:
             outcome = self._cancel_stop_and_confirm(oid)
             if outcome == 'filled':
-                result = self.broker.get_order_status(str(oid))
+                result = self.broker.get_order_status(
+                    str(oid),
+                    priority=PRIORITY_HIGH,
+                    op=OPERATION_SPREAD_CLOSE_STATUS,
+                )
                 self.handle_stop_order_update(active, broker_result=result)
                 return
             if outcome != 'cancelled':
@@ -538,7 +570,11 @@ class StopMonitor:
         if oid:
             outcome = self._cancel_stop_and_confirm(oid)
             if outcome == 'filled':
-                result = self.broker.get_order_status(str(oid))
+                result = self.broker.get_order_status(
+                    str(oid),
+                    priority=PRIORITY_HIGH,
+                    op=OPERATION_SPREAD_CLOSE_STATUS,
+                )
                 self.handle_stop_order_update(active, broker_result=result)
                 try:
                     os.unlink(cmd_path)
@@ -632,6 +668,7 @@ class StopMonitor:
                         daemon=True,
                     )
                     t.start()
+            self._refresh_breach_watch_display_only()
             self._maybe_merge_disk_stop_state()
             state_mod.save_state(self.json_path, self.state)
             return
@@ -672,11 +709,28 @@ class StopMonitor:
             state_mod.save_state(self.json_path, self.state)
             return
 
-        # Slow path: broker sync (every SLOW_INTERVAL)
-        if now - self._last_broker_sync >= SLOW_INTERVAL:
+        # Slow path: adaptive working-stop REST reconcile
+        mqtt_healthy = not (mqtt_cache_stale or streamer_stale)
+        if is_working_stop_reconcile_due(
+            self.state,
+            now,
+            mqtt_healthy=mqtt_healthy,
+            status=str(self.state.get('status') or 'open'),
+            close_only_mode=bool(self.state.get('close_only_mode')),
+        ):
+            from common.broker_cooldown import should_skip_priority
+
+            if not should_skip_priority(PRIORITY_LOW):
+                self._reconcile_active_stop_with_broker()
+                self._sync_working_stop_order()
+            schedule_next_working_stop_reconcile(
+                self.state,
+                now,
+                mqtt_healthy=mqtt_healthy,
+                status=str(self.state.get('status') or 'open'),
+                close_only_mode=bool(self.state.get('close_only_mode')),
+            )
             self._last_broker_sync = now
-            self._reconcile_active_stop_with_broker()
-            self._sync_working_stop_order()
 
         self.kill_switch = self.prices.kill_switch
 
@@ -753,8 +807,37 @@ class StopMonitor:
     def current_stop_price(self) -> float:
         return spread_breach_threshold(self.state)
 
-    def _refresh_breach_watch(self, streamer_stale: bool, *, mqtt_cache_stale: bool = False) -> None:
+    def _mqtt_cache_stale(self) -> bool:
+        from common.mqtt_prices import mqtt_cache_is_stale
+        return mqtt_cache_is_stale(self.prices)
+
+    def _refresh_breach_watch_display_only(self) -> None:
+        """Refresh breach_watch snapshot without evaluating breach transitions."""
+        streamer_stale = self._streamer_prices_stale()
+        mqtt_cache_stale = self._mqtt_cache_stale()
+        self._refresh_breach_watch(streamer_stale, mqtt_cache_stale=mqtt_cache_stale, evaluate_transitions=False)
+
+    def _refresh_breach_watch(
+        self,
+        streamer_stale: bool,
+        *,
+        mqtt_cache_stale: bool = False,
+        evaluate_transitions: bool = True,
+    ) -> None:
         """Persist spread vs software breach threshold; rate-limited diagnostics."""
+        from blocks.stop.breach import spread_breach_triggered
+        from blocks.stop.breach_quote import (
+            evaluate_quote_pair_readiness,
+            readiness_to_watch_fields,
+            reset_breach_confirmation,
+            update_breach_confirmation,
+        )
+        from blocks.stop.breach_config import BREACH_CONFIRM_OBSERVATIONS
+        from blocks.stop.breach_watch import build_breach_watch_snapshot, log_breach_watch
+        from blocks.stop.fill_reference import ensure_fill_reference_epoch
+        from blocks.stop.stop_math import spread_breach_threshold
+
+        ensure_fill_reference_epoch(self.state)
         short_sym = self.state['short_leg']['symbol']
         long_sym = self.state['long_leg']['symbol']
         if mqtt_cache_stale:
@@ -763,6 +846,32 @@ class StopMonitor:
         else:
             short_p = self.prices.get_market_mid(short_sym)
             long_p = self.prices.get_market_mid(long_sym)
+
+        readiness = evaluate_quote_pair_readiness(
+            self.state,
+            self.prices,
+            streamer_stale=streamer_stale,
+            mqtt_cache_stale=mqtt_cache_stale,
+        )
+        if evaluate_transitions and readiness.software_breach_ready and readiness.spread_mid is not None:
+            threshold = spread_breach_threshold(self.state)
+            spread_breached = spread_breach_triggered(readiness.spread_mid, threshold)
+            confirmation = update_breach_confirmation(
+                self.state,
+                readiness,
+                spread_breached=spread_breached,
+            )
+        else:
+            if evaluate_transitions:
+                reset_breach_confirmation(self.state)
+            confirmation = {
+                'breach_confirmation_count': 0,
+                'breach_confirmation_required': BREACH_CONFIRM_OBSERVATIONS,
+                'breach_confirmation_reason': readiness.quote_pair_reason,
+                'software_breach_confirmed': False,
+            }
+
+        readiness_fields = readiness_to_watch_fields(readiness, confirmation)
         watch = build_breach_watch_snapshot(
             self.state,
             short_p=short_p,
@@ -770,6 +879,7 @@ class StopMonitor:
             streamer_stale=streamer_stale,
             mqtt_cache_stale=mqtt_cache_stale,
             now_iso=state_mod.now_iso(),
+            readiness=readiness_fields,
         )
         self.state['breach_watch'] = watch
         log_breach_watch(self, watch)
@@ -916,7 +1026,10 @@ class StopMonitor:
             return
         if str(active.get('status', '')).lower() in ('filled', 'cancelled', 'rejected'):
             return
-        self._sync_active_close_order()
+        self._sync_active_close_order(
+            priority=PRIORITY_LOW,
+            op=OPERATION_WORKING_STOP_RECONCILE,
+        )
 
     def _reconcile_active_stop_with_broker(self) -> None:
         """Refresh this JSON's own active_stop at broker — never adopt by short symbol."""
@@ -928,7 +1041,11 @@ class StopMonitor:
         if not oid:
             return
 
-        result = self.broker.get_order_status(oid)
+        result = self.broker.get_order_status(
+            oid,
+            priority=PRIORITY_LOW,
+            op=OPERATION_WORKING_STOP_RECONCILE,
+        )
         if not result.success:
             return
 
@@ -996,13 +1113,22 @@ class StopMonitor:
             self._reregister_alert(old_oid, disk_oid)
             log.info('Adopted disk stop state for %s → order %s', self.json_path, disk_oid)
 
-    def _sync_active_close_order(self) -> None:
+    def _sync_active_close_order(
+        self,
+        *,
+        priority: str = PRIORITY_HIGH,
+        op: str = OPERATION_SPREAD_CLOSE_STATUS,
+    ) -> None:
         """Poll broker for fill/cancel on the working short-leg close order."""
         active = self.state.get('active_stop') or {}
         oid = active.get('order_id')
         if not oid:
             return
-        result = self.broker.get_order_status(str(oid))
+        result = self.broker.get_order_status(
+            str(oid),
+            priority=priority,
+            op=op,
+        )
         if not result.success:
             return
         active['status'] = result.status
@@ -1032,7 +1158,11 @@ class StopMonitor:
         Returns 'cancelled', 'filled', or 'failed'.
         """
         oid = str(order_id)
-        status = self.broker.get_order_status(oid)
+        status = self.broker.get_order_status(
+            oid,
+            priority=PRIORITY_HIGH,
+            op=OPERATION_STOP_CANCEL,
+        )
         if status.success and str(status.status).lower() == 'filled':
             return 'filled'
 
@@ -1042,7 +1172,11 @@ class StopMonitor:
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            st = self.broker.get_order_status(oid)
+            st = self.broker.get_order_status(
+                oid,
+                priority=PRIORITY_HIGH,
+                op=OPERATION_STOP_CANCEL,
+            )
             low = str(st.status).lower()
             if st.success:
                 if low in ('cancelled', 'canceled'):
@@ -1072,7 +1206,11 @@ class StopMonitor:
 
         outcome = self._cancel_stop_and_confirm(oid)
         if outcome == 'filled':
-            result = self.broker.get_order_status(str(oid))
+            result = self.broker.get_order_status(
+                str(oid),
+                priority=PRIORITY_HIGH,
+                op=OPERATION_SPREAD_CLOSE_STATUS,
+            )
             self.handle_stop_order_update(active, broker_result=result)
             return
         if outcome != 'cancelled':
@@ -1210,7 +1348,11 @@ class StopMonitor:
 
         result = broker_result
         if result is None:
-            result = self.broker.get_order_status(oid)
+            result = self.broker.get_order_status(
+                oid,
+                priority=PRIORITY_HIGH,
+                op=OPERATION_SPREAD_CLOSE_STATUS,
+            )
         if not stop_order_fully_filled(self.state, result):
             active = self.state.get('active_stop') or {}
             if active.get('order_id') == oid and result.success:
@@ -1249,7 +1391,11 @@ class StopMonitor:
         if broker_result and broker_result.success and broker_result.filled_price is not None:
             fill_px = float(broker_result.filled_price)
         if fill_px is None:
-            status_result = self.broker.get_order_status(oid)
+            status_result = self.broker.get_order_status(
+                oid,
+                priority=PRIORITY_HIGH,
+                op=OPERATION_SPREAD_CLOSE_STATUS,
+            )
             if status_result.success and status_result.filled_price is not None:
                 fill_px = float(status_result.filled_price)
         self.state['short_close_price'] = (
@@ -1391,7 +1537,11 @@ class StopMonitor:
             self._place_long_close_at_mid()
             return
 
-        result = self.broker.get_order_status(oid)
+        result = self.broker.get_order_status(
+            oid,
+            priority=PRIORITY_HIGH,
+            op=OPERATION_LONG_CLOSE_STATUS,
+        )
         if not result.success:
             return
 

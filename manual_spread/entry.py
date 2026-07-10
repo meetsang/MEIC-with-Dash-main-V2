@@ -17,7 +17,6 @@ from common.symbols import build_tastytrade_symbol, parse_canonical, to_tastytra
 from manual_spread import config as ms_config
 from blocks.entry.spread_scan import SpreadCandidate, resolve_scan_otm_max
 from blocks.stop import state as state_mod
-from blocks.stop.fill_sync import sync_open_order
 
 log = logging.getLogger(__name__)
 
@@ -207,7 +206,6 @@ def place_spread(
     )
     st = state_mod.load_state(path)
     register_spread_symbols(st, lot, log)
-    sync_open_order(st, broker, force=True, min_interval_sec=0)
     state_mod.save_state(path, st)
 
     return {
@@ -285,8 +283,6 @@ def modify_spread(
     }
     state_mod.save_state(path, state)
     register_spread_symbols(state, state.get('lot', 'manual'), log)
-    sync_open_order(state, broker, force=True, min_interval_sec=0)
-    state_mod.save_state(path, state)
     if state.get('status') == 'open' and not (state.get('active_stop') or {}).get('order_id'):
         log.info(
             'Manual spread %s filled on modify — stop_monitor will place stop on next poll',
