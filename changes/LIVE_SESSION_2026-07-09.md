@@ -371,6 +371,42 @@ Files: `dashboard/server.py`, `dashboard/templates/index.html`, `blocks/entry/ru
 | **14:29 / 14:38** | Streamer exit code 1 — launcher restart |
 | **15:00** | Expiry settlement on 5 OTM positions @ SPX 7542.895 |
 | **15:30** | 11-00_P final settlement pass (was still `close_only_mode`) |
+| **13:44:05** | **Broker cooldown set** (`429 Too Many Requests`) — ~30 min after 01-15_P fill |
+
+---
+
+## 9. REST pile-up — analysis & groomed fix plan (operator session)
+
+### What triggered the 429?
+
+`runtime/broker_cooldown.json` records **`429 Too Many Requests`** at **13:44:05 CT** — about **30 minutes** after **01-15_P** filled with a missing long leg.
+
+**Operator assessment:** the main culprits were **01-15_P fill sync hammering** (long leg never returned by broker) plus **dashboard fill sync on laptop and phone** (two clients polling summary ~every 3s). Entry scans alone were **not** the primary driver (`67 symbols` ≠ `67 REST calls`; see technical doc).
+
+### REST sources (Jul 9 afternoon)
+
+| Source | What it does | Jul 9 impact |
+|--------|----------------|--------------|
+| **Entry scan** | ~2 REST market-data batches per scan pass × retries/chase | Moderate (~100–150 calls/day) |
+| **01-15_P fill sync** | `get_order_status` every **3s** for ~106 min when long leg stuck at $0 | **High** (~600+ polls by 13:44; ~2k by EOD from launcher alone) |
+| **Dashboard fill sync** | `maybe_sync_active_trades` on each summary read (~3s) × **2 clients** | **High multiplier** while 01-15_P needed sync |
+| **Stop monitor** | REST every **10s**/trade for stop order reconcile (MQTT for breach) | Moderate (7–8 open trades) |
+| **01-45 scan** | Burst into **already-active cooldown** | Wasted calls; did not cause the initial 429 |
+
+### Groomed decisions (no code yet — see technical doc)
+
+| # | Decision | Summary |
+|---|----------|---------|
+| **A** | **Fill sync tri-value inference** | Broker may return **short**, **long**, and **spread** (net credit) in any combination. **Keep polling (3s)** until **≥2 of 3** are present. **One more poll** to see if broker sends all 3. If still missing, **calculate the third** from `short − long = spread`, log `fill_inferred`, arm stop. Then **exponential backoff** — do not poll every 3s all afternoon. |
+| **B** | **Single fill-sync owner** | **Launcher** (`run.py`) owns pending fill sync. **Stop monitor is consumer** only (starts monitor when `status=open` + both legs). **Remove** fill sync from dashboard summary path and stop_monitor `_sync_pending_fills`. |
+| **C** | **Entry MQTT fallback** | On REST cooldown or low quote coverage, fall back to **live MQTT cache** for scan (not 60s CSV). **Freshness gates:** price age, symbol subscribed, spread sanity vs credit band. |
+| **D** | **Adaptive stop reconcile** | **15–20s** REST stop-order poll when `open` + MQTT healthy. **Stay fast** when `closing` / long chase (do not slow long-leg close). |
+
+### Entry scan math (correcting `6 × 67`)
+
+- **67** = unique option symbols in one scan grid (one side, one pass).
+- REST = **batched** (~2 calls per pass, not 67).
+- Jul 9: **4 lots fired** × 2 sides ≈ **8** entry scans (+ chase retries) → **~100–150 REST market-data calls** for the day — reasonable alone.
 
 ---
 
@@ -381,10 +417,11 @@ Files: `dashboard/server.py`, `dashboard/templates/index.html`, `blocks/entry/ru
 | 1 | Fill-time breach grace period + stale MQTT guard | P0 |
 | 2 | Keep `breach_watch` fresh during exit jobs; fix dashboard stale spread overlay | P0 |
 | 3 | Dashboard **Expired** status for `expiry_settlement` | P1 (operator request) |
-| 4 | 01-15_P long-fill sync — infer long from `short − credit` when broker omits leg | P1 |
-| 5 | 01-45: MQTT cache fallback for entry scan during REST cooldown + freshness gates | P1 |
-| 6 | ~~`spx_ladder_ticks.csv` tick-dump~~ — **deferred**; keep 60s sampling per operator | — |
-| 7 | Session plan window times + Save All / Apply on all UI | **Done** 2026-07-09 |
+| 4 | Fill sync: tri-value inference + backoff; launcher-only owner; drop dashboard/stop_monitor duplicate sync | P1 — [REST_FILL_SYNC_ENTRY_FIX_DESIGN.md](REST_FILL_SYNC_ENTRY_FIX_DESIGN.md) |
+| 5 | Entry scan: MQTT cache fallback during REST cooldown + freshness gates | P1 — same doc |
+| 6 | Stop reconcile: 15–20s when `open` + MQTT healthy; fast when `closing` | P1 — same doc |
+| 7 | ~~`spx_ladder_ticks.csv` tick-dump~~ — **deferred**; keep 60s sampling per operator | — |
+| 8 | Session plan window times + Save All / Apply on all UI | **Done** 2026-07-09 |
 
 ---
 
@@ -399,5 +436,6 @@ Files: `dashboard/server.py`, `dashboard/templates/index.html`, `blocks/entry/ru
 | REST cooldown evidence | `runtime/broker_cooldown.json` (429 Too Many Requests) |
 | Ladder sampling | `market_data/spx_ladder_snapshots.py`, `common/market_watch.py` |
 | Fill sync / stop arm | `blocks/stop/fill_sync.py`, `blocks/stop/monitor.py` |
+| REST fix design | [REST_FILL_SYNC_ENTRY_FIX_DESIGN.md](REST_FILL_SYNC_ENTRY_FIX_DESIGN.md) |
 | SPX settlement | `data/2026-07-09/spx_mqtt_settlement.json` |
 | Poll / ladder health | `data/2026-07-09/SPX_polls.csv`, `spx_ladder_quotes.csv`, `GLD_polls.csv` |
