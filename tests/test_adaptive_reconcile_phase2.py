@@ -80,14 +80,21 @@ def test_different_trade_identities_distribute_jitter():
     assert len(jitters) > 1
 
 
-def test_jitter_uses_crc32_not_python_hash():
+def test_jitter_uses_sha256_not_python_hash():
     st = _trade_state('12-00')
-    key = reconcile_identity_key(st)
     digest_a = stable_reconcile_jitter_sec(st)
-    with patch('blocks.stop.reconcile_policy.zlib.crc32', side_effect=lambda b: 12345):
+    with patch('blocks.stop.reconcile_policy.hashlib.sha256') as mock_sha:
+        mock_sha.return_value.digest.return_value = b'\x00' * 8
         digest_b = stable_reconcile_jitter_sec(st)
     assert digest_a != digest_b
-    assert key
+
+
+def test_jitter_has_sub_second_fraction_not_integer_only():
+    states = [_trade_state(f'{h:02d}-30', oid=f'oid-sub-{h}') for h in range(32)]
+    jitters = [stable_reconcile_jitter_sec(st) for st in states]
+    fractional = [j for j in jitters if abs(j - round(j)) > 1e-9]
+    assert len(fractional) >= len(states) - 1
+    assert all(0.0 <= j <= STOP_RECONCILE_OPEN_JITTER_SEC for j in jitters)
 
 
 def test_mqtt_stale_open_trade_uses_defensive_interval():

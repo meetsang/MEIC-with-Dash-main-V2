@@ -1,8 +1,8 @@
 """Adaptive working-stop REST reconcile interval policy (V2 + V3)."""
 from __future__ import annotations
 
+import hashlib
 import os
-import zlib
 from typing import Any, Dict, Optional
 
 STOP_RECONCILE_OPEN_SEC = float(os.environ.get('STOP_RECONCILE_OPEN_SEC', '15'))
@@ -30,13 +30,17 @@ def reconcile_identity_key(state: Dict[str, Any]) -> str:
     return f'{strategy}|{lot}|{side}|{oid}'
 
 
+_MAX_DIGEST_VALUE = (1 << 64) - 1
+
+
 def stable_reconcile_jitter_sec(state: Dict[str, Any]) -> float:
-    """Deterministic jitter in [0, STOP_RECONCILE_OPEN_JITTER_SEC] — stable across restarts."""
+    """Deterministic sub-second jitter in [0, STOP_RECONCILE_OPEN_JITTER_SEC] — stable across restarts."""
     if STOP_RECONCILE_OPEN_JITTER_SEC <= 0:
         return 0.0
-    digest = zlib.crc32(reconcile_identity_key(state).encode('utf-8')) & 0xFFFFFFFF
-    fraction = digest / 0xFFFFFFFF
-    return round(fraction * STOP_RECONCILE_OPEN_JITTER_SEC, 6)
+    digest = hashlib.sha256(reconcile_identity_key(state).encode('utf-8')).digest()
+    digest_value = int.from_bytes(digest[:8], 'big')
+    fraction = digest_value / _MAX_DIGEST_VALUE
+    return fraction * STOP_RECONCILE_OPEN_JITTER_SEC
 
 
 def reconcile_interval_sec(
@@ -93,8 +97,8 @@ def schedule_next_working_stop_reconcile(
     )
     due = now + max(0.0, interval)
     lc = _lifecycle(state)
-    lc['next_working_stop_reconcile_epoch'] = round(due, 6)
-    lc['working_stop_reconcile_interval_sec'] = round(interval, 6)
+    lc['next_working_stop_reconcile_epoch'] = due
+    lc['working_stop_reconcile_interval_sec'] = interval
     lc['working_stop_reconcile_jitter_sec'] = stable_reconcile_jitter_sec(state)
     return due
 
@@ -129,45 +133,47 @@ def simulate_reconcile_events(
     trade_states: list[Dict[str, Any]],
     *,
     duration_sec: float = 600.0,
-    step_sec: float = 0.25,
     mqtt_healthy: bool = True,
     fixed_interval_sec: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Deterministic reconcile schedule simulation for before/after comparison."""
-    next_due: Dict[int, float] = {}
+    import heapq
+
+    heap: list[tuple[float, int]] = []
     for idx, st in enumerate(trade_states):
         if fixed_interval_sec is not None:
-            next_due[idx] = 0.0
+            due = 0.0
         else:
             schedule_next_working_stop_reconcile(
                 st, 0.0, mqtt_healthy=mqtt_healthy, status='open',
             )
-            next_due[idx] = next_working_stop_reconcile_epoch(st)
+            due = next_working_stop_reconcile_epoch(st)
+        heapq.heappush(heap, (due, idx))
 
     events: list[float] = []
-    now = 0.0
-    while now <= duration_sec + 1e-9:
-        for idx, st in enumerate(trade_states):
-            if now + 1e-9 >= next_due.get(idx, 0.0):
-                events.append(now)
-                if fixed_interval_sec is not None:
-                    next_due[idx] = now + fixed_interval_sec
-                else:
-                    schedule_next_working_stop_reconcile(
-                        st, now, mqtt_healthy=mqtt_healthy, status='open',
-                    )
-                    next_due[idx] = next_working_stop_reconcile_epoch(st)
-        now += step_sec
+    while heap and heap[0][0] <= duration_sec + 1e-9:
+        due, idx = heapq.heappop(heap)
+        st = trade_states[idx]
+        events.append(due)
+        if fixed_interval_sec is not None:
+            nxt = due + fixed_interval_sec
+        else:
+            schedule_next_working_stop_reconcile(
+                st, due, mqtt_healthy=mqtt_healthy, status='open',
+            )
+            nxt = next_working_stop_reconcile_epoch(st)
+        if nxt <= duration_sec + 1e-9:
+            heapq.heappush(heap, (nxt, idx))
 
+    bucket: Dict[int, int] = {}
     peak = 0
-    if events:
-        bucket: Dict[int, int] = {}
-        for ts in events:
-            sec = int(ts)
-            bucket[sec] = bucket.get(sec, 0) + 1
-            peak = max(peak, bucket[sec])
+    for ts in events:
+        sec = int(ts)
+        bucket[sec] = bucket.get(sec, 0) + 1
+        peak = max(peak, bucket[sec])
     return {
         'total_calls': len(events),
         'peak_calls_one_second': peak,
+        'per_second_buckets': dict(sorted(bucket.items())),
         'events': events,
     }
