@@ -16,6 +16,7 @@ from blocks.session.plan import SessionRow
 from blocks.stop import state as state_mod
 from common.broker_factory import get_broker
 from common.streamer_symbols import register_spread_symbols
+from common.trading_gate import effective_new_risk_blocked, gate_enabled
 from manual_spread import config as ms_config
 from manual_spread.entry import _resolve_strikes_for_overlap, parse_expiry
 from meic0dte.open import open_spread_tt
@@ -37,34 +38,44 @@ def _poll_manual_fill(
     row_log,
     *,
     fill_wait: int,
-) -> dict:
+) -> tuple[dict, bool]:
     deadline = time.time() + fill_wait
-    state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+    state, ok, _detail = open_spread_tt.sync_entry_trade_state_from_broker(broker, path, row_log)
+    if not ok:
+        return state, False
     while time.time() < deadline:
         filled = int(state.get('filled_quantity') or 0)
         ostatus = (state.get('open_order') or {}).get('status', 'working')
         if filled >= quantity or ostatus == 'filled':
-            return state
+            return state, True
         if ostatus in ('cancelled', 'canceled', 'rejected'):
-            return state
+            return state, True
+        if ostatus == 'visibility_unknown':
+            return state, False
         if filled > 0:
             break
         time.sleep(meic_config.FILL_WAIT)
-        state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+        state, ok, _detail = open_spread_tt.sync_entry_trade_state_from_broker(broker, path, row_log)
+        if not ok:
+            return state, False
 
     filled = int(state.get('filled_quantity') or 0)
     if 0 < filled < quantity:
         row_log.info('Partial fill %s/%s — polling (no chase)', filled, quantity)
         while True:
-            state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+            state, ok, _detail = open_spread_tt.sync_entry_trade_state_from_broker(broker, path, row_log)
+            if not ok:
+                return state, False
             filled = int(state.get('filled_quantity') or 0)
             ostatus = (state.get('open_order') or {}).get('status', 'working')
             if filled >= quantity or ostatus == 'filled':
-                return state
+                return state, True
             if ostatus in ('cancelled', 'canceled', 'rejected'):
-                return state
+                return state, True
+            if ostatus == 'visibility_unknown':
+                return state, False
             time.sleep(meic_config.FILL_WAIT)
-    return state
+    return state, True
 
 
 def _finalize_manual_result(
@@ -143,6 +154,16 @@ def run_manual_entry_row(
             attempt += 1
             is_retry = attempt > 1
 
+            if gate_enabled() and effective_new_risk_blocked():
+                row_log.warning('New-risk gate closed — aborting manual entry')
+                return EntryWorkerResult(
+                    slot_key=row.slot_key,
+                    state='failed',
+                    error='new_risk_gate_blocked',
+                    api_status='error',
+                    lot=row.lot,
+                )
+
             if is_retry:
                 oid = last_order_id
                 if oid:
@@ -192,7 +213,18 @@ def run_manual_entry_row(
             state_mod.save_state(trade_path, st)
             register_spread_symbols(st, row.lot, row_log)
 
-            state = _poll_manual_fill(broker, trade_path, quantity, row_log, fill_wait=fill_wait)
+            state, vis_ok = _poll_manual_fill(broker, trade_path, quantity, row_log, fill_wait=fill_wait)
+            if not vis_ok:
+                return EntryWorkerResult(
+                    slot_key=row.slot_key,
+                    state='entering',
+                    trade_path=trade_path,
+                    order_id=str(last_order_id),
+                    error='cooldown_blind',
+                    api_status='working',
+                    lot=row.lot,
+                    filename=os.path.basename(trade_path),
+                )
             filled = int(state.get('filled_quantity') or 0)
             ostatus = (state.get('open_order') or {}).get('status', 'working')
 

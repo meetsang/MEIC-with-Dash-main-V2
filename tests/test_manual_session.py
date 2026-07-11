@@ -11,6 +11,26 @@ from blocks.session.manual_helpers import append_manual_session_row
 from blocks.session.plan import SessionPlan, load_manual_session_today
 
 
+def _run_manual_with_mocks(tmp, row, broker):
+    broker.get_order_status_direct = broker.get_order_status
+    patches = [
+        patch('blocks.entry.manual_worker.get_broker', return_value=broker),
+        patch('blocks.entry.manual_worker.effective_new_risk_blocked', return_value=False),
+        patch('blocks.entry.manual_worker._resolve_strikes_for_overlap', return_value=(
+            7000, 6975, '.SPXW260625P7000', '.SPXW260625P6975', 0,
+        )),
+        patch('blocks.entry.manual_worker.register_spread_symbols'),
+        patch('blocks.entry.manual_worker.util.get_expiration_date', return_value='260625'),
+        patch('blocks.entry.manual_worker.state_mod.manual_spread_active_dir', return_value=tmp),
+    ]
+    ctx = [p.start() for p in patches]
+    try:
+        return run_manual_entry_row(row)
+    finally:
+        for p in patches:
+            p.stop()
+
+
 class TestManualSession(unittest.TestCase):
     def test_append_manual_row(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,15 +82,8 @@ class TestManualSession(unittest.TestCase):
                 success=True, status='filled', filled_quantity=1, order_quantity=1,
                 filled_price=1.0, short_fill_price=2.0, long_fill_price=1.0,
             )
-            with patch('blocks.entry.manual_worker.get_broker', return_value=broker):
-                with patch('blocks.entry.manual_worker._resolve_strikes_for_overlap', return_value=(
-                    7000, 6975, '.SPXW260625P7000', '.SPXW260625P6975', 0,
-                )):
-                    with patch('blocks.entry.manual_worker.register_spread_symbols'):
-                        with patch('blocks.entry.manual_worker.util.get_expiration_date', return_value='260625'):
-                            with patch('blocks.entry.manual_worker.state_mod.manual_spread_active_dir', return_value=tmp):
-                                result = run_manual_entry_row(row)
-                                apply_entry_result(plan.path, result, strategy=plan.strategy)
+            result = _run_manual_with_mocks(tmp, row, broker)
+            apply_entry_result(plan.path, result, strategy=plan.strategy)
             from blocks.stop import state as state_mod
             reloaded = SessionPlan.load(plan.path, strategy=plan.strategy)
             saved = reloaded.row_by_slot_key(row.slot_key)
@@ -96,16 +109,8 @@ class TestManualSession(unittest.TestCase):
                 short_fill_price=2.0,
                 long_fill_price=1.0,
             )
-
-            with patch('blocks.entry.manual_worker.get_broker', return_value=broker):
-                with patch('blocks.entry.manual_worker._resolve_strikes_for_overlap', return_value=(
-                    7000, 6975, '.SPXW260625P7000', '.SPXW260625P6975', 0,
-                )):
-                    with patch('blocks.entry.manual_worker.register_spread_symbols'):
-                        with patch('blocks.entry.manual_worker.util.get_expiration_date', return_value='260625'):
-                            with patch('blocks.entry.manual_worker.state_mod.manual_spread_active_dir', return_value=tmp):
-                                result = run_manual_entry_row(row)
-                                apply_entry_result(plan.path, result, strategy=plan.strategy)
+            result = _run_manual_with_mocks(tmp, row, broker)
+            apply_entry_result(plan.path, result, strategy=plan.strategy)
 
             self.assertIn(result.api_status, ('placed', 'partial', 'working'))
             final = SessionPlan.load(plan.path, strategy=plan.strategy)

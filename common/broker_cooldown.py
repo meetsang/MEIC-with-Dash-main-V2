@@ -1,11 +1,12 @@
 """Broker REST cooldown circuit breaker — shared across processes via JSON file."""
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from typing import Any, Dict, Optional
+
+from common.data_utils import load_json_safe, save_json_safe
 
 log = logging.getLogger(__name__)
 
@@ -20,20 +21,12 @@ def _cooldown_path() -> str:
 
 
 def _read() -> Dict[str, Any]:
-    path = _cooldown_path()
-    try:
-        with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = load_json_safe(_cooldown_path())
+    return data if isinstance(data, dict) else {}
 
 
 def _write(data: Dict[str, Any]) -> None:
-    path = _cooldown_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
+    save_json_safe(_cooldown_path(), data)
 
 
 def cooldown_active(*, now: Optional[float] = None) -> bool:
@@ -76,6 +69,12 @@ def set_cooldown(
     }
     _write(data)
     log.warning('Broker cooldown set %ss reason=%s source=%s', dur, reason, source)
+    try:
+        from common.trading_gate import record_cooldown_latch
+
+        record_cooldown_latch(reason, source=source)
+    except Exception:
+        log.exception('trading_gate latch hook failed')
 
 
 def clear_cooldown() -> None:

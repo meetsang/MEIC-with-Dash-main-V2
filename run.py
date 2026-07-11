@@ -390,6 +390,26 @@ def main(
         log.info(reason)
     else:
         log.info('Force mode — skipping trading-day check.')
+
+    from common.trading_gate import initialize_for_session_date
+
+    session_date_ct = now.strftime('%Y-%m-%d')
+    initialize_for_session_date(session_date_ct)
+    if os.environ.get('REST_PROBE_ON_SESSION_START', 'true').lower() in ('1', 'true', 'yes'):
+        try:
+            from common.broker_factory import get_broker
+            from common.rest_probe import run_rest_probe
+
+            probe = run_rest_probe(get_broker(), source='startup')
+            log.info(
+                'Startup REST probe: ok=%s status=%s latency_ms=%s',
+                probe.ok,
+                probe.status,
+                probe.latency_ms,
+            )
+        except Exception:
+            log.exception('Startup REST probe failed')
+
     _write_status('running', 'Bot is active.')
 
     # Wait for stream start time if we're early (unless force + tranche_now)
@@ -535,8 +555,10 @@ if __name__ == "__main__":
     parser.add_argument('--tranche-now', action='store_true', help='Fire one tranche immediately after streamer starts')
     parser.add_argument('--once', action='store_true', help='Exit after tranche-now or first scheduled tranche')
     parser.add_argument('--no-stop-monitor', action='store_true', help='Do not start stop_monitor subprocess')
+    parser.add_argument('--one-day', action='store_true', help='Run one trading day then exit (Task Scheduler mode)')
     parser.add_argument('--lot', default=None, help='Tranche lot label (sets MEIC_LOT for app_main)')
     args = parser.parse_args()
+    one_day = args.one_day or os.environ.get('RUN_ONE_DAY_DEFAULT', 'false').lower() in ('1', 'true', 'yes')
     if args.paper:
         os.environ['PAPER_MODE'] = 'true'
         # Reload tt_config paper flag
@@ -594,6 +616,19 @@ if __name__ == "__main__":
                 tranche_now=True,
                 once=True,
                 no_stop_monitor=True,
+                lot=args.lot,
+            )
+        elif one_day:
+            try:
+                run_session_cleanup('morning', log)
+            except Exception:
+                log.exception('Morning session cleanup failed')
+            main(
+                paper=args.paper,
+                force=args.force,
+                tranche_now=args.tranche_now,
+                once=args.once,
+                no_stop_monitor=args.no_stop_monitor,
                 lot=args.lot,
             )
         else:

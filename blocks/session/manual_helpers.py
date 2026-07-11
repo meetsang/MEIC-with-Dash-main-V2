@@ -33,6 +33,19 @@ def dispatch_manual_place(
     When run.py is active, only append to CSV — EntryMonitorRunner places the order.
     When dashboard runs alone, claim the row and run the worker inline.
     """
+    from common.trading_gate import effective_new_risk_blocked, gate_enabled
+
+    if gate_enabled() and effective_new_risk_blocked():
+        from common.trading_gate import read_state, summary_for_dashboard
+
+        tg = summary_for_dashboard()
+        return {
+            'status': 'error',
+            'error': 'new_risk_gate_blocked',
+            'reason': tg.get('reason') or tg.get('rest_status'),
+            'detail': tg.get('detail') or '',
+        }, 423
+
     if is_after_market_close_ct():
         exp = _parse_expiry_yymmdd(expiry or '')
         # Dashboard manual with no expiry uses today's 0DTE session date.

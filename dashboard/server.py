@@ -647,6 +647,9 @@ def build_summary():
         slot_state_fn=_slot_state_from_trade,
         spx_settle=spx_settle,
     )
+    from common.trading_gate import summary_for_dashboard
+
+    trading_gate = summary_for_dashboard()
     if session_plan:
         meic_unpaused = sum(1 for r in session_plan.rows if not r.paused and not r.skip)
         all_slot_keys = {r.slot_key for r in session_plan.rows}
@@ -681,6 +684,7 @@ def build_summary():
             'stop_monitor_mqtt': mqtt_cache_health or {},
             'mqtt_spx_price': live_prices.get(INDEX_TOPIC),
         },
+        'trading_gate': trading_gate,
     }
 
 
@@ -820,6 +824,7 @@ def broker_health():
     from common.process_lock import list_locks
     from common.rest_limiter import get_rest_limiter
     from common.broker_factory import shared_broker_stats
+    from common.trading_gate import summary_for_dashboard
     from dashboard.broker_fill_sync import fill_sync_stats
 
     from common.rest_metrics import metrics_snapshot
@@ -842,6 +847,48 @@ def broker_health():
         'locks': locks,
         'launcher_active': _launcher_active(),
         'dashboard_pid': os.getpid(),
+        'trading_gate': summary_for_dashboard(),
+    })
+
+
+@app.route('/api/rest-probe', methods=['POST'])
+def api_rest_probe():
+    from common.broker_factory import get_broker
+    from common.rest_probe import run_rest_probe
+    from common.trading_gate import summary_for_dashboard
+
+    try:
+        result = run_rest_probe(get_broker(), source='dashboard', bypass_local_cooldown=True)
+    except Exception as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 500
+    return jsonify({
+        'status': 'ok' if result.ok else 'failed',
+        'probe': {
+            'ok': result.ok,
+            'status': result.status,
+            'latency_ms': result.latency_ms,
+            'http_status': result.http_status,
+            'detail': result.detail,
+        },
+        'trading_gate': summary_for_dashboard(),
+    })
+
+
+@app.route('/api/trading-gate/resume', methods=['POST'])
+def api_trading_gate_resume():
+    from common.trading_gate import resume_new_risk, summary_for_dashboard
+
+    decision = resume_new_risk(cleared_by='dashboard')
+    if decision.blocked:
+        return jsonify({
+            'status': 'rejected',
+            'reason': decision.reason,
+            'detail': decision.detail,
+            'trading_gate': summary_for_dashboard(),
+        }), 423
+    return jsonify({
+        'status': 'ok',
+        'trading_gate': summary_for_dashboard(),
     })
 
 @app.route('/api/stop_bot', methods=['POST'])
