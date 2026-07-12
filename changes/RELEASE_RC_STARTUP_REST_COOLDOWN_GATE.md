@@ -1,9 +1,11 @@
 # Release Candidate — Startup REST Cooldown Gate
 
-**Status:** RC — **do not merge or run live until operational checklist complete**  
+**Status:** committed and pushed; HOLD pending operational checklist  
 **Date:** 2026-07-11  
-**Branch:** `master` (uncommitted working tree)  
+**Branch:** `fix/startup-rest-gate-entry-safety`  
 **Base commit:** `d7a4ca61b36319e13cef02f40f33f2c1362502b5`  
+**Implementation commit:** `086362f`  
+**RC report commit:** `d3b831b`  
 **Spec:** `changes/STARTUP_REST_COOLDOWN_GATE_DESIGN_FINAL.md`
 
 ---
