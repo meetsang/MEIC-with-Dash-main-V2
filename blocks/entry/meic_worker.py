@@ -9,6 +9,12 @@ from typing import Optional, Tuple
 import meic0dte.app.config as meic_config
 import meic0dte.app.utilities as util
 from blocks.entry.chase import chase_credit_step, chase_kind, max_entry_attempts
+from blocks.entry.opening_duplicate_guard import (
+    ENTRY_DUPLICATE_RISK_BLOCKED,
+    assert_replacement_allowed,
+    record_entry_attempt,
+    update_latest_attempt_status,
+)
 from blocks.entry.config import CreditEntryConfig
 from blocks.entry.credit_spread import CreditSpreadEntry
 from blocks.entry.handoff import apply_stop_snapshot
@@ -16,8 +22,10 @@ from blocks.entry.result import EntryWorkerResult
 from blocks.session.plan import SessionRow, parse_width
 from blocks.stop import state as state_mod
 from common.broker_factory import get_broker
+from common.entry_risk_lane import opening_risk_critical_section
 from common.integration_report import append_event
 from common.streamer_symbols import register_spread_symbols
+from common.trading_gate import effective_new_risk_blocked, gate_enabled
 from meic0dte.open import open_spread_tt
 from blocks.entry.spread_scan import SpreadCandidate, pick_meic_candidate, resolve_scan_otm_max
 
@@ -116,22 +124,45 @@ def _place_pick(
     *,
     credit: Optional[float] = None,
 ) -> Tuple[str, str, str, float, int, int]:
-    if credit is not None:
-        candidate = _pick_to_candidate(_StrikePick(
-            pick.short_symbol, pick.long_symbol, pick.short_strike, pick.long_strike, credit,
-        ))
-        candidate.market_credit = credit
-        result = broker.place_spread_order(
-            candidate.short_symbol, candidate.long_symbol, quantity, credit,
-        )
-        if not result.success:
-            raise util.TerminateRequest(f'Open order failed: {result.message}')
-        return (
-            candidate.short_symbol, candidate.long_symbol, result.order_id,
-            credit, pick.short_strike, pick.long_strike,
-        )
-    candidate = _pick_to_candidate(pick)
-    return entry.open_candidate(candidate, side, quantity, lot)
+    if gate_enabled() and effective_new_risk_blocked():
+        raise util.TerminateRequest('new_risk_gate_blocked')
+
+    with opening_risk_critical_section():
+        if credit is not None:
+            candidate = _pick_to_candidate(_StrikePick(
+                pick.short_symbol, pick.long_symbol, pick.short_strike, pick.long_strike, credit,
+            ))
+            candidate.market_credit = credit
+            result = broker.place_spread_order(
+                candidate.short_symbol, candidate.long_symbol, quantity, credit,
+            )
+            if not result.success:
+                raise util.TerminateRequest(f'Open order failed: {result.message}')
+            placed = (
+                candidate.short_symbol, candidate.long_symbol, result.order_id,
+                credit, pick.short_strike, pick.long_strike,
+            )
+        else:
+            candidate = _pick_to_candidate(pick)
+            placed = entry.open_candidate(candidate, side, quantity, lot)
+
+        short_symbol, long_symbol, open_order_id, placed_credit, short_strike, long_strike = placed
+        return short_symbol, long_symbol, open_order_id, placed_credit, short_strike, long_strike
+
+
+def _sync_entry(broker, path: str, row_log) -> tuple[dict, bool, str]:
+    return open_spread_tt.sync_entry_trade_state_from_broker(broker, path, row_log)
+
+
+def _cooldown_blind_result(row: SessionRow, trade_path: str, order_id: str, detail: str) -> EntryWorkerResult:
+    return EntryWorkerResult(
+        slot_key=row.slot_key,
+        state='entering',
+        trade_path=trade_path,
+        order_id=str(order_id),
+        error='cooldown_blind',
+        lot=row.lot,
+    )
 
 
 def _poll_until_done(
@@ -141,34 +172,85 @@ def _poll_until_done(
     row_log,
     *,
     fill_wait: int,
-) -> dict:
+) -> tuple[dict, bool]:
     deadline = time.time() + fill_wait
-    state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+    state, ok, _detail = _sync_entry(broker, path, row_log)
+    if not ok:
+        return state, False
     while time.time() < deadline:
         filled = int(state.get('filled_quantity') or 0)
         ostatus = (state.get('open_order') or {}).get('status', 'working')
         if filled >= quantity or ostatus == 'filled':
-            return state
+            return state, True
         if ostatus in ('cancelled', 'canceled', 'rejected'):
-            return state
+            return state, True
+        if ostatus == 'visibility_unknown':
+            return state, False
         if filled > 0:
             break
         time.sleep(meic_config.FILL_WAIT)
-        state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+        state, ok, _detail = _sync_entry(broker, path, row_log)
+        if not ok:
+            return state, False
 
     filled = int(state.get('filled_quantity') or 0)
     if 0 < filled < quantity:
         row_log.info('Partial fill %s/%s — polling until full (no chase)', filled, quantity)
         while True:
-            state = open_spread_tt.sync_trade_state_from_broker(broker, path, row_log)
+            state, ok, _detail = _sync_entry(broker, path, row_log)
+            if not ok:
+                return state, False
             filled = int(state.get('filled_quantity') or 0)
             ostatus = (state.get('open_order') or {}).get('status', 'working')
             if filled >= quantity or ostatus == 'filled':
-                return state
+                return state, True
             if ostatus in ('cancelled', 'canceled', 'rejected'):
-                return state
+                return state, True
+            if ostatus == 'visibility_unknown':
+                return state, False
             time.sleep(meic_config.FILL_WAIT)
-    return state
+    return state, True
+
+
+def _reconcile_before_cancel(broker, path: str, order_id: str, row_log) -> tuple[dict, str]:
+    """Returns (state, action): proceed | filled | freeze."""
+    state, ok, detail = _sync_entry(broker, path, row_log)
+    if not ok:
+        return state, 'freeze'
+    filled = int(state.get('filled_quantity') or 0)
+    ostatus = (state.get('open_order') or {}).get('status', 'working').lower()
+    if filled > 0 or ostatus == 'filled':
+        return state, 'filled'
+    if ostatus in ('cancelled', 'canceled', 'rejected'):
+        return state, 'proceed'
+    if ostatus == 'visibility_unknown':
+        return state, 'freeze'
+    return state, 'proceed'
+
+
+def _cancel_and_confirm(
+    broker,
+    path: str,
+    order_id: str,
+    row_log,
+    *,
+    timeout_sec: int = 30,
+) -> str:
+    """Cancel and wait for terminal confirmation. Returns filled|cancelled|unknown."""
+    broker.cancel_order(order_id)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        state, ok, _detail = _sync_entry(broker, path, row_log)
+        if not ok:
+            return 'unknown'
+        filled = int(state.get('filled_quantity') or 0)
+        ostatus = (state.get('open_order') or {}).get('status', 'working').lower()
+        if filled > 0 or ostatus == 'filled':
+            return 'filled'
+        if ostatus in ('cancelled', 'canceled'):
+            return 'cancelled'
+        time.sleep(meic_config.FILL_WAIT)
+    return 'unknown'
 
 
 def _entered_result(row: SessionRow, trade_path: str, order_id: str, filled: int) -> EntryWorkerResult:
@@ -210,12 +292,33 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
 
     try:
         while attempt < max_attempts:
+            if gate_enabled() and effective_new_risk_blocked():
+                row_log.warning('New-risk gate closed — aborting entry attempts')
+                return _failed_result(row, 'new_risk_gate_blocked')
+
             attempt += 1
             kind = chase_kind(attempt, row)
             if kind == 'exhausted':
                 break
 
             row_log.info('Entry attempt %d/%d mode=%s', attempt, max_attempts, kind)
+
+            if trade_path and state_mod.load_state(trade_path).get('entry_control') == 'cooldown_blind':
+                row_log.warning('Prior attempt visibility_unknown — no further opening risk')
+                return _cooldown_blind_result(row, trade_path, last_order_id, 'prior visibility_unknown')
+
+            dup_state = state_mod.load_state(trade_path) if trade_path else {}
+            allowed, dup_reason = assert_replacement_allowed(
+                broker,
+                dup_state,
+                short_symbol=last_pick.short_symbol if last_pick else '',
+                long_symbol=last_pick.long_symbol if last_pick else '',
+                quantity=quantity,
+                is_initial_place=(trade_path is None),
+            )
+            if not allowed and trade_path is not None:
+                row_log.error('Duplicate opening risk blocked: %s', dup_reason)
+                return _failed_result(row, ENTRY_DUPLICATE_RISK_BLOCKED)
 
             if kind in ('initial_scan', 'build_new_strikes'):
                 last_pick = _scan_pick(entry, row.side, expiry, row.lot, row_log)
@@ -254,9 +357,26 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
             row_log.info('Handshake %s order=%s', trade_path, open_order_id)
 
             st = state_mod.load_state(trade_path)
+            record_entry_attempt(
+                st,
+                attempt=attempt,
+                order_id=open_order_id,
+                status='working',
+            )
+            state_mod.save_state(trade_path, st)
             register_spread_symbols(st, row.lot, row_log)
 
-            state = _poll_until_done(broker, trade_path, quantity, row_log, fill_wait=fill_wait)
+            with opening_risk_critical_section():
+                state, vis_ok, _detail = _sync_entry(broker, trade_path, row_log)
+            if not vis_ok:
+                row_log.error('First status confirm failed for %s — freezing', open_order_id)
+                return _cooldown_blind_result(row, trade_path, open_order_id, 'first_status_unknown')
+
+            state, vis_ok = _poll_until_done(broker, trade_path, quantity, row_log, fill_wait=fill_wait)
+            if not vis_ok:
+                row_log.error('Fill visibility lost for %s — freezing (no cancel/chase)', open_order_id)
+                return _cooldown_blind_result(row, trade_path, open_order_id, 'visibility_unknown')
+
             filled = int(state.get('filled_quantity') or 0)
             ostatus = (state.get('open_order') or {}).get('status', 'working')
 
@@ -292,9 +412,37 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
                 row_log.info('Order %s %s — retrying', open_order_id, ostatus)
                 continue
 
+            state, action = _reconcile_before_cancel(broker, trade_path, open_order_id, row_log)
+            if action == 'freeze':
+                row_log.error('Pre-cancel reconcile unknown for %s — freezing', open_order_id)
+                return _cooldown_blind_result(row, trade_path, open_order_id, 'pre_cancel_unknown')
+            if action == 'filled':
+                apply_stop_snapshot(state, row)
+                state_mod.save_state(trade_path, state)
+                filled = int(state.get('filled_quantity') or 0)
+                row_log.info('Pre-cancel reconcile shows fill — handoff')
+                return _entered_result(row, trade_path, open_order_id, filled)
+
             row_log.info('No fill after %ss — cancelling %s', fill_wait, open_order_id)
-            broker.cancel_order(open_order_id)
-            time.sleep(1)
+            cancel_outcome = _cancel_and_confirm(broker, trade_path, open_order_id, row_log)
+            if cancel_outcome == 'unknown':
+                row_log.error('Cancel not confirmed for %s — freezing', open_order_id)
+                st = state_mod.load_state(trade_path)
+                update_latest_attempt_status(st, status='visibility_unknown', terminal_confirmed=False)
+                state_mod.save_state(trade_path, st)
+                return _cooldown_blind_result(row, trade_path, open_order_id, 'cancel_unconfirmed')
+            if cancel_outcome == 'filled':
+                state = state_mod.load_state(trade_path)
+                apply_stop_snapshot(state, row)
+                state_mod.save_state(trade_path, state)
+                filled = int(state.get('filled_quantity') or 0)
+                row_log.info('Filled during cancel — handoff')
+                return _entered_result(row, trade_path, open_order_id, filled)
+
+            if cancel_outcome == 'cancelled':
+                st = state_mod.load_state(trade_path)
+                update_latest_attempt_status(st, status='cancelled', terminal_confirmed=True, filled_quantity=0)
+                state_mod.save_state(trade_path, st)
 
         row_log.error('Entry failed for %s after %d attempts', row.slot_key, attempt)
         return _failed_result(row)

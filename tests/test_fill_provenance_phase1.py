@@ -129,11 +129,12 @@ class TestJul9MissingLegScenario(unittest.TestCase):
         """Simulated Jul 9 missing-leg: fast + confirm only (≤2 opening-order polls)."""
         state = self._jul9_state()
         broker = self._broker_missing_long()
-        sync_open_order(state, broker, force=True)
-        sync_open_order(state, broker, force=True)
-        for _ in range(50):
-            sync_open_order(state, broker, force=False)
-            sync_pending_fills(broker, force=False)
+        with patch('blocks.stop.pending_fill_sync.state_mod.iter_active_trade_paths', return_value=[]):
+            sync_open_order(state, broker, force=True)
+            sync_open_order(state, broker, force=True)
+            for _ in range(50):
+                sync_open_order(state, broker, force=False)
+                sync_pending_fills(broker, force=False)
         self.assertLessEqual(broker.get_order_status.call_count, 2)
 
 

@@ -25,7 +25,10 @@ class TestManualEntryClaim(unittest.TestCase):
             runner = EntryMonitorRunner(root=tmp)
             now = datetime(2026, 6, 26, 14, 0, 0)
             with patch.object(runner, '_run_worker'):
-                runner.tick(now)
+                with patch('blocks.entry.runner.evaluate_new_risk_gate') as mock_gate:
+                    from common.trading_gate import GateDecision
+                    mock_gate.return_value = GateDecision(blocked=False)
+                    runner.tick(now)
             reloaded = SessionPlan.load(plan.path, strategy=plan.strategy)
             saved = reloaded.row_by_slot_key(row.slot_key)
             self.assertEqual(saved.state, 'placing')

@@ -439,6 +439,14 @@ class TastyTradeBroker(BrokerBase):
     def place_spread_order(
         self, short_symbol: str, long_symbol: str, qty: int, credit: float
     ) -> OrderResult:
+        from common.trading_gate import effective_new_risk_blocked, gate_enabled
+
+        if gate_enabled() and effective_new_risk_blocked():
+            return OrderResult(
+                False, None, 'rejected',
+                message='new_risk_gate_blocked',
+            )
+
         from tastytrade.order import (
             NewOrder,
             OrderAction,
@@ -704,6 +712,83 @@ class TastyTradeBroker(BrokerBase):
         except Exception as exc:
             return OrderResult(False, order_id, 'rejected', message=str(exc))
 
+    def get_order_status_direct(
+        self,
+        order_id: str,
+        *,
+        priority: str = 'HIGH',
+        op: str = 'entry_open_order_status',
+    ) -> OrderResult:
+        """One direct get_order REST call — no live-orders cache."""
+        try:
+            order = self._run(
+                self.account.get_order(self.session, int(order_id)),
+                priority=priority,
+                op=op,
+            )
+            return _order_result_from_placed_order(order)
+        except BrokerCooldownActive:
+            raise
+        except Exception as exc:
+            return OrderResult(False, order_id, 'rejected', message=str(exc))
+
+    def probe_orders_rest(
+        self,
+        *,
+        priority: str = 'HIGH',
+        op: str = 'rest_health_probe_orders',
+        bypass_local_cooldown: bool = False,
+        timeout: float = 10.0,
+    ):
+        """One uncached get_live_orders call for REST health."""
+        from common.rest_probe import RestProbeResult, classify_rest_exception
+
+        attempted = time.time()
+        if not bypass_local_cooldown and should_skip_priority(priority):
+            raise BrokerCooldownActive(f'cooldown active — skipped {op}')
+        get_rest_limiter().acquire(priority=priority, name=op)
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.account.get_live_orders(self.session),
+                self._loop,
+            )
+            future.result(timeout=timeout)
+            completed = time.time()
+            return RestProbeResult(
+                ok=True,
+                status='healthy',
+                attempted_at_epoch=attempted,
+                completed_at_epoch=completed,
+                latency_ms=int((completed - attempted) * 1000),
+                http_status=200,
+                detail='',
+                operation=op,
+            )
+        except BrokerCooldownActive:
+            raise
+        except Exception as exc:
+            try:
+                from common.rest_metrics import record_429, record_failure
+
+                record_failure(op, exc)
+                if '429' in str(exc).lower():
+                    record_429()
+            except Exception:
+                pass
+            self._maybe_enter_cooldown(exc, op=op)
+            status, http_status = classify_rest_exception(exc)
+            completed = time.time()
+            return RestProbeResult(
+                ok=False,
+                status=status,
+                attempted_at_epoch=attempted,
+                completed_at_epoch=completed,
+                latency_ms=int((completed - attempted) * 1000),
+                http_status=http_status,
+                detail=str(exc),
+                operation=op,
+            )
+
     _ACTIVE_ORDER_STATUSES = frozenset(
         {'live', 'working', 'received', 'contingent', 'open', 'partially filled'}
     )
@@ -734,6 +819,36 @@ class TastyTradeBroker(BrokerBase):
     def find_working_close_order(self, symbol: str) -> Optional[OrderResult]:
         orders = self.find_working_close_orders(symbol)
         return orders[0] if orders else None
+
+    def find_working_open_spread_orders(self, short_symbol: str, long_symbol: str) -> List[OrderResult]:
+        """Live SELL_TO_OPEN/BUY_TO_OPEN spread orders matching symbols."""
+        try:
+            orders = self.get_live_orders_cached()
+        except Exception as exc:
+            log.warning('find_working_open_spread_orders failed: %s', exc)
+            return []
+
+        short_tt = to_tastytrade(short_symbol)
+        long_tt = to_tastytrade(long_symbol)
+        matches: List[OrderResult] = []
+        for order in orders:
+            status = str(getattr(order, 'status', '')).lower()
+            if status not in self._ACTIVE_ORDER_STATUSES:
+                continue
+            legs = getattr(order, 'legs', None) or []
+            if len(legs) != 2:
+                continue
+            short_hit = long_hit = False
+            for leg in legs:
+                leg_sym = str(getattr(leg, 'symbol', '') or '')
+                action = _normalize_leg_action(getattr(leg, 'action', ''))
+                if action == 'SELL_TO_OPEN' and symbols_equivalent(leg_sym, short_tt):
+                    short_hit = True
+                if action == 'BUY_TO_OPEN' and symbols_equivalent(leg_sym, long_tt):
+                    long_hit = True
+            if short_hit and long_hit:
+                matches.append(_order_result_from_placed_order(order))
+        return matches
 
     def inspect_spread_position(
         self,

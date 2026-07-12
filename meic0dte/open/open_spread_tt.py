@@ -155,13 +155,63 @@ def write_pending_trade_state(
 
 def sync_trade_state_from_broker(broker, json_path: str, log) -> dict:
     """Refresh JSON from broker using open_order_id."""
+    state, _ok, _detail = sync_entry_trade_state_from_broker(broker, json_path, log)
+    return state
+
+
+def sync_entry_trade_state_from_broker(broker, json_path: str, log) -> tuple[dict, bool, str]:
+    """Entry fill poll — direct one-order status; returns (state, visibility_ok, detail)."""
     from blocks.stop.fill_sync import apply_order_result_to_state
+    from brokers.tastytrade_broker import BrokerCooldownActive
+    from common.rest_probe import classify_rest_exception
+    from common.trading_gate import latch_new_risk
 
     state = state_mod.load_state(json_path)
     oid = state.get('open_order_id')
     if not oid:
-        return state
-    result = broker.get_order_status(str(oid))
+        return state, True, ''
+
+    try:
+        get_direct = getattr(broker, 'get_order_status_direct', None)
+        if get_direct is not None:
+            result = get_direct(str(oid), priority='HIGH', op='entry_open_order_status')
+        else:
+            result = broker.get_order_status(str(oid), priority='HIGH', op='entry_open_order_status')
+    except BrokerCooldownActive as exc:
+        detail = str(exc)
+        _mark_visibility_unknown(state, detail)
+        state_mod.save_state(json_path, state)
+        latch_new_risk('rest_rate_limited_during_entry', source=json_path, detail=detail, rest_status='rate_limited')
+        log.warning('Entry status skipped (cooldown) order=%s — visibility frozen', oid)
+        return state, False, detail
+    except Exception as exc:
+        status, _http = classify_rest_exception(exc)
+        detail = str(exc)
+        _mark_visibility_unknown(state, detail)
+        state_mod.save_state(json_path, state)
+        latch_new_risk(f'rest_{status}_during_entry', source=json_path, detail=detail, rest_status=status)
+        log.warning('Entry status failed order=%s — visibility frozen: %s', oid, exc)
+        return state, False, detail
+
+    if not result.success:
+        msg = (result.message or '').lower()
+        if any(tok in msg for tok in ('429', 'cooldown', 'rate limit', 'unauthorized', 'timeout')):
+            status = 'rate_limited' if '429' in msg or 'rate limit' in msg else 'unknown'
+            if '401' in msg or 'unauthorized' in msg:
+                status = 'auth_failed'
+            if 'timeout' in msg:
+                status = 'unavailable'
+            _mark_visibility_unknown(state, result.message or '')
+            state_mod.save_state(json_path, state)
+            latch_new_risk(
+                f'rest_{status}_during_entry',
+                source=json_path,
+                detail=result.message or '',
+                rest_status=status,
+            )
+            log.warning('Entry status rejected order=%s — visibility frozen: %s', oid, result.message)
+            return state, False, result.message or ''
+
     apply_order_result_to_state(state, result)
     state_mod.save_state(json_path, state)
     log.info(
@@ -171,7 +221,14 @@ def sync_trade_state_from_broker(broker, json_path: str, log) -> dict:
         state.get('quantity'),
         state_mod.section(state, 'open_order').get('status'),
     )
-    return state
+    return state, True, ''
+
+
+def _mark_visibility_unknown(state: dict, detail: str) -> None:
+    oo = state_mod.section(state, 'open_order')
+    oo['status'] = 'visibility_unknown'
+    oo['visibility_detail'] = detail
+    state['entry_control'] = 'cooldown_blind'
 
 
 def wait_and_sync_fill(broker, order_id: str, json_path: str, log, max_wait: int | None = None) -> dict:
