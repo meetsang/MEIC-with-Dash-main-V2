@@ -6,6 +6,7 @@
 **Base commit:** `d7a4ca61b36319e13cef02f40f33f2c1362502b5`  
 **Implementation commit:** `086362f`  
 **RC report commit:** `d3b831b`  
+**Metadata correction:** `6b9eab6`  
 **Spec:** `changes/STARTUP_REST_COOLDOWN_GATE_DESIGN_FINAL.md`
 
 ---
@@ -242,6 +243,78 @@ Verify: startup probe runs, gate file created, dashboard banner if latched, proc
 
 ---
 
+## Operational validation results (2026-07-11)
+
+### 1. Jul 10 `11-00_*` quarantine
+
+Located and moved (not deleted):
+
+| File | Destination |
+|------|-------------|
+| `trades/active/MEIC_IC/11-00_P_20260710T105906.json` | `runtime/quarantine/2026-07-10/` |
+| `trades/active/MEIC_IC/11-00_C_20260710T105906.json` | `runtime/quarantine/2026-07-10/` |
+
+Both JSONs show `status: closed`, `filled_quantity: 1`, PCS 7525/7500 — retained for recovery audit.
+
+Jul 11 replay artifacts (`11-00_P_20260711T*`) were archived by morning cleanup during the one-day dry run (not deleted).
+
+### 2. Broker reconciliation (live TastyTrade)
+
+| Check | Result |
+|-------|--------|
+| PCS 7525/7500 position (`inspect_spread_position`) | **`flat`** — vertical fully closed |
+| Working PCS 7525/7500 spread orders | **0** |
+| Other working orders | 1 unrelated DASH equity spread (`482788116`, status `received`) — not SPX Jul 10 incident |
+
+### 3. One-day off-hours dry run
+
+**Command:** `python run.py --one-day --force --no-stop-monitor`  
+**Log:** `logs/launcher_2026-07-11_203700.log`
+
+| Step | Observed |
+|------|----------|
+| Launcher lock | Acquired PID 31812, released on exit |
+| Dashboard | Started PID 14556, terminated on exit |
+| Morning cleanup | Archived 7 stale Jul 11 replay JSONs |
+| Startup REST probe | `ok=True status=healthy latency_ms=80` |
+| Child processes | Streamer PID 7808, market_data PID 22312 started |
+| Session end (post-3:00 PM CT) | Immediate shutdown at 20:37:11 CT |
+| Service stop | Streamer + market_data terminated |
+| EOD cleanup (3:30 PM path) | `run_session_cleanup('eod')` + history sync executed |
+| Final exit | `All done.` — process exited cleanly |
+
+**Note:** 3:00 PM wall-clock shutdown was not waited for live (Saturday 20:37 CT); post-session path exercised immediately because `runtime_should_stop_for_session` was already true. Monday dry run should confirm timed 15:00 stop if desired.
+
+### 4. Gate behavior demonstration (live broker)
+
+**Log:** `runtime/ops_gate_validation.log` + scripted re-run 2026-07-11 20:26 CT
+
+| Step | Result |
+|------|--------|
+| Latched gate blocks new risk | ✓ `effective_new_risk_blocked=True` |
+| Re-check REST (`bypass_local_cooldown=True`) | Probe `ok=True`; **cooldown cleared**; **latch remains** |
+| Resume New Entries | After fresh probe + no `cooldown_blind` trades: **latch cleared**, gate open |
+
+### 5. Windows Task Scheduler
+
+**Status:** No MEIC/SPX/run.py task found on this machine (`schtasks` query returned empty).
+
+**Recommended task (create before Monday):**
+
+| Setting | Value |
+|---------|-------|
+| Program | `C:\Users\meets\AppData\Local\Python\pythoncore-3.14-64\python.exe` |
+| Arguments | `run.py --one-day` |
+| Start in | `C:\Users\meets\Downloads\MEIC\SPX\MEIC-with-Dash-main-V2` |
+| Trigger | Mon–Fri 8:00 AM Central |
+| Wake computer | Enabled |
+| Restart on failure | Every 5 min, max 3 |
+| If already running | **Do not start a new instance** |
+
+No project `.venv` found; use the Python install that runs pytest successfully, or create a venv and update the task path.
+
+---
+
 ## Sign-off checklist
 
 - [x] Full regression 570/570
@@ -250,9 +323,11 @@ Verify: startup probe runs, gate file created, dashboard banner if latched, proc
 - [x] One-active-order guard implemented + tested
 - [x] Gate/dashboard semantics tests
 - [x] `run.py --one-day` unit coverage
-- [ ] Jul 10 active JSON quarantine (operator)
-- [ ] Broker orphan/position reconciliation (operator)
-- [ ] Off-hours one-day dry run (operator)
-- [ ] Task Scheduler venv path verified (operator)
+- [x] Jul 10 active JSON quarantine (`runtime/quarantine/2026-07-10/`)
+- [x] Broker PCS 7525/7500 flat; no working PCS orders
+- [x] Off-hours one-day dry run (`logs/launcher_2026-07-11_203700.log`)
+- [x] Gate latch / Re-check / Resume demonstrated live
+- [ ] Task Scheduler task **created** on operator machine (verified absent today)
+- [ ] Monday 8:00 AM CT first scheduled run sign-off
 
-**RC verdict:** Ready for staged merge after operator checklist. **Not approved for live Monday until checklist complete.**
+**RC verdict:** Automated + operational validation complete on branch. **Still HOLD** — do not merge until Task Scheduler task is created and Monday first-run is signed off.
