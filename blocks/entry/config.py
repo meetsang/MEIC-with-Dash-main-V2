@@ -12,9 +12,9 @@ _VALID_QUOTE_SOURCES = frozenset({'api', 'mqtt'})
 class CreditEntryConfig:
     spread_width_min: int = 25
     spread_width_max: int = 35
-    credit_min: float = 0.90
-    credit_max_put: float = 1.85
-    credit_max_call: float = 1.85
+    credit_min: float = 0.60
+    credit_max_put: float = 1.20
+    credit_max_call: float = 1.20
     otm_min: int = 5
     otm_max: int = 150
     quantity: int = 1
