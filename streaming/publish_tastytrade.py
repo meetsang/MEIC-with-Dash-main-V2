@@ -7,6 +7,8 @@ _root = os.path.dirname(_dir)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
+import common.win_ssl_env  # noqa: F401
+
 import asyncio
 import json
 import logging

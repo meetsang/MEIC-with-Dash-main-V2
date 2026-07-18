@@ -3,7 +3,16 @@ MEIC Dashboard Server (TastyTrade)
 Run with:  python dashboard/server.py
 Then open:  http://localhost:5002
 """
-import os, sys, json, subprocess, threading, time, signal, glob, logging
+import os
+import sys
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import common.win_ssl_env  # noqa: F401 — before any HTTPS/ssl usage
+
+import json, subprocess, threading, time, signal, glob, logging
 from datetime import date, datetime as dt, timedelta, timezone
 
 
@@ -18,10 +27,6 @@ def _central_now():
 
 def _central_now_str():
     return _central_now().strftime('%H:%M:%S CT')
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
 
 from typing import Optional
 
@@ -573,8 +578,8 @@ def build_summary():
                 'skip': getattr(row, 'skip', False),
                 'plan_quantity': getattr(row, 'quantity', 1),
                 'width': getattr(row, 'width', '25-35'),
-                'credit_min': getattr(row, 'credit_min', 0.9),
-                'credit_max': getattr(row, 'credit_max', 1.85),
+                'credit_min': getattr(row, 'credit_min', 0.6),
+                'credit_max': getattr(row, 'credit_max', 1.2),
                 'entry_window_start': getattr(row, 'entry_window_start', ''),
                 'entry_window_end': getattr(row, 'entry_window_end', ''),
                 'chase1_mode': getattr(row, 'chase1_mode', 'chase_same_trade'),

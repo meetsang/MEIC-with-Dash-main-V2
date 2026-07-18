@@ -9,6 +9,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+import common.win_ssl_env  # noqa: F401
+
 from common import tt_config
 from common.broker_factory import get_shared_broker
 from common.process_lock import process_lock

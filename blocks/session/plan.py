@@ -105,8 +105,8 @@ class SessionRow:
     stop_multiplier: float = 2.0
     stop_percent: str = ''
     width: str = '25-35'
-    credit_min: float = 0.90
-    credit_max: float = 1.85
+    credit_min: float = 0.60
+    credit_max: float = 1.20
     chase1_mode: str = 'chase_same_trade'
     chase1_max: int = 3
     chase2_mode: str = 'build_new_strikes'

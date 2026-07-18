@@ -59,6 +59,8 @@ def _default_state(session_date_ct: str) -> Dict[str, Any]:
         'last_probe': None,
         'last_successful_probe_epoch': None,
         'last_resume_epoch': None,
+        'startup_probe': None,
+        'probes_by_tranche': {},
     }
 
 
@@ -151,14 +153,36 @@ def _blocked_reason(state: Dict[str, Any]) -> GateDecision:
     return GateDecision(blocked=False)
 
 
-def evaluate_new_risk_gate(*, require_fresh_probe: bool = False) -> GateDecision:
+def evaluate_new_risk_gate(
+    *,
+    require_fresh_probe: bool = False,
+    strategy: str = '',
+    tranche_id: Optional[str] = None,
+) -> GateDecision:
+    """Non-blocking gate evaluation — never creates a broker or runs REST.
+
+    For MEIC scheduled spawn pass tranche_id (lot, e.g. '11-00'). REST readiness
+    comes from the coordinator's single pre_tranche probe for that key.
+    """
     if not gate_enabled():
         return GateDecision(blocked=False)
 
     state = read_state()
-    decision = _blocked_reason(state)
-    if decision.blocked:
-        return decision
+
+    # Always honor cooldown + latch (Jul 10)
+    if cooldown_active():
+        snap = cooldown_snapshot()
+        return GateDecision(
+            blocked=True,
+            reason='broker_cooldown_active',
+            detail=str(snap.get('reason') or 'broker cooldown active'),
+        )
+    if state.get('new_risk_latched'):
+        return GateDecision(
+            blocked=True,
+            reason=str(state.get('latch_reason') or 'new_risk_latched'),
+            detail=str(state.get('rest_detail') or state.get('latch_source') or ''),
+        )
 
     if not require_fresh_probe:
         return GateDecision(blocked=False)
@@ -166,15 +190,154 @@ def evaluate_new_risk_gate(*, require_fresh_probe: bool = False) -> GateDecision
     if os.environ.get('REST_PROBE_BEFORE_NEW_ENTRY', 'true').lower() not in ('1', 'true', 'yes'):
         return GateDecision(blocked=False)
 
+    if tranche_id:
+        return _tranche_rest_readiness(
+            state,
+            strategy=strategy or 'MEIC_IC',
+            tranche_id=tranche_id,
+        )
+
+    # Manual / non-tranche: global REST must be healthy + recent success on file
+    rest = state.get('rest_status') or 'unknown'
+    if rest != REST_HEALTHY:
+        return GateDecision(
+            blocked=True,
+            reason=f'rest_{rest}',
+            detail=str(state.get('rest_detail') or ''),
+        )
     last_ok = float(state.get('last_successful_probe_epoch') or 0)
-    if time.time() - last_ok <= _rest_ready_max_age_sec():
+    if last_ok > 0 and time.time() - last_ok <= _rest_ready_max_age_sec():
         return GateDecision(blocked=False)
+    return GateDecision(
+        blocked=True,
+        reason='rest_probe_stale',
+        detail='no fresh probe on file — use dashboard Re-check or wait for coordinator',
+    )
 
-    from common.rest_probe import run_rest_probe
-    from common.broker_factory import get_broker
 
-    run_rest_probe(get_broker(), source='pre_entry', bypass_local_cooldown=False)
-    return _blocked_reason(read_state())
+def _tranche_rest_readiness(
+    state: Dict[str, Any],
+    *,
+    strategy: str,
+    tranche_id: str,
+) -> GateDecision:
+    probes = state.get('probes_by_tranche') or {}
+    rec = probes.get(tranche_id)
+    if not isinstance(rec, dict):
+        return GateDecision(
+            blocked=True,
+            reason='rest_probe_missing',
+            detail=f'no pre_tranche probe record for {tranche_id}',
+        )
+    phase = str(rec.get('status_phase') or '')
+    performed = bool(rec.get('performed'))
+    if phase in ('scheduled', 'running') or (not performed and phase != 'completed'):
+        return GateDecision(
+            blocked=True,
+            reason='rest_probe_pending',
+            detail=f'pre_tranche probe for {tranche_id} still {phase or "pending"}',
+        )
+    if performed and rec.get('ok') is True:
+        return GateDecision(blocked=False)
+    if performed and rec.get('ok') is False:
+        return GateDecision(
+            blocked=True,
+            reason=f"rest_{rec.get('status') or 'failed'}",
+            detail=str(rec.get('detail') or f'pre_tranche probe failed for {tranche_id}'),
+        )
+    return GateDecision(
+        blocked=True,
+        reason='rest_probe_missing',
+        detail=f'incomplete pre_tranche probe for {tranche_id}',
+    )
+
+
+def _probe_record_from_result(result) -> Dict[str, Any]:
+    return {
+        'source': getattr(result, 'source', '') or '',
+        'strategy': getattr(result, 'strategy', '') or '',
+        'tranche_id': getattr(result, 'tranche_id', '') or '',
+        'session_date_ct': getattr(result, 'session_date_ct', '') or '',
+        'performed': bool(getattr(result, 'performed', True)),
+        'status_phase': getattr(result, 'status_phase', None) or 'completed',
+        'ok': bool(result.ok),
+        'status': result.status,
+        'detail': result.detail,
+        'attempted_at_epoch': result.attempted_at_epoch,
+        'completed_at_epoch': result.completed_at_epoch,
+        'latency_ms': result.latency_ms,
+        'http_status': result.http_status,
+        'operation': getattr(result, 'operation', 'rest_health_probe_orders'),
+    }
+
+
+def mark_probe_scheduled(
+    *,
+    source: str,
+    session_date_ct: str,
+    strategy: str = '',
+    tranche_id: str = '',
+) -> Dict[str, Any]:
+    def _apply(state: Dict[str, Any]) -> None:
+        rec = {
+            'source': source,
+            'strategy': strategy,
+            'tranche_id': tranche_id,
+            'session_date_ct': session_date_ct,
+            'performed': False,
+            'status_phase': 'scheduled',
+            'ok': None,
+            'status': 'pending',
+            'detail': '',
+            'attempted_at_epoch': None,
+            'completed_at_epoch': None,
+        }
+        if source == 'startup' or not tranche_id:
+            state['startup_probe'] = rec
+        else:
+            probes = dict(state.get('probes_by_tranche') or {})
+            probes[tranche_id] = rec
+            state['probes_by_tranche'] = probes
+
+    return _mutate(_apply)
+
+
+def mark_probe_running(
+    *,
+    source: str,
+    session_date_ct: str,
+    strategy: str = '',
+    tranche_id: str = '',
+) -> Dict[str, Any]:
+    now = time.time()
+
+    def _apply(state: Dict[str, Any]) -> None:
+        if source == 'startup' or not tranche_id:
+            rec = dict(state.get('startup_probe') or {})
+            rec.update({
+                'source': source,
+                'session_date_ct': session_date_ct,
+                'performed': False,
+                'status_phase': 'running',
+                'attempted_at_epoch': now,
+            })
+            state['startup_probe'] = rec
+        else:
+            probes = dict(state.get('probes_by_tranche') or {})
+            rec = dict(probes.get(tranche_id) or {})
+            rec.update({
+                'source': source,
+                'strategy': strategy,
+                'tranche_id': tranche_id,
+                'session_date_ct': session_date_ct,
+                'performed': False,
+                'status_phase': 'running',
+                'attempted_at_epoch': now,
+            })
+            probes[tranche_id] = rec
+            state['probes_by_tranche'] = probes
+
+    return _mutate(_apply)
 
 
 def record_probe_result(result) -> Dict[str, Any]:
@@ -185,6 +348,7 @@ def record_probe_result(result) -> Dict[str, Any]:
         state['rest_detail'] = result.detail
         state['rest_source'] = getattr(result, 'source', '') or state.get('rest_source', '')
         state['rest_observed_at_epoch'] = result.completed_at_epoch
+        rec = _probe_record_from_result(result)
         state['last_probe'] = {
             'attempted_at_epoch': result.attempted_at_epoch,
             'completed_at_epoch': result.completed_at_epoch,
@@ -193,7 +357,20 @@ def record_probe_result(result) -> Dict[str, Any]:
             'latency_ms': result.latency_ms,
             'http_status': result.http_status,
             'operation': getattr(result, 'operation', 'rest_health_probe_orders'),
+            'source': rec['source'],
+            'tranche_id': rec['tranche_id'],
+            'strategy': rec['strategy'],
+            'performed': True,
+            'status_phase': 'completed',
         }
+        source = rec['source']
+        tranche_id = rec['tranche_id']
+        if source == 'startup' or not tranche_id:
+            state['startup_probe'] = rec
+        else:
+            probes = dict(state.get('probes_by_tranche') or {})
+            probes[tranche_id] = rec
+            state['probes_by_tranche'] = probes
         if result.ok:
             state['last_successful_probe_epoch'] = result.completed_at_epoch
         elif result.status in REST_STATUSES_BLOCKING:
