@@ -6,15 +6,19 @@ Usage:
   python run.py [--paper]
   python run.py --integration-tranche   # off-hours: dashboard + streamer + one tranche, no stop_monitor
 """
-import argparse
-import glob
-import os, sys, time, subprocess, logging, json, threading
-from datetime import datetime as dt, time as t, timedelta, timezone
+import os
+import sys
 
-# Make sure project root is in path
 ROOT = os.path.abspath(os.path.dirname(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+import common.win_ssl_env  # noqa: F401 — before any HTTPS/ssl usage
+
+import argparse
+import glob
+import time, subprocess, logging, json, threading
+from datetime import datetime as dt, time as t, timedelta, timezone
 
 from common import config as common_config
 from common import tt_config

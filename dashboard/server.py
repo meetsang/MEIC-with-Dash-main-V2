@@ -3,7 +3,16 @@ MEIC Dashboard Server (TastyTrade)
 Run with:  python dashboard/server.py
 Then open:  http://localhost:5002
 """
-import os, sys, json, subprocess, threading, time, signal, glob, logging
+import os
+import sys
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import common.win_ssl_env  # noqa: F401 — before any HTTPS/ssl usage
+
+import json, subprocess, threading, time, signal, glob, logging
 from datetime import date, datetime as dt, timedelta, timezone
 
 
@@ -18,10 +27,6 @@ def _central_now():
 
 def _central_now_str():
     return _central_now().strftime('%H:%M:%S CT')
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
 
 from typing import Optional
 
