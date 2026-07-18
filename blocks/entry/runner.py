@@ -48,6 +48,7 @@ class EntryMonitorRunner:
         self.log = logger or log
         self._handles: Dict[str, threading.Thread] = {}
         self._fired: Set[str] = set()
+        self._missed: Set[str] = set()
         self._lock = threading.Lock()
         self._lot_side_started_at: Dict[str, float] = {}
 
@@ -56,16 +57,21 @@ class EntryMonitorRunner:
         bootstrap_meic_session_if_missing(self.root)
         meic_plan = load_meic_session_today(self.root)
         if meic_plan is not None:
+            self._emit_tranche_missed(meic_plan, now)
             self._tick_plan(meic_plan, now, manual=False)
         manual_plan = load_manual_session_today(self.root)
         if manual_plan is not None:
             self._tick_plan(manual_plan, now, manual=True)
 
-    def _gate_allows_spawn(self) -> bool:
+    def _gate_allows_spawn(self, *, strategy: str = '', tranche_id: Optional[str] = None) -> bool:
         global _GATE_WARN_AT
         if not gate_enabled():
             return True
-        decision = evaluate_new_risk_gate(require_fresh_probe=True)
+        decision = evaluate_new_risk_gate(
+            require_fresh_probe=True,
+            strategy=strategy,
+            tranche_id=tranche_id,
+        )
         if not decision.blocked:
             return True
         now = time.time()
@@ -99,7 +105,6 @@ class EntryMonitorRunner:
         return (time.monotonic() - started) >= _stagger_sec()
 
     def _tick_plan(self, plan, now: datetime, *, manual: bool) -> None:
-        now_time = now.time()
         strategy = trades_layout.STRATEGY_MANUAL if manual else trades_layout.STRATEGY_MEIC
         for row in plan.rows:
             if manual:
@@ -118,7 +123,8 @@ class EntryMonitorRunner:
                     continue
             if not self._stagger_allows(row, manual=manual):
                 continue
-            if not self._gate_allows_spawn():
+            tranche_id = None if manual else row.lot
+            if not self._gate_allows_spawn(strategy=strategy, tranche_id=tranche_id):
                 continue
             with self._lock:
                 if row.slot_key in self._handles:
@@ -144,6 +150,43 @@ class EntryMonitorRunner:
                 self._handles[row.slot_key] = thread
                 thread.start()
                 self.log.info('Spawned entry worker for %s (%s)', row.slot_key, strategy)
+
+    def _emit_tranche_missed(self, plan, now: datetime) -> None:
+        """Exactly-once CRITICAL when a pending MEIC window has ended with no spawn."""
+        now_time = now.time()
+        for row in plan.rows:
+            if row.state != 'pending' or row.paused or row.skip:
+                continue
+            if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MEIC, now=now):
+                continue
+            try:
+                end = row.window_end_time()
+            except Exception:
+                continue
+            if now_time <= end:
+                continue
+            with self._lock:
+                if row.slot_key in self._fired or row.slot_key in self._missed:
+                    continue
+                self._missed.add(row.slot_key)
+            reason = 'unknown'
+            try:
+                decision = evaluate_new_risk_gate(
+                    require_fresh_probe=True,
+                    strategy=trades_layout.STRATEGY_MEIC,
+                    tranche_id=row.lot,
+                )
+                if decision.blocked:
+                    reason = decision.reason or 'gate_blocked'
+            except Exception:
+                reason = 'gate_eval_error'
+            self.log.critical(
+                'TRANCHE_MISSED slot=%s window=%s-%s reason=%s',
+                row.slot_key,
+                row.entry_window_start,
+                row.entry_window_end,
+                reason,
+            )
 
     def _should_fire_meic(self, row, now_time, now: datetime) -> bool:
         if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MEIC, now=now):

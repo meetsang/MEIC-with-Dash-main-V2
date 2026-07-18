@@ -20,6 +20,10 @@ import glob
 import time, subprocess, logging, json, threading
 from datetime import datetime as dt, time as t, timedelta, timezone
 
+# Make sure project root is in path
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from common import config as common_config
 from common import tt_config
 from common.auth import refresh_token as _refresh_token
@@ -396,23 +400,26 @@ def main(
         log.info('Force mode — skipping trading-day check.')
 
     from common.trading_gate import initialize_for_session_date
+    from common.probe_coordinator import (
+        meic_tranches_from_slots,
+        start_coordinator,
+        stop_coordinator,
+    )
+    from strategies.meic.strategy import MEIC_TRANCHE_SLOTS
 
     session_date_ct = now.strftime('%Y-%m-%d')
     initialize_for_session_date(session_date_ct)
-    if os.environ.get('REST_PROBE_ON_SESSION_START', 'true').lower() in ('1', 'true', 'yes'):
-        try:
-            from common.broker_factory import get_broker
-            from common.rest_probe import run_rest_probe
 
-            probe = run_rest_probe(get_broker(), source='startup')
-            log.info(
-                'Startup REST probe: ok=%s status=%s latency_ms=%s',
-                probe.ok,
-                probe.status,
-                probe.latency_ms,
-            )
-        except Exception:
-            log.exception('Startup REST probe failed')
+    # Background startup + pre-tranche probes — do NOT block service start.
+    try:
+        start_coordinator(
+            session_date_ct=session_date_ct,
+            tranches=meic_tranches_from_slots(MEIC_TRANCHE_SLOTS),
+            paper=bool(paper or tt_config.PAPER_MODE),
+            logger=log,
+        )
+    except Exception:
+        log.exception('Failed to start REST probe coordinator')
 
     _write_status('running', 'Bot is active.')
 
@@ -435,6 +442,7 @@ def main(
             'MEIC session already closed before service start — '
             'skipping streamer, stop_monitor, and market_data recorder.'
         )
+        stop_coordinator()
         _run_eod_cleanup_if_due(log)
         _write_status('stopped', 'Session already closed before service start.')
         return
@@ -458,6 +466,20 @@ def main(
         log.warning('No scheduled strategies enabled — entry monitor will have no MEIC rows.')
 
     bootstrap_meic_session_if_missing(ROOT)
+    # Prefer session CSV pause/skip eligibility when available
+    try:
+        from blocks.session.plan import load_meic_session_today
+        from common.probe_coordinator import get_coordinator, meic_tranches_from_session_plan
+
+        plan = load_meic_session_today(ROOT)
+        coord = get_coordinator()
+        if plan is not None and coord is not None:
+            eligible = meic_tranches_from_session_plan(plan)
+            if eligible:
+                coord.set_tranches(eligible)
+    except Exception:
+        log.exception('Could not refresh probe coordinator tranche list from session CSV')
+
     entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
 
     if tranche_now:
@@ -471,15 +493,27 @@ def main(
         if stop_mon:
             stop_mon.terminate()
             stop_mon.wait()
+        stop_coordinator()
         _write_status('stopped', 'Integration tranche complete.')
         log.info('Session complete (--once / --integration-tranche).')
         return
 
     # Token refresh is handled by the global thread started in __main__
+    last_tick_mono = time.monotonic()
+    stall_sec = float(os.environ.get('LAUNCHER_STALL_WARN_SEC', '30'))
 
     try:
         while True:
             now = _central_now()
+            loop_mono = time.monotonic()
+            gap = loop_mono - last_tick_mono
+            if gap > stall_sec:
+                log.critical(
+                    'LAUNCHER_MAIN_LOOP_STALL gap_sec=%.1f threshold=%.1f',
+                    gap,
+                    stall_sec,
+                )
+            last_tick_mono = loop_mono
 
             # MEIC SPX 0DTE daytime session — not a global platform shutdown rule.
             if runtime_should_stop_for_session(
@@ -525,6 +559,7 @@ def main(
             time.sleep(5)
 
     finally:
+        stop_coordinator()
         log.info("Stopping streamer ...")
         streamer.terminate()
         streamer.wait()
@@ -591,6 +626,13 @@ if __name__ == "__main__":
         **_SUBPROCESS_QUIET,
     )
     log.info("Dashboard started (PID %s) at http://localhost:5002", dash.pid)
+    time.sleep(0.75)
+    if dash.poll() is not None:
+        log.critical(
+            'DASHBOARD failed to stay running (exit code %s) — '
+            'often a stale runtime/locks/dashboard.lock; remove it if no dashboard is listening on :5002',
+            dash.returncode,
+        )
 
     # Refresh Schwab token only when using Schwab broker
     if tt_config.BROKER == 'schwab':

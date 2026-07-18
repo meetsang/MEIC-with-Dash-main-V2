@@ -27,6 +27,11 @@ class RestProbeResult:
     detail: str
     source: str = 'startup'
     operation: str = 'rest_health_probe_orders'
+    strategy: str = ''
+    tranche_id: str = ''
+    session_date_ct: str = ''
+    performed: bool = True
+    status_phase: str = 'completed'
 
 
 def _probe_min_interval_sec() -> float:
@@ -56,11 +61,29 @@ def run_rest_probe(
     *,
     bypass_local_cooldown: bool = False,
     source: str = 'startup',
+    strategy: str = '',
+    tranche_id: str = '',
+    session_date_ct: str = '',
 ) -> RestProbeResult:
-    """Run one direct orders REST probe; updates trading_gate."""
+    """Run one direct orders REST probe; updates trading_gate.
+
+    Intended callers: ProbeCoordinator background workers and dashboard/manual
+    operator actions — never the launcher main loop or EntryMonitorRunner.tick.
+    """
     global _LAST_PROBE_AT
 
     from brokers.tastytrade_broker import BrokerCooldownActive
+
+    def _meta(**kwargs):
+        return {
+            'source': source,
+            'strategy': strategy,
+            'tranche_id': tranche_id,
+            'session_date_ct': session_date_ct,
+            'performed': True,
+            'status_phase': 'completed',
+            **kwargs,
+        }
 
     now = time.time()
     with _PROBE_LOCK:
@@ -77,7 +100,7 @@ def run_rest_probe(
                 latency_ms=int(lp.get('latency_ms') or 0),
                 http_status=lp.get('http_status'),
                 detail='probe rate-limited (min interval)',
-                source=source,
+                **_meta(),
             )
         _LAST_PROBE_AT = now
 
@@ -93,7 +116,7 @@ def run_rest_probe(
             latency_ms=int((completed - attempted) * 1000),
             http_status=429,
             detail='local broker cooldown active — automatic probe skipped',
-            source=source,
+            **_meta(),
         )
         from common.trading_gate import record_probe_result
 
@@ -116,8 +139,8 @@ def run_rest_probe(
                 latency_ms=raw.latency_ms,
                 http_status=raw.http_status,
                 detail=raw.detail,
-                source=source,
                 operation=raw.operation,
+                **_meta(),
             )
         else:
             completed = time.time()
@@ -129,7 +152,7 @@ def run_rest_probe(
                 latency_ms=int((completed - attempted) * 1000),
                 http_status=200,
                 detail='',
-                source=source,
+                **_meta(),
             )
     except BrokerCooldownActive as exc:
         completed = time.time()
@@ -141,7 +164,7 @@ def run_rest_probe(
             latency_ms=int((completed - attempted) * 1000),
             http_status=429,
             detail=str(exc),
-            source=source,
+            **_meta(),
         )
     except Exception as exc:
         status, http_status = classify_rest_exception(exc)
@@ -154,7 +177,7 @@ def run_rest_probe(
             latency_ms=int((completed - attempted) * 1000),
             http_status=http_status,
             detail=str(exc),
-            source=source,
+            **_meta(),
         )
 
     from common.trading_gate import record_probe_result

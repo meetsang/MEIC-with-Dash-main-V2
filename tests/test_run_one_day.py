@@ -43,7 +43,8 @@ class TestRunOneDay(unittest.TestCase):
              patch.object(launcher, 'validate_startup_config'), \
              patch.object(launcher, 'check_trading_day', return_value=(True, 'ok')), \
              patch('common.trading_gate.initialize_for_session_date'), \
-             patch('common.rest_probe.run_rest_probe', side_effect=RuntimeError('probe failed')), \
+             patch('common.probe_coordinator.start_coordinator'), \
+             patch('common.probe_coordinator.stop_coordinator'), \
              patch.object(launcher, 'wait_until'), \
              patch.object(launcher, 'runtime_should_stop_for_session', side_effect=_should_stop), \
              patch.object(launcher, '_run_eod_cleanup_if_due'), \
@@ -56,6 +57,7 @@ class TestRunOneDay(unittest.TestCase):
              patch.object(launcher, 'EntryMonitorRunner'), \
              patch.object(launcher, 'time') as mock_time:
             mock_time.sleep = MagicMock(side_effect=lambda s: stop_flags.__setitem__('stop', True))
+            mock_time.monotonic = MagicMock(return_value=100.0)
             launcher.main(force=True, no_stop_monitor=True)
         mock_stream.assert_called_once()
 
@@ -76,7 +78,8 @@ class TestRunOneDay(unittest.TestCase):
              patch.object(launcher, 'validate_startup_config'), \
              patch.object(launcher, 'check_trading_day', return_value=(True, 'ok')), \
              patch('common.trading_gate.initialize_for_session_date'), \
-             patch('common.rest_probe.run_rest_probe'), \
+             patch('common.probe_coordinator.start_coordinator'), \
+             patch('common.probe_coordinator.stop_coordinator'), \
              patch.object(launcher, 'wait_until'), \
              patch.object(launcher, 'runtime_should_stop_for_session', return_value=True), \
              patch.object(launcher, '_run_eod_cleanup_if_due'), \
