@@ -27,7 +27,7 @@ from market_data.spx_ladder import (
     strikes_for_spx,
 )
 from market_data.spx_ladder_snapshots import SpxLadderSnapshotWriter
-from streaming.ladder_subscribe import build_quote_subscribe_set
+from streaming.ladder_subscribe import build_quote_subscribe_set, build_trade_subscribe_set
 
 
 def test_strike_grid_7533():
@@ -158,3 +158,14 @@ def test_ladder_cap_prevents_runaway(monkeypatch, tmp_path):
 def test_load_ladder_empty_when_disabled(monkeypatch):
     monkeypatch.setenv('MEIC_SIDE_OPTION_COLLECTION', '0')
     assert load_ladder_option_symbols() == []
+
+
+def test_trade_subscribe_includes_spx_last_sale():
+    """SPX Trade channel for navbar last-sale; SPX_NO_VOLUME only blocks OHLCV volume."""
+    from common.market_watch import dxlink_trade_symbols
+
+    quote_set, _ = build_quote_subscribe_set()
+    trades = build_trade_subscribe_set(quote_set)
+    assert 'SPX' in trades
+    assert 'SPX' not in dxlink_trade_symbols()
+    assert 'QQQ' in trades

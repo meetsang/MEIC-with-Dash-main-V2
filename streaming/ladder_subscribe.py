@@ -10,6 +10,7 @@ from typing import Optional, Set, Tuple
 from common.market_watch import (
     SPX_LADDER_MAX_ACTIVE_SYMBOLS,
     SPX_LADDER_VOLUME_ENABLED,
+    SPX_SYMBOL,
     WATCH_SYMBOLS,
     dxlink_quote_symbol,
     dxlink_trade_symbols,
@@ -91,8 +92,11 @@ def build_quote_subscribe_set() -> Tuple[Set[str], dict]:
 
 
 def build_trade_subscribe_set(quote_set: Set[str]) -> Set[str]:
-    """DXLink Trade symbols for watch OHLCV + optional ladder volume."""
+    """DXLink Trade symbols for watch OHLCV + SPX last-sale + optional ladder volume."""
     trades = set(dxlink_trade_symbols())
+    # SPX is excluded from dxlink_trade_symbols() (SPX_NO_VOLUME for OHLCV bars) but
+    # last-sale Trade events improve dashboard/navbar accuracy vs quote-only mids.
+    trades.add(dxlink_quote_symbol(SPX_SYMBOL))
     if SPX_LADDER_VOLUME_ENABLED and sidecar_option_collection_enabled():
         for sym in quote_set:
             if sym.startswith('.SPXW'):
