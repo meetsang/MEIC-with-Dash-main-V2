@@ -45,6 +45,8 @@ class TestRunOneDay(unittest.TestCase):
              patch('common.trading_gate.initialize_for_session_date'), \
              patch('common.probe_coordinator.start_coordinator'), \
              patch('common.probe_coordinator.stop_coordinator'), \
+             patch('common.entry_coordinator.start_entry_coordinator'), \
+             patch('common.entry_coordinator.stop_entry_coordinator'), \
              patch.object(launcher, 'wait_until'), \
              patch.object(launcher, 'runtime_should_stop_for_session', side_effect=_should_stop), \
              patch.object(launcher, '_run_eod_cleanup_if_due'), \

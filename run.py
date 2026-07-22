@@ -481,6 +481,7 @@ def main(
         log.exception('Could not refresh probe coordinator tranche list from session CSV')
 
     entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
+    entry_coord = None
 
     if tranche_now:
         log.info('Tranche-now: firing entry workers for lot via app_main ...')
@@ -498,6 +499,14 @@ def main(
         log.info('Session complete (--once / --integration-tranche).')
         return
 
+    from common.entry_coordinator import (
+        coordinator_enabled,
+        start_entry_coordinator,
+        stop_entry_coordinator,
+    )
+
+    entry_coord = start_entry_coordinator(entry_runner, root=ROOT, logger=log)
+
     # Token refresh is handled by the global thread started in __main__
     last_tick_mono = time.monotonic()
     stall_sec = float(os.environ.get('LAUNCHER_STALL_WARN_SEC', '30'))
@@ -513,7 +522,6 @@ def main(
                     gap,
                     stall_sec,
                 )
-            last_tick_mono = loop_mono
 
             # MEIC SPX 0DTE daytime session — not a global platform shutdown rule.
             if runtime_should_stop_for_session(
@@ -548,17 +556,22 @@ def main(
 
             _check_running_services_health(stop_mon_running=stop_mon is not None)
 
-            # Entry monitor — one worker per session CSV row (replaces Orchestrator)
-            entry_runner.tick(now)
+            if entry_coord is not None and coordinator_enabled():
+                entry_coord.check_stall()
+            else:
+                entry_runner.tick(now)
+            # Entry monitor background thread when coordinator enabled (common.entry_coordinator)
             # Fill sync is owned solely by stop_monitor (see BROKER_REST_RESILIENCE spec §9)
 
             if once and entry_runner.any_fired():
                 log.info('--once: entry worker fired, shutting down.')
                 break
 
+            last_tick_mono = time.monotonic()
             time.sleep(5)
 
     finally:
+        stop_entry_coordinator()
         stop_coordinator()
         log.info("Stopping streamer ...")
         streamer.terminate()

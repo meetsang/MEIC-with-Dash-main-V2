@@ -57,6 +57,7 @@ class EntryMonitorRunner:
         bootstrap_meic_session_if_missing(self.root)
         meic_plan = load_meic_session_today(self.root)
         if meic_plan is not None:
+            # Miss detection before spawn path — must run even when CSV spawn I/O is slow.
             self._emit_tranche_missed(meic_plan, now)
             self._tick_plan(meic_plan, now, manual=False)
         manual_plan = load_manual_session_today(self.root)
@@ -131,14 +132,19 @@ class EntryMonitorRunner:
                     continue
                 if row.slot_key in self._fired:
                     continue
-                if manual:
-                    if not try_claim_manual_row(plan.path, row.slot_key, strategy=strategy):
-                        continue
-                else:
-                    try:
-                        mark_row_entering(plan.path, row.slot_key, strategy=strategy)
-                    except KeyError:
-                        continue
+            if manual:
+                if not try_claim_manual_row(plan.path, row.slot_key, strategy=strategy):
+                    continue
+            else:
+                try:
+                    mark_row_entering(plan.path, row.slot_key, strategy=strategy)
+                except KeyError:
+                    continue
+            with self._lock:
+                if row.slot_key in self._handles:
+                    continue
+                if row.slot_key in self._fired:
+                    continue
                 self._fired.add(row.slot_key)
                 self._lot_side_started_at[row.slot_key] = time.monotonic()
                 thread = threading.Thread(
