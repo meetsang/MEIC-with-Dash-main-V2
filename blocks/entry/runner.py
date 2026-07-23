@@ -64,12 +64,21 @@ class EntryMonitorRunner:
         if manual_plan is not None:
             self._tick_plan(manual_plan, now, manual=True)
 
-    def _gate_allows_spawn(self, *, strategy: str = '', tranche_id: Optional[str] = None) -> bool:
+    def _gate_allows_spawn(
+        self,
+        *,
+        strategy: str = '',
+        tranche_id: Optional[str] = None,
+        manual: bool = False,
+    ) -> bool:
         global _GATE_WARN_AT
         if not gate_enabled():
             return True
+        # Manual Take Trade: honor latch/cooldown/unhealthy REST, but not pre-tranche
+        # probe freshness — operator-initiated entries should not wait for the next
+        # MEIC window probe (rest_probe_stale is invisible on the dashboard banner).
         decision = evaluate_new_risk_gate(
-            require_fresh_probe=True,
+            require_fresh_probe=not manual,
             strategy=strategy,
             tranche_id=tranche_id,
         )
@@ -125,7 +134,7 @@ class EntryMonitorRunner:
             if not self._stagger_allows(row, manual=manual):
                 continue
             tranche_id = None if manual else row.lot
-            if not self._gate_allows_spawn(strategy=strategy, tranche_id=tranche_id):
+            if not self._gate_allows_spawn(strategy=strategy, tranche_id=tranche_id, manual=manual):
                 continue
             with self._lock:
                 if row.slot_key in self._handles:

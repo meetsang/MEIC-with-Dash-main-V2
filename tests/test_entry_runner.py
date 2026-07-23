@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from blocks.entry.runner import EntryMonitorRunner
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
-from blocks.session.plan import SessionPlan, load_meic_session_today
+from blocks.session.manual_helpers import append_manual_session_row
+from blocks.session.plan import SessionPlan, load_manual_session_today, load_meic_session_today
 from common.trading_gate import GateDecision
 from orchestrator.scheduler import TrancheSlot
 
@@ -76,6 +77,32 @@ class TestEntryRunner(unittest.TestCase):
             plan = load_meic_session_today(tmp)
             self.assertEqual(plan.row_by_slot_key('11-00_P').state, 'pending')
             self.assertNotIn('11-00_P', runner._fired)
+
+    def test_manual_spawn_skips_fresh_probe_requirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            append_manual_session_row(
+                tmp,
+                side='C',
+                short_strike=7455,
+                long_strike=7480,
+                limit_credit=0.45,
+                quantity=1,
+            )
+            runner = EntryMonitorRunner(root=tmp)
+            now = datetime(2026, 6, 25, 12, 30, 0)
+            with patch('blocks.entry.runner.load_meic_session_today', return_value=None):
+                with patch.object(runner, '_run_worker'):
+                    with patch('blocks.entry.runner.evaluate_new_risk_gate') as mock_gate:
+                        mock_gate.return_value = GateDecision(blocked=False)
+                        runner.tick(now)
+            manual_calls = [
+                c for c in mock_gate.call_args_list
+                if c.kwargs.get('strategy') == 'MANUAL_SPREAD'
+            ]
+            self.assertEqual(len(manual_calls), 1)
+            self.assertFalse(manual_calls[0].kwargs.get('require_fresh_probe'))
+            plan = load_manual_session_today(tmp)
+            self.assertEqual(plan.row_by_slot_key(plan.rows[0].slot_key).state, 'placing')
 
     def test_refires_after_operator_reset_failed_to_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
