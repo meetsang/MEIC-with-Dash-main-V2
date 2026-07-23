@@ -60,9 +60,24 @@ def merge_policy(memory: Dict[str, Any], disk: Dict[str, Any]) -> Dict[str, Any]
         'spread_close_order_id',
         'close_mechanism',
         'status',
+        'stop_multiplier',
+        'on_unfilled',
+        'plan',
     ):
         if key in disk:
             merged[key] = disk[key]
+
+    disk_entry = disk.get('entry') or {}
+    if disk_entry.get('two_x_net_credit') is not None:
+        merged.setdefault('entry', {})
+        if isinstance(merged['entry'], dict):
+            merged['entry']['two_x_net_credit'] = disk_entry['two_x_net_credit']
+
+    disk_short = disk.get('short_leg') or {}
+    if disk_short.get('two_x_short') is not None:
+        merged.setdefault('short_leg', {})
+        if isinstance(merged['short_leg'], dict):
+            merged['short_leg']['two_x_short'] = disk_short['two_x_short']
 
     disk_stop = disk.get('active_stop') or {}
     if not disk_stop.get('order_id'):

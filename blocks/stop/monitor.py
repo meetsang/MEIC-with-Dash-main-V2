@@ -563,6 +563,8 @@ class StopMonitor:
 
         mult = float(cmd.get('stop_multiplier', 2))
         self.state['stop_multiplier'] = mult
+        if isinstance(self.state.get('plan'), dict):
+            self.state['plan']['stop_multiplier'] = mult
         apply_two_x_thresholds(self.state, mult)
 
         active = self.state.get('active_stop') or {}
@@ -581,12 +583,39 @@ class StopMonitor:
                 except Exception:
                     pass
                 return True
+            if outcome != 'cancelled':
+                log.error(
+                    'Stop update: stop %s not cancelled (%s) — keeping command for retry',
+                    oid,
+                    outcome,
+                )
+                return False
+            state_mod.append_stop_history(
+                self.state,
+                action='cancelled',
+                order_id=oid,
+                price=active.get('stop_price') or active.get('limit_price'),
+                phase=active.get('phase', 1),
+                reason='stop_update',
+            )
             self.state['active_stop'] = None
             self.state['stop_quantity'] = 0
 
-        stop_price = round_spx_option_price(float(self.state['short_leg']['two_x_short']))
-        limit_price = round_spx_option_price(stop_price + app_config.LIMIT_OFFSET)
-        self._place_short_stop(stop_price, limit_price, phase=1, reason='stop_update')
+        stop_price, limit_price = exchange_stop_limit_prices(
+            float(self.state['short_leg']['fill_price']),
+            mult,
+        )
+        placed = False
+        for attempt in range(5):
+            if attempt > 0:
+                time.sleep(2.0)
+            if self._place_short_stop(stop_price, limit_price, phase=1, reason='stop_update'):
+                placed = True
+                break
+        if not placed:
+            log.error('Stop update place failed — command retained for retry')
+            state_mod.save_state(self.json_path, self.state)
+            return False
         self.state['designated_stop_price'] = stop_price
         state_mod.save_state(self.json_path, self.state)
         try:

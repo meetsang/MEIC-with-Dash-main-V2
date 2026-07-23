@@ -269,6 +269,15 @@ class StopSupervisor:
         slot.legacy_monitor.state = slot.state
         return slot.legacy_monitor
 
+    def _apply_stop_update_command(self, slot: TradeSlot) -> bool:
+        """Dashboard stop× change — cancel working stop and replace at new multiplier."""
+        mon = self._legacy_monitor(slot)
+        if mon._check_stop_update_command():
+            slot.state = mon.state
+            save_slot(slot)
+            return True
+        return False
+
     def _enqueue_manual_kill(self, slot: TradeSlot, *, reason: str) -> None:
         slot.exit_job_id = 'pending'
 
@@ -698,6 +707,9 @@ class StopSupervisor:
         claimed, mechanism = detect_and_claim_close_command(slot)
         if claimed:
             self._enqueue_manual_kill(slot, reason=mechanism)
+            return
+
+        if slot.status == 'open' and self._apply_stop_update_command(slot):
             return
 
         if self.exit_pool.has_job(slot.path):

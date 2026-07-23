@@ -223,6 +223,25 @@ class TestManualJsonEdit(unittest.TestCase):
         self.assertTrue(merged['close_only_mode'])
         self.assertEqual(merged['exit_handler'], 'manual_close')
 
+    def test_merge_policy_adopts_dashboard_stop_multiplier(self):
+        mem = {
+            'stop_multiplier': 2.0,
+            'plan': {'stop_multiplier': 2.0},
+            'entry': {'two_x_net_credit': 0.6},
+            'short_leg': {'two_x_short': 0.9},
+        }
+        disk = {
+            'stop_multiplier': 3.0,
+            'plan': {'stop_multiplier': 3.0},
+            'entry': {'two_x_net_credit': 0.9},
+            'short_leg': {'two_x_short': 1.35},
+        }
+        merged = merge_policy(mem, disk)
+        self.assertEqual(merged['stop_multiplier'], 3.0)
+        self.assertEqual(merged['plan']['stop_multiplier'], 3.0)
+        self.assertEqual(merged['entry']['two_x_net_credit'], 0.9)
+        self.assertEqual(merged['short_leg']['two_x_short'], 1.35)
+
 
 class TestStopFilledDuringManualKill(unittest.TestCase):
     """§12.5 #19 — kill cancel sees fill → C2 path, no spread close."""
