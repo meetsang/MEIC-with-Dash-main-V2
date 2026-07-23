@@ -162,9 +162,15 @@ def build_manual_trades(
             live_long=live_price_fn(long_sym),
             trade_status=status,
         )
+        lot = trade.get('lot', '')
+        side = entry.get('side', '')
+        slot_key = f'{lot}_{side}' if lot and side else ''
+        stop_mult = stop_multiplier_for_state(trade)
         rows.append({
-            'lot': trade.get('lot', ''),
-            'side': entry.get('side', ''),
+            'lot': lot,
+            'side': side,
+            'slot_key': slot_key,
+            'stop_multiplier': stop_mult,
             'short_strike': short_leg.get('strike', ''),
             'long_strike': long_leg.get('strike', ''),
             'limit_credit': limit_credit,
