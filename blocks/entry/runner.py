@@ -11,10 +11,16 @@ from typing import Dict, List, Optional, Set
 from blocks.entry.manual_worker import run_manual_entry_row
 from blocks.entry.meic_worker import run_meic_entry_row
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
-from blocks.session.csv_update import apply_entry_result, mark_row_entering, try_claim_manual_row
+from blocks.session.csv_update import (
+    apply_entry_result,
+    mark_row_entering,
+    mark_row_state,
+    try_claim_manual_row,
+)
 from blocks.session.plan import load_manual_session_today, load_meic_session_today
 from common import trades_layout
 from common.market_hours import session_row_past_0dte_close
+from common.probe_coordinator import get_coordinator
 from common.trading_gate import evaluate_new_risk_gate, gate_enabled
 from meic0dte.app import utilities as util
 
@@ -51,6 +57,7 @@ class EntryMonitorRunner:
         self._missed: Set[str] = set()
         self._lock = threading.Lock()
         self._lot_side_started_at: Dict[str, float] = {}
+        self._manual_probe_requested: Set[str] = set()
 
     def tick(self, now: Optional[datetime] = None) -> None:
         now = now or util.central_now()
@@ -70,20 +77,33 @@ class EntryMonitorRunner:
         strategy: str = '',
         tranche_id: Optional[str] = None,
         manual: bool = False,
+        plan_path: Optional[str] = None,
+        slot_key: Optional[str] = None,
     ) -> bool:
         global _GATE_WARN_AT
         if not gate_enabled():
             return True
-        # Manual Take Trade: honor latch/cooldown/unhealthy REST, but not pre-tranche
-        # probe freshness — operator-initiated entries should not wait for the next
-        # MEIC window probe (rest_probe_stale is invisible on the dashboard banner).
+        # Manual Take Trade uses the same fresh-probe gate as MEIC, keyed by slot_key.
         decision = evaluate_new_risk_gate(
-            require_fresh_probe=not manual,
+            require_fresh_probe=True,
             strategy=strategy,
             tranche_id=tranche_id,
         )
         if not decision.blocked:
+            if manual and plan_path and slot_key:
+                # Clear waiting/blocked banner states once probe passes.
+                try:
+                    mark_row_state(plan_path, slot_key, state='entering', strategy=strategy)
+                except Exception:
+                    pass
             return True
+        if manual and plan_path and slot_key:
+            self._update_manual_gate_state(
+                plan_path=plan_path,
+                slot_key=slot_key,
+                strategy=strategy,
+                decision=decision,
+            )
         now = time.time()
         if now - _GATE_WARN_AT >= _GATE_WARN_COOLDOWN_SEC:
             _GATE_WARN_AT = now
@@ -93,6 +113,50 @@ class EntryMonitorRunner:
                 decision.detail,
             )
         return False
+
+    def _update_manual_gate_state(self, *, plan_path, slot_key, strategy, decision) -> None:
+        reason = str(decision.reason or '')
+        detail = str(decision.detail or '')
+        if reason in ('rest_probe_pending', 'rest_probe_missing'):
+            # Ensure exactly one async probe is scheduled for this manual slot.
+            self._ensure_manual_probe(slot_key=slot_key, strategy=strategy)
+            try:
+                mark_row_state(
+                    plan_path,
+                    slot_key,
+                    state='waiting_rest_probe',
+                    strategy=strategy,
+                    error=detail or reason,
+                )
+            except Exception:
+                pass
+            return
+        try:
+            mark_row_state(
+                plan_path,
+                slot_key,
+                state='blocked_rest',
+                strategy=strategy,
+                error=detail or reason,
+            )
+        except Exception:
+            pass
+
+    def _ensure_manual_probe(self, *, slot_key: str, strategy: str) -> None:
+        with self._lock:
+            if slot_key in self._manual_probe_requested:
+                return
+            self._manual_probe_requested.add(slot_key)
+        coord = get_coordinator()
+        if coord is None:
+            self.log.warning(
+                'No ProbeCoordinator — cannot schedule manual REST probe for %s',
+                slot_key,
+            )
+            return
+        scheduled = coord.schedule_manual_probe(slot_key=slot_key, strategy=strategy)
+        if not scheduled:
+            self.log.info('Manual REST probe already scheduled/completed for %s', slot_key)
 
     def _stagger_allows(self, row, *, manual: bool) -> bool:
         if manual:
@@ -133,8 +197,15 @@ class EntryMonitorRunner:
                     continue
             if not self._stagger_allows(row, manual=manual):
                 continue
-            tranche_id = None if manual else row.lot
-            if not self._gate_allows_spawn(strategy=strategy, tranche_id=tranche_id, manual=manual):
+            # Manual: probe identity is slot_key; MEIC: tranche lot shared by P/C
+            tranche_id = row.slot_key if manual else row.lot
+            if not self._gate_allows_spawn(
+                strategy=strategy,
+                tranche_id=tranche_id,
+                manual=manual,
+                plan_path=plan.path,
+                slot_key=row.slot_key if manual else None,
+            ):
                 continue
             with self._lock:
                 if row.slot_key in self._handles:
@@ -216,8 +287,9 @@ class EntryMonitorRunner:
     def _should_fire_manual(self, row, now: datetime) -> bool:
         if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MANUAL, now=now):
             return False
+        # Include waiting/blocked so ticks keep evaluating after probe completes
         return (
-            row.state == 'entering'
+            row.state in ('entering', 'waiting_rest_probe', 'blocked_rest')
             and row.is_manual
             and not row.trade_path
         )

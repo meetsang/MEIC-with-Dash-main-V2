@@ -40,15 +40,39 @@ def mark_row_entering(plan_path: str, slot_key: str, *, strategy: str) -> None:
         plan.save()
 
 
+def mark_row_state(
+    plan_path: str,
+    slot_key: str,
+    *,
+    state: str,
+    strategy: str,
+    error: str = '',
+) -> None:
+    """Update session row state (and optional error) for dashboard visibility."""
+    with _csv_lock:
+        plan = SessionPlan.load(plan_path, strategy=strategy)
+        row = plan.row_by_slot_key(slot_key)
+        if row is None:
+            return
+        fields: dict[str, Any] = {'state': state}
+        if error:
+            fields['error'] = error
+        # Avoid thrashing identical writes
+        if row.state == state and (not error or getattr(row, 'error', '') == error):
+            return
+        plan.update_row(slot_key, **fields)
+        plan.save()
+
+
 def try_claim_manual_row(plan_path: str, slot_key: str, *, strategy: str) -> bool:
-    """Atomically claim a manual row for entry (entering → placing). Returns False if taken."""
+    """Atomically claim a manual row for entry (entering/waiting → placing). Returns False if taken."""
     with _csv_lock:
         plan = SessionPlan.load(plan_path, strategy=strategy)
         row = plan.row_by_slot_key(slot_key)
         if row is None or row.trade_path:
             return False
-        if row.state != 'entering':
+        if row.state not in ('entering', 'waiting_rest_probe', 'blocked_rest'):
             return False
-        plan.update_row(slot_key, state='placing')
+        plan.update_row(slot_key, state='placing', error='')
         plan.save()
     return True

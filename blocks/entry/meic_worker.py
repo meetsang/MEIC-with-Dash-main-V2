@@ -21,7 +21,7 @@ from blocks.entry.handoff import apply_stop_snapshot
 from blocks.entry.result import EntryWorkerResult
 from blocks.session.plan import SessionRow, parse_width
 from blocks.stop import state as state_mod
-from common.broker_factory import get_broker
+from common.broker_factory import get_shared_broker
 from common.entry_risk_lane import opening_risk_critical_section
 from common.integration_report import append_event
 from common.streamer_symbols import register_spread_symbols
@@ -276,7 +276,7 @@ def _failed_result(row: SessionRow, error: str = '') -> EntryWorkerResult:
 def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None) -> EntryWorkerResult:
     """Run entry for one CSV row; returns result for Entry Monitor to persist on CSV."""
     row_log = row_log or logging.getLogger(f'entry.{row.slot_key}')
-    broker = get_broker()
+    broker = get_shared_broker()
     expiry = util.get_expiration_date(row_log)
     entry = CreditSpreadEntry(broker, _entry_config(row), log=row_log)
 

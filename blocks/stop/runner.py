@@ -90,6 +90,7 @@ class MonitorRunner:
         while not self._stop.is_set():
             _loop_count += 1
             self._scan_for_new()
+            self._prime_peaceful_snapshot()
             with self._lock:
                 active_count = len(self._handles)
             self._write_heartbeat(_loop_count, active_count)
@@ -109,6 +110,23 @@ class MonitorRunner:
         if self.alert_listener:
             self.alert_listener.stop()
         log.info('MonitorRunner stopped')
+
+    def _prime_peaceful_snapshot(self) -> None:
+        """One shared get_live_orders snapshot per supervisor cycle for V2 monitors."""
+        from common.broker_cooldown import should_skip_priority
+        from common.rest_operations import PRIORITY_LOW
+        from blocks.stop.batched_reconcile import fetch_live_orders_snapshot
+
+        if should_skip_priority(PRIORITY_LOW):
+            return
+        try:
+            snapshot = fetch_live_orders_snapshot(self.broker)
+        except Exception:
+            log.exception('V2 peaceful live-orders snapshot failed')
+            return
+        with self._lock:
+            for handle in self._handles.values():
+                handle.monitor._peaceful_live_orders = snapshot
 
     def _sync_pending_fills(self) -> None:
         """Promote brokerage fills to open before we decide whether to start a monitor."""

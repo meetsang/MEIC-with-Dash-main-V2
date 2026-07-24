@@ -390,6 +390,10 @@ def _session_display_state(row, trade) -> str:
             )
     if row.state == 'entering':
         return 'entering'
+    if row.state == 'waiting_rest_probe':
+        return 'waiting_rest_probe'
+    if row.state == 'blocked_rest':
+        return 'blocked_rest'
     if row.state == 'failed':
         return 'failed'
     if trade:
@@ -572,6 +576,7 @@ def build_summary():
             'session_state': getattr(row, 'state', 'pending'),
             'stop_multiplier': getattr(row, 'stop_multiplier', 2),
             'paused': getattr(row, 'paused', False),
+            'error': getattr(row, 'error', '') or '',
         }
         if session_plan:
             slot.update({

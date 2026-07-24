@@ -43,6 +43,7 @@ MEIC_CSV_COLUMNS = [
     'on_unfilled',
     'expiry',
     'parent_trade_path',
+    'error',
 ]
 
 
@@ -121,6 +122,7 @@ class SessionRow:
     on_unfilled: str = ''
     expiry: str = ''
     parent_trade_path: str = ''
+    error: str = ''
 
     @property
     def is_manual(self) -> bool:

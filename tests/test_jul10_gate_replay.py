@@ -84,7 +84,7 @@ class TestJul10GateReplay(unittest.TestCase):
     row_p = plan.row_by_slot_key('11-00_P')
     broker = _Jul10Broker()
 
-    with patch('blocks.entry.meic_worker.get_broker', return_value=broker), \
+    with patch('blocks.entry.meic_worker.get_shared_broker', return_value=broker), \
          patch('blocks.entry.meic_worker._scan_pick') as mock_scan, \
          patch('blocks.entry.meic_worker.util.get_expiration_date', return_value='260710'), \
          patch('blocks.entry.meic_worker.register_spread_symbols'):

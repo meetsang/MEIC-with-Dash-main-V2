@@ -33,6 +33,7 @@ class TestProbeCoordinator(unittest.TestCase):
         os.environ['REST_PROBE_ON_SESSION_START'] = 'true'
         os.environ['PRE_TRANCHE_PROBE_LEAD_SEC'] = '30'
         os.environ['REST_PROBE_MIN_INTERVAL_SEC'] = '0'
+        os.environ['REST_PROBE_HARD_DEADLINE_SEC'] = '30'
         initialize_for_session_date('2026-07-13')
         self._calls = []
         self._clock = {'now': datetime(2026, 7, 13, 8, 0, 0)}

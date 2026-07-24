@@ -750,8 +750,11 @@ class StopMonitor:
             from common.broker_cooldown import should_skip_priority
 
             if not should_skip_priority(PRIORITY_LOW):
-                self._reconcile_active_stop_with_broker()
+                snapshot = getattr(self, '_peaceful_live_orders', None)
+                self._reconcile_active_stop_with_broker(live_orders=snapshot)
                 self._sync_working_stop_order()
+                # Consume one-shot snapshot so we don't reuse a stale list forever
+                self._peaceful_live_orders = None
             schedule_next_working_stop_reconcile(
                 self.state,
                 now,
@@ -1060,8 +1063,12 @@ class StopMonitor:
             op=OPERATION_WORKING_STOP_RECONCILE,
         )
 
-    def _reconcile_active_stop_with_broker(self) -> None:
-        """Refresh this JSON's own active_stop at broker — never adopt by short symbol."""
+    def _reconcile_active_stop_with_broker(self, live_orders=None) -> None:
+        """Refresh this JSON's own active_stop at broker — never adopt by short symbol.
+
+        When ``live_orders`` is provided (batched peaceful cycle), search that
+        snapshot first; direct get_order only if the id is absent.
+        """
         if self.state.get('status') != 'open':
             return
 
@@ -1074,6 +1081,7 @@ class StopMonitor:
             oid,
             priority=PRIORITY_LOW,
             op=OPERATION_WORKING_STOP_RECONCILE,
+            live_orders=live_orders,
         )
         if not result.success:
             return

@@ -1,6 +1,7 @@
 """Launcher-owned background REST probe coordinator.
 
-Schedules at most: 1 startup + 1 probe per MEIC tranche per session day.
+Schedules at most: 1 startup + 1 probe per MEIC tranche per session day,
+plus operator-initiated manual probes keyed by (session_date, MANUAL_SPREAD, slot_key).
 Never called synchronously from the launcher main loop or EntryMonitorRunner.
 """
 from __future__ import annotations
@@ -9,6 +10,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -30,6 +32,18 @@ def pre_tranche_lead_sec() -> float:
 
 def _probe_timeout_sec() -> float:
     return float(os.environ.get('REST_PROBE_TIMEOUT_SEC', '10'))
+
+
+def _broker_init_timeout_sec() -> float:
+    return float(os.environ.get('BROKER_INIT_TIMEOUT_SEC', '15'))
+
+
+def _hard_deadline_sec() -> float:
+    """One hard deadline covering broker creation + REST probe."""
+    return float(os.environ.get(
+        'REST_PROBE_HARD_DEADLINE_SEC',
+        str(_broker_init_timeout_sec() + _probe_timeout_sec() + 2.0),
+    ))
 
 
 @dataclass(frozen=True)
@@ -70,6 +84,7 @@ class ProbeCoordinator:
         self._started: set[ProbeKey] = set()
         self._completed: set[ProbeKey] = set()
         self._startup_scheduled = False
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='rest-probe-job')
 
     def _now(self) -> datetime:
         if self._clock is not None:
@@ -96,9 +111,10 @@ class ProbeCoordinator:
         )
         self._thread.start()
         self.log.info(
-            'REST probe coordinator started session=%s lead_sec=%s',
+            'REST probe coordinator started session=%s lead_sec=%s hard_deadline=%ss',
             self.session_date_ct,
             pre_tranche_lead_sec(),
+            _hard_deadline_sec(),
         )
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -106,6 +122,10 @@ class ProbeCoordinator:
         t = self._thread
         if t and t.is_alive():
             t.join(timeout=timeout)
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            self._executor.shutdown(wait=False)
 
     def automatic_probe_count(self) -> int:
         with self._lock:
@@ -116,6 +136,38 @@ class ProbeCoordinator:
 
     def _tranche_key(self, strategy: str, tranche_id: str) -> ProbeKey:
         return (self.session_date_ct, strategy, tranche_id)
+
+    def schedule_manual_probe(self, *, slot_key: str, strategy: str = 'MANUAL_SPREAD') -> bool:
+        """Schedule exactly one async manual probe for (session_date, strategy, slot_key).
+
+        Returns True if newly scheduled, False if already started/completed (no retry).
+        """
+        key = self._tranche_key(strategy, slot_key)
+        with self._lock:
+            if key in self._started:
+                return False
+            self._started.add(key)
+        from common.trading_gate import mark_probe_scheduled
+
+        mark_probe_scheduled(
+            source='manual',
+            session_date_ct=self.session_date_ct,
+            strategy=strategy,
+            tranche_id=slot_key,
+        )
+        threading.Thread(
+            target=self._execute_probe,
+            kwargs={
+                'key': key,
+                'source': 'manual',
+                'strategy': strategy,
+                'tranche_id': slot_key,
+            },
+            name=f'rest-probe-manual-{slot_key}',
+            daemon=True,
+        ).start()
+        self.log.info('Scheduled manual REST probe slot=%s', slot_key)
+        return True
 
     def _run_loop(self) -> None:
         try:
@@ -135,9 +187,12 @@ class ProbeCoordinator:
         if self._get_broker_fn is not None:
             self._broker = self._get_broker_fn()
         else:
-            from common.broker_factory import get_shared_broker
+            from common.broker_factory import get_shared_broker_bounded
 
-            self._broker = get_shared_broker(paper=self.paper)
+            self._broker = get_shared_broker_bounded(
+                paper=self.paper,
+                timeout_sec=_broker_init_timeout_sec(),
+            )
         return self._broker
 
     def _ensure_startup_probe(self) -> None:
@@ -243,25 +298,58 @@ class ProbeCoordinator:
             strategy or '-',
         )
         attempted = time.time()
-        try:
+        deadline = _hard_deadline_sec()
+        result: Any = None
+
+        def _job():
             broker = self._ensure_broker()
             if self._run_probe_fn is not None:
-                result = self._run_probe_fn(
+                return self._run_probe_fn(
                     broker,
                     source=source,
                     strategy=strategy,
                     tranche_id=tranche_id,
                 )
-                if not getattr(result, '_already_recorded', False):
+            return run_rest_probe(
+                broker,
+                bypass_local_cooldown=False,
+                bypass_min_interval=True,
+                source=source,
+                strategy=strategy,
+                tranche_id=tranche_id,
+                session_date_ct=self.session_date_ct,
+            )
+
+        try:
+            future = self._executor.submit(_job)
+            try:
+                result = future.result(timeout=deadline)
+                if self._run_probe_fn is not None and not getattr(result, '_already_recorded', False):
                     record_probe_result(result)
-            else:
-                result = run_rest_probe(
-                    broker,
-                    bypass_local_cooldown=False,
+            except FuturesTimeout:
+                future.cancel()
+                completed = time.time()
+                result = RestProbeResult(
+                    ok=False,
+                    status='timed_out',
+                    attempted_at_epoch=attempted,
+                    completed_at_epoch=completed,
+                    latency_ms=int((completed - attempted) * 1000),
+                    http_status=None,
+                    detail=f'probe hard deadline exceeded ({deadline:.0f}s)',
                     source=source,
                     strategy=strategy,
                     tranche_id=tranche_id,
                     session_date_ct=self.session_date_ct,
+                    performed=True,
+                    status_phase='timed_out',
+                )
+                record_probe_result(result)
+                self.log.warning(
+                    'REST probe timed_out source=%s tranche=%s deadline=%.0fs',
+                    source,
+                    tranche_id or '(startup)',
+                    deadline,
                 )
         except Exception as exc:
             completed = time.time()
@@ -283,16 +371,40 @@ class ProbeCoordinator:
                 performed=True,
             )
             record_probe_result(result)
-        with self._lock:
-            self._completed.add(key)
-        self.log.info(
-            'REST probe finished source=%s tranche=%s ok=%s status=%s latency_ms=%s',
-            source,
-            tranche_id or '(startup)',
-            getattr(result, 'ok', None),
-            getattr(result, 'status', None),
-            getattr(result, 'latency_ms', None),
-        )
+        finally:
+            # Guarantee no record remains "running" indefinitely
+            if result is None:
+                completed = time.time()
+                result = RestProbeResult(
+                    ok=False,
+                    status='timed_out',
+                    attempted_at_epoch=attempted,
+                    completed_at_epoch=completed,
+                    latency_ms=int((completed - attempted) * 1000),
+                    http_status=None,
+                    detail='probe finished without result',
+                    source=source,
+                    strategy=strategy,
+                    tranche_id=tranche_id,
+                    session_date_ct=self.session_date_ct,
+                    performed=True,
+                    status_phase='timed_out',
+                )
+                try:
+                    record_probe_result(result)
+                except Exception:
+                    self.log.exception('failed to record probe timeout fallback')
+            with self._lock:
+                self._completed.add(key)
+            self.log.info(
+                'REST probe finished source=%s tranche=%s ok=%s status=%s latency_ms=%s phase=%s',
+                source,
+                tranche_id or '(startup)',
+                getattr(result, 'ok', None),
+                getattr(result, 'status', None),
+                getattr(result, 'latency_ms', None),
+                getattr(result, 'status_phase', None),
+            )
 
 
 _COORDINATOR: Optional[ProbeCoordinator] = None

@@ -78,7 +78,7 @@ class TestEntryRunner(unittest.TestCase):
             self.assertEqual(plan.row_by_slot_key('11-00_P').state, 'pending')
             self.assertNotIn('11-00_P', runner._fired)
 
-    def test_manual_spawn_skips_fresh_probe_requirement(self):
+    def test_manual_spawn_requires_fresh_probe_and_schedules_async(self):
         with tempfile.TemporaryDirectory() as tmp:
             append_manual_session_row(
                 tmp,
@@ -93,16 +93,26 @@ class TestEntryRunner(unittest.TestCase):
             with patch('blocks.entry.runner.load_meic_session_today', return_value=None):
                 with patch.object(runner, '_run_worker'):
                     with patch('blocks.entry.runner.evaluate_new_risk_gate') as mock_gate:
-                        mock_gate.return_value = GateDecision(blocked=False)
-                        runner.tick(now)
+                        with patch.object(runner, '_ensure_manual_probe') as mock_sched:
+                            mock_gate.return_value = GateDecision(
+                                blocked=True,
+                                reason='rest_probe_missing',
+                                detail='no probe',
+                            )
+                            runner.tick(now)
             manual_calls = [
                 c for c in mock_gate.call_args_list
                 if c.kwargs.get('strategy') == 'MANUAL_SPREAD'
             ]
             self.assertEqual(len(manual_calls), 1)
-            self.assertFalse(manual_calls[0].kwargs.get('require_fresh_probe'))
+            self.assertTrue(manual_calls[0].kwargs.get('require_fresh_probe'))
+            self.assertIsNotNone(manual_calls[0].kwargs.get('tranche_id'))
+            mock_sched.assert_called_once()
             plan = load_manual_session_today(tmp)
-            self.assertEqual(plan.row_by_slot_key(plan.rows[0].slot_key).state, 'placing')
+            self.assertEqual(
+                plan.row_by_slot_key(plan.rows[0].slot_key).state,
+                'waiting_rest_probe',
+            )
 
     def test_refires_after_operator_reset_failed_to_pending(self):
         with tempfile.TemporaryDirectory() as tmp:

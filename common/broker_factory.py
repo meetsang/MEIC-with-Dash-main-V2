@@ -71,6 +71,30 @@ def get_shared_broker(paper: Optional[bool] = None, *, reset: bool = False):
         return _shared_broker
 
 
+def get_shared_broker_bounded(
+    paper: Optional[bool] = None,
+    *,
+    timeout_sec: Optional[float] = None,
+    reset: bool = False,
+):
+    """Create/reuse shared broker with a hard init timeout (broker create + account bootstrap)."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    deadline = float(
+        timeout_sec
+        if timeout_sec is not None
+        else os.environ.get('BROKER_INIT_TIMEOUT_SEC', '15')
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(lambda: get_shared_broker(paper=paper, reset=reset))
+        try:
+            return fut.result(timeout=max(0.1, deadline))
+        except FuturesTimeout as exc:
+            raise TimeoutError(
+                f'shared broker init exceeded {deadline:.0f}s',
+            ) from exc
+
+
 def reset_shared_broker() -> None:
     global _shared_broker, _shared_key, _shared_created_at, _shared_use_count
     with _shared_lock:

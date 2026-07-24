@@ -14,7 +14,7 @@ from blocks.entry.result import EntryWorkerResult
 from blocks.session.manual_place import apply_plan_metadata
 from blocks.session.plan import SessionRow
 from blocks.stop import state as state_mod
-from common.broker_factory import get_broker
+from common.broker_factory import get_shared_broker
 from common.streamer_symbols import register_spread_symbols
 from common.trading_gate import effective_new_risk_blocked, gate_enabled
 from manual_spread import config as ms_config
@@ -125,7 +125,7 @@ def run_manual_entry_row(
     row_log = row_log or logging.getLogger(f'entry.{row.slot_key}')
 
     try:
-        broker = get_broker()
+        broker = get_shared_broker()
         expiry_raw = row.expiry or ''
         expiry_yymmdd = parse_expiry(expiry_raw) if expiry_raw else util.get_expiration_date(row_log)
 

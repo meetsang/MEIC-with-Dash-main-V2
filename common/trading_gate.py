@@ -21,7 +21,7 @@ _LOCK = threading.Lock()
 
 REST_HEALTHY = 'healthy'
 REST_STATUSES_BLOCKING = frozenset({
-    'rate_limited', 'auth_failed', 'unavailable', 'unknown',
+    'rate_limited', 'auth_failed', 'unavailable', 'unknown', 'timed_out',
 })
 
 
@@ -231,11 +231,17 @@ def _tranche_rest_readiness(
         )
     phase = str(rec.get('status_phase') or '')
     performed = bool(rec.get('performed'))
-    if phase in ('scheduled', 'running') or (not performed and phase != 'completed'):
+    if phase in ('scheduled', 'running') or (not performed and phase not in ('completed', 'timed_out')):
         return GateDecision(
             blocked=True,
             reason='rest_probe_pending',
             detail=f'pre_tranche probe for {tranche_id} still {phase or "pending"}',
+        )
+    if phase == 'timed_out' or (performed and rec.get('status') == 'timed_out'):
+        return GateDecision(
+            blocked=True,
+            reason='rest_timed_out',
+            detail=str(rec.get('detail') or f'pre_tranche probe timed out for {tranche_id}'),
         )
     if performed and rec.get('ok') is True:
         return GateDecision(blocked=False)
@@ -361,7 +367,7 @@ def record_probe_result(result) -> Dict[str, Any]:
             'tranche_id': rec['tranche_id'],
             'strategy': rec['strategy'],
             'performed': True,
-            'status_phase': 'completed',
+            'status_phase': rec.get('status_phase') or 'completed',
         }
         source = rec['source']
         tranche_id = rec['tranche_id']

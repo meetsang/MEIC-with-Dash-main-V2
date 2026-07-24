@@ -23,6 +23,7 @@ from blocks.stop.reconcile_policy import (
     is_working_stop_reconcile_due,
     schedule_next_working_stop_reconcile,
 )
+from blocks.stop.batched_reconcile import fetch_live_orders_snapshot
 from common.broker_cooldown import should_skip_priority
 from common.rest_metrics import write_metrics_snapshot
 from common.rest_operations import OPERATION_ALERT_CONFIRM, PRIORITY_HIGH, PRIORITY_LOW
@@ -388,10 +389,10 @@ class StopSupervisor:
         slot.state = mon.state
         return handled
 
-    def _slow_broker_sync(self, slot: TradeSlot) -> bool:
+    def _slow_broker_sync(self, slot: TradeSlot, *, live_orders=None) -> bool:
         """REST reconcile — may detect stop fill. Returns True if C2 enqueued."""
         mon = self._legacy_monitor(slot)
-        mon._reconcile_active_stop_with_broker()
+        mon._reconcile_active_stop_with_broker(live_orders=live_orders)
         slot.state = mon.state
         if slot.state.get('status') == 'closing' and slot.state.get('short_closed_at'):
             return True
@@ -589,7 +590,10 @@ class StopSupervisor:
 
         now = time.time()
         mqtt_healthy = not (mqtt_cache_stale or streamer_stale)
-        if is_working_stop_reconcile_due(
+        if getattr(self, '_peaceful_batch_paths', None) and slot.path in self._peaceful_batch_paths:
+            # Already reconciled in this cycle's shared live-orders snapshot.
+            pass
+        elif is_working_stop_reconcile_due(
             slot.state,
             now,
             mqtt_healthy=mqtt_healthy,
@@ -733,6 +737,53 @@ class StopSupervisor:
         if slot.status == 'open':
             self._scan_open_slot(slot)
 
+    def _batch_peaceful_reconcile(self, slots: List[TradeSlot]) -> None:
+        """One get_live_orders snapshot shared across all due open slots this cycle."""
+        self._peaceful_batch_paths = set()
+        now = time.time()
+        mqtt_healthy = not mqtt_cache_is_stale(self.prices)
+        due: List[TradeSlot] = []
+        for slot in slots:
+            if str(slot.state.get('status') or '') != 'open':
+                continue
+            if self.exit_pool.has_job(slot.path):
+                continue
+            if is_working_stop_reconcile_due(
+                slot.state,
+                now,
+                mqtt_healthy=mqtt_healthy,
+                status='open',
+                close_only_mode=bool(slot.state.get('close_only_mode')),
+            ):
+                due.append(slot)
+        if not due:
+            return
+        skip = should_skip_priority(PRIORITY_LOW)
+        snapshot = None
+        if not skip:
+            try:
+                snapshot = fetch_live_orders_snapshot(self.broker)
+            except Exception:
+                log.exception('V3 peaceful live-orders snapshot failed')
+                snapshot = None
+        for slot in due:
+            filled_exit = False
+            if not skip:
+                filled_exit = self._slow_broker_sync(slot, live_orders=snapshot)
+            schedule_next_working_stop_reconcile(
+                slot.state,
+                now,
+                mqtt_healthy=mqtt_healthy,
+                status='open',
+                close_only_mode=bool(slot.state.get('close_only_mode')),
+            )
+            slot.last_broker_sync = now
+            self._peaceful_batch_paths.add(slot.path)
+            save_slot(slot)
+            if filled_exit:
+                # Exit already enqueued; still mark path so scan skips duplicate REST.
+                continue
+
     def _cycle(self) -> None:
         duplicates = scan_duplicate_stop_ownership()
         apply_ownership_conflict_flags(duplicates)
@@ -746,6 +797,8 @@ class StopSupervisor:
             self._killswitch_claimed = claim_killswitch()
         if not killswitch:
             self._killswitch_claimed = False
+
+        self._batch_peaceful_reconcile(slots)
 
         for slot in slots:
             self._scan_slot(slot, killswitch_active=killswitch)

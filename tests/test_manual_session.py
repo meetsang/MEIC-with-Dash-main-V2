@@ -14,7 +14,7 @@ from blocks.session.plan import SessionPlan, load_manual_session_today
 def _run_manual_with_mocks(tmp, row, broker):
     broker.get_order_status_direct = broker.get_order_status
     patches = [
-        patch('blocks.entry.manual_worker.get_broker', return_value=broker),
+        patch('blocks.entry.manual_worker.get_shared_broker', return_value=broker),
         patch('blocks.entry.manual_worker.effective_new_risk_blocked', return_value=False),
         patch('blocks.entry.manual_worker._resolve_strikes_for_overlap', return_value=(
             7000, 6975, '.SPXW260625P7000', '.SPXW260625P6975', 0,

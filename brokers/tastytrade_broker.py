@@ -26,6 +26,7 @@ from brokers.base import BrokerBase, OrderResult
 log = logging.getLogger(__name__)
 
 _NON_RETRYABLE = ('margin', 'insufficient', 'invalid', 'rejected', 'not found')
+_RETRYABLE_5XX = ('500', '502', '503', '504')
 
 
 class BrokerCooldownActive(Exception):
@@ -34,6 +35,64 @@ class BrokerCooldownActive(Exception):
 
 class BrokerRateLimited(Exception):
     """REST call rejected by rate limiter or remote throttle."""
+
+
+def _extract_retry_after_sec(exc: BaseException) -> Optional[float]:
+    """Honor Retry-After when present on the exception or nested response."""
+    for attr in ('retry_after', 'Retry-After', 'retry_after_sec'):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            try:
+                return max(0.0, float(val))
+            except (TypeError, ValueError):
+                pass
+    response = getattr(exc, 'response', None)
+    if response is not None:
+        headers = getattr(response, 'headers', None) or {}
+        try:
+            raw = headers.get('Retry-After') or headers.get('retry-after')
+            if raw is not None:
+                return max(0.0, float(raw))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    msg = str(exc)
+    # e.g. "Retry-After: 5" in error text
+    low = msg.lower()
+    if 'retry-after' in low:
+        try:
+            after = low.split('retry-after', 1)[1]
+            digits = ''.join(ch if (ch.isdigit() or ch == '.') else ' ' for ch in after)
+            token = digits.strip().split()[0]
+            return max(0.0, float(token))
+        except (IndexError, ValueError):
+            pass
+    return None
+
+
+def _is_non_retryable_broker_error(exc: BaseException) -> bool:
+    if isinstance(exc, (BrokerRateLimited, BrokerCooldownActive)):
+        return True
+    err = str(exc).lower()
+    if '429' in err or 'rate limit' in err:
+        return True
+    if any(tok in err for tok in ('401', '403', 'unauthorized', 'forbidden')):
+        return True
+    if any(term in err for term in _NON_RETRYABLE):
+        return True
+    # Explicit Retry-After means the server asked us to wait — do not hammer with 2s/4s
+    if _extract_retry_after_sec(exc) is not None and ('429' in err or 'rate' in err):
+        return True
+    return False
+
+
+def _is_retryable_network_or_5xx(exc: BaseException) -> bool:
+    err = str(exc).lower()
+    if any(tok in err for tok in (
+        'timeout', 'timed out', 'connection', 'network', 'temporarily unavailable',
+        'reset by peer', 'broken pipe',
+    )):
+        return True
+    return any(code in err for code in _RETRYABLE_5XX)
 
 
 def _signed_position_qty(pos: Any) -> int:
@@ -57,20 +116,37 @@ def _signed_position_qty(pos: Any) -> int:
 
 
 def _retry_on_transient(func, max_retries=3, base_delay=2.0):
-    """Retry on transient errors (network, 500s). Not on business errors (margin, invalid order)."""
+    """Bounded jittered retries for network / selected 5xx only.
+
+    Non-retryable: HTTP 429, BrokerRateLimited, BrokerCooldownActive, 401, 403,
+    and classic business rejects. When Retry-After is present on a 429-class
+    error, honor it by sleeping once then raising (no 2s/4s retry loop).
+    """
+    import random
+
     last_exc = None
     for attempt in range(max_retries):
         try:
             return func()
         except Exception as e:
-            err_str = str(e).lower()
-            if any(term in err_str for term in _NON_RETRYABLE):
+            if _is_non_retryable_broker_error(e):
+                retry_after = _extract_retry_after_sec(e)
+                if retry_after is not None and retry_after > 0:
+                    log.warning(
+                        'Broker non-retryable throttle — honoring Retry-After=%.1fs: %s',
+                        retry_after,
+                        e,
+                    )
+                    time.sleep(min(retry_after, 60.0))
+                raise
+            if not _is_retryable_network_or_5xx(e):
                 raise
             last_exc = e
             if attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt)
+                delay *= 0.5 + random.random()  # jitter in [0.5, 1.5) × base
                 log.warning(
-                    "Broker call failed (attempt %d/%d), retrying in %.1fs: %s",
+                    'Broker call failed (attempt %d/%d), retrying in %.1fs: %s',
                     attempt + 1, max_retries, delay, e,
                 )
                 time.sleep(delay)
@@ -322,11 +398,13 @@ class TastyTradeBroker(BrokerBase):
         except Exception as exc:
             try:
                 record_failure(operation, exc)
-                if '429' in str(exc).lower():
+                if '429' in str(exc).lower() or 'rate limit' in str(exc).lower():
                     record_429()
             except Exception:
                 pass
             self._maybe_enter_cooldown(exc, op=operation)
+            if '429' in str(exc).lower() or 'rate limit' in str(exc).lower():
+                raise BrokerRateLimited(str(exc)) from exc
             raise
 
     def _maybe_enter_cooldown(self, exc: Exception, *, op: str = '') -> None:
@@ -698,10 +776,17 @@ class TastyTradeBroker(BrokerBase):
         *,
         priority: str = 'NORMAL',
         op: str = 'get_order',
+        live_orders: Optional[list] = None,
     ) -> OrderResult:
+        """Resolve order status from an optional live-orders snapshot, else cache, else get_order.
+
+        When ``live_orders`` is provided (batched peaceful reconcile), search that
+        list first and only call direct ``get_order`` if the id is absent.
+        """
         try:
-            for o in self.get_live_orders_cached():
-                if str(o.id) == str(order_id):
+            orders = live_orders if live_orders is not None else self.get_live_orders_cached()
+            for o in orders or []:
+                if str(getattr(o, 'id', None)) == str(order_id):
                     return _order_result_from_placed_order(o)
             order = self._run(
                 self.account.get_order(self.session, int(order_id)),
@@ -709,8 +794,17 @@ class TastyTradeBroker(BrokerBase):
                 op=op,
             )
             return _order_result_from_placed_order(order)
+        except BrokerCooldownActive:
+            raise
+        except BrokerRateLimited:
+            raise
         except Exception as exc:
             return OrderResult(False, order_id, 'rejected', message=str(exc))
+
+    def prime_live_orders_cache(self, orders: list) -> None:
+        """Install a shared live-orders snapshot for subsequent cache hits."""
+        self._live_orders_cache = list(orders or [])
+        self._live_orders_ts = time.time()
 
     def get_order_status_direct(
         self,
@@ -771,11 +865,13 @@ class TastyTradeBroker(BrokerBase):
                 from common.rest_metrics import record_429, record_failure
 
                 record_failure(op, exc)
-                if '429' in str(exc).lower():
+                if '429' in str(exc).lower() or 'rate limit' in str(exc).lower():
                     record_429()
             except Exception:
                 pass
             self._maybe_enter_cooldown(exc, op=op)
+            if '429' in str(exc).lower() or 'rate limit' in str(exc).lower():
+                raise BrokerRateLimited(str(exc)) from exc
             status, http_status = classify_rest_exception(exc)
             completed = time.time()
             return RestProbeResult(

@@ -60,6 +60,7 @@ def run_rest_probe(
     broker,
     *,
     bypass_local_cooldown: bool = False,
+    bypass_min_interval: bool = False,
     source: str = 'startup',
     strategy: str = '',
     tranche_id: str = '',
@@ -69,10 +70,15 @@ def run_rest_probe(
 
     Intended callers: ProbeCoordinator background workers and dashboard/manual
     operator actions — never the launcher main loop or EntryMonitorRunner.tick.
+
+    Coordinator jobs should pass ``bypass_min_interval=True`` because they already
+    have exactly-once deduplication. When min-interval suppresses a non-bypassed
+    probe, the result is recorded as a completed failure for *this* identity so
+    the tranche cannot stick in ``running`` or reuse another tranche's success.
     """
     global _LAST_PROBE_AT
 
-    from brokers.tastytrade_broker import BrokerCooldownActive
+    from brokers.tastytrade_broker import BrokerCooldownActive, BrokerRateLimited
 
     def _meta(**kwargs):
         return {
@@ -87,21 +93,25 @@ def run_rest_probe(
 
     now = time.time()
     with _PROBE_LOCK:
-        if now - _LAST_PROBE_AT < _probe_min_interval_sec():
-            from common.trading_gate import read_state
-
-            state = read_state()
-            lp = state.get('last_probe') or {}
-            return RestProbeResult(
-                ok=bool(lp.get('ok')),
-                status=str(state.get('rest_status') or 'unknown'),
-                attempted_at_epoch=float(lp.get('attempted_at_epoch') or now),
-                completed_at_epoch=float(lp.get('completed_at_epoch') or now),
-                latency_ms=int(lp.get('latency_ms') or 0),
-                http_status=lp.get('http_status'),
-                detail='probe rate-limited (min interval)',
+        if (not bypass_min_interval) and now - _LAST_PROBE_AT < _probe_min_interval_sec():
+            completed = time.time()
+            result = RestProbeResult(
+                ok=False,
+                status='suppressed_min_interval',
+                attempted_at_epoch=now,
+                completed_at_epoch=completed,
+                latency_ms=0,
+                http_status=None,
+                detail=(
+                    'probe suppressed by REST_PROBE_MIN_INTERVAL_SEC — '
+                    'not reusing another probe result'
+                ),
                 **_meta(),
             )
+            from common.trading_gate import record_probe_result
+
+            record_probe_result(result)
+            return result
         _LAST_PROBE_AT = now
 
     attempted = time.time()
@@ -154,7 +164,7 @@ def run_rest_probe(
                 detail='',
                 **_meta(),
             )
-    except BrokerCooldownActive as exc:
+    except (BrokerCooldownActive, BrokerRateLimited) as exc:
         completed = time.time()
         result = RestProbeResult(
             ok=False,
