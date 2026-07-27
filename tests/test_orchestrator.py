@@ -53,7 +53,10 @@ class TestOrchestrator(unittest.TestCase):
     def test_meic_has_six_slots(self):
         slots = MEICStrategy().schedule()
         self.assertEqual(len(slots), 6)
-        self.assertEqual(slots[0].lot, '11-00')
+        lots = [s.lot for s in slots]
+        self.assertEqual(lots, ['10-00', '10-30', '11-00', '12-00', '12-30', '01-15'])
+        self.assertNotIn('01-45', lots)
+        self.assertNotIn('02-00', lots)
 
     def test_manual_spread_not_scheduled(self):
         from strategies.manual_spread.strategy import ManualSpreadStrategy

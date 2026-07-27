@@ -23,12 +23,12 @@ def meic_entry_block(broker, log=None):
 
 
 MEIC_TRANCHE_SLOTS = [
+    TrancheSlot('10-00', time(9, 59), time(10, 5), 'MEIC_IC'),
+    TrancheSlot('10-30', time(10, 29), time(10, 35), 'MEIC_IC'),
     TrancheSlot('11-00', time(10, 59), time(11, 5), 'MEIC_IC'),
     TrancheSlot('12-00', time(11, 59), time(12, 5), 'MEIC_IC'),
     TrancheSlot('12-30', time(12, 29), time(12, 35), 'MEIC_IC'),
     TrancheSlot('01-15', time(13, 14), time(13, 20), 'MEIC_IC'),
-    TrancheSlot('01-45', time(13, 44), time(13, 50), 'MEIC_IC'),
-    TrancheSlot('02-00', time(13, 59), time(14, 5), 'MEIC_IC'),
 ]
 
 

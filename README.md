@@ -324,18 +324,14 @@ Each window fires **once per day** the first time the clock is inside the range.
 
 | Lot name | Window start | Window end | Sides opened |
 | -------- | ------------ | ---------- | ------------ |
+| `10-00` | 9:59 AM | 10:05 AM | Put spread + Call spread |
+| `10-30` | 10:29 AM | 10:35 AM | Put spread + Call spread |
 | `11-00` | 10:59 AM | 11:05 AM | Put spread + Call spread |
 | `12-00` | 11:59 AM | 12:05 PM | Put spread + Call spread |
 | `12-30` | 12:29 PM | 12:35 PM | Put spread + Call spread |
 | `01-15` | 1:14 PM | 1:20 PM | Put spread + Call spread |
-| `01-45` | 1:44 PM | 1:50 PM | Put spread + Call spread |
-| `02-00` | 1:59 PM | 2:05 PM | Put spread + Call spread |
 
-To change these times, edit **both**:
-1. `TRANCHES` in `run.py`
-2. `TRANCHE_LOTS` in `dashboard/server.py` (the dashboard hardcodes the same lot names to build the 12-slot grid)
-
-Keep them in sync — the dashboard will show a blank row for any lot that exists in one list but not the other.
+To change these times, edit `MEIC_TRANCHE_SLOTS` in `strategies/meic/strategy.py`. The dashboard derives `TRANCHE_LOTS` from that list automatically.
 
 #### 0DTE expiry (Monday's contract)
 
@@ -384,7 +380,7 @@ Real-time single-page app (Flask + Socket.IO). The server pushes an update every
 
 #### Tranche grid
 
-All 12 trade slots (6 lots x 2 sides) are shown at all times, even before any trades are placed. Slots are grouped by lot (e.g. `11-00 CT`) with Call and Put rows paired together.
+All 12 trade slots (6 lots x 2 sides) are shown at all times, even before any trades are placed. Slots are grouped by lot (e.g. `10-00 CT`) with Call and Put rows paired together.
 
 Each row shows: Lot · Side · State · Short/Long strikes · Entry credit · Qty · Live short/long/spread prices · Live PnL · Stop phase · Stop price · Heartbeat
 
@@ -412,16 +408,14 @@ Live PnL = (entry credit - current spread) × 100 × qty
 
 **Heartbeat dots** per row: green = last seen < 15s · yellow = 15-60s · red = > 60s or missing.
 
-**Where the 12 slots come from:** hardcoded in `dashboard/server.py`:
+**Where the 12 slots come from:** `MEIC_TRANCHE_SLOTS` in `strategies/meic/strategy.py`, mirrored in the dashboard as:
 
 ```python
-TRANCHE_LOTS  = ['11-00', '12-00', '12-30', '01-15', '01-45', '02-00']
+TRANCHE_LOTS = [slot.lot for slot in MEIC_TRANCHE_SLOTS]
 TRANCHE_SIDES = ['C', 'P']
 ```
 
-For each slot the server scans `meic0dte/trades/active/` for a matching JSON (matched by `state.lot` and `state.entry.side`). If found → live data. If not → `Pending` or `Paused`.
-
-**If you add or remove a tranche, update this list to match `TRANCHES` in `run.py`.**
+For each slot the server scans `trades/active/` for a matching JSON (matched by `state.lot` and `state.entry.side`). If found → live data. If not → `Pending` or `Paused`.
 
 #### System health panel
 

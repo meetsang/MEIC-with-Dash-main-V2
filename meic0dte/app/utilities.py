@@ -103,12 +103,12 @@ def get_lot_time():
     current_time = central_time()
      # Define time ranges and their corresponding lot values in a dictionary
     lot_times = {
+        "10-00": (time(9, 59), time(10, 5)),
+        "10-30": (time(10, 29), time(10, 35)),
         "11-00": (time(10, 59), time(11, 5)),
         "12-00": (time(11, 59), time(12, 5)),
         "12-30": (time(12, 29), time(12, 35)),
         "01-15": (time(13, 14), time(13, 20)),
-        "01-45": (time(13, 44), time(13, 50)),
-        "02-00": (time(13, 59), time(14, 5))
         }
     # Check each lot and time range, then call vertical.tranche if current time is in the range
     for item, (start, end) in lot_times.items():

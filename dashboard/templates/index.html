@@ -1173,7 +1173,7 @@
 <script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.2/dist/socket.io.min.js"></script>
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const LOTS  = ['11-00','12-00','12-30','01-15','01-45','02-00'];
+const LOTS  = ['10-00','10-30','11-00','12-00','12-30','01-15'];
 const SIDES = ['C','P'];
 const STATE_DOT = {
   pending:'dot-grey', open:'dot-green', closing:'dot-blue', working:'dot-yellow',
@@ -2274,7 +2274,7 @@ async function killSelected() {
 }
 
 async function pauseAllMeic() {
-  if (!confirm('Pause all 12 MEIC tranche slots (both Put and Call for each lot)?')) return;
+  if (!confirm('Pause all MEIC tranche slots (both Put and Call for each lot)?')) return;
   await fetch('/api/pause_all_meic', {method:'POST'});
   planDraftBySlot = {};
   toast('All MEIC slots paused', 'warning');
@@ -2282,7 +2282,7 @@ async function pauseAllMeic() {
 }
 
 async function unpauseAllMeic() {
-  if (!confirm('Unpause all 12 MEIC tranche slots (both Put and Call for each lot)?')) return;
+  if (!confirm('Unpause all MEIC tranche slots (both Put and Call for each lot)?')) return;
   await fetch('/api/unpause_all_meic', {method:'POST'});
   planDraftBySlot = {};
   toast('All MEIC slots unpaused', 'success');

@@ -52,6 +52,7 @@ from manual_spread_handlers import (
 )
 from gex_handlers import register_gex_routes
 from common.trade_pick import pick_best_trade
+from strategies.meic.strategy import MEIC_TRANCHE_SLOTS
 from blocks.stop.close_fills import display_close_prices, slippage_dollars, slippage_label
 from blocks.stop.breach_watch import breach_display_fields
 from dashboard.runtime_display import (
@@ -96,7 +97,7 @@ relocate_all_legacy_logs(ROOT)
 
 BOT_STATUS_FILE   = os.path.join(ROOT, 'dashboard', 'bot_status.json')
 
-TRANCHE_LOTS = ['11-00', '12-00', '12-30', '01-15', '01-45', '02-00']
+TRANCHE_LOTS = [slot.lot for slot in MEIC_TRANCHE_SLOTS]
 TRANCHE_SIDES = ['C', 'P']
 
 PHASE_DISPLAY = {
@@ -360,6 +361,39 @@ def _resolve_trade_path(trade_path: str) -> str:
     return trade_path
 
 
+MEIC_GRID_PNL_STATES = frozenset({
+    'open', 'closing', 'breached', 'working', 'closed', 'killed',
+})
+
+
+def _trade_has_position(trade: dict) -> bool:
+    """True when the trade JSON represents a real filled position."""
+    from common.expiry_settlement import effective_filled_quantity, has_real_close_fills
+
+    status = (trade.get('status') or '').lower()
+    if has_real_close_fills(trade):
+        return True
+    filled = effective_filled_quantity(trade)
+    if filled > 0:
+        return True
+    if status in ('pending_fill', 'cancelled', 'canceled', 'rejected'):
+        return False
+    short_fill = float((trade.get('short_leg') or {}).get('fill_price') or 0)
+    long_fill = float((trade.get('long_leg') or {}).get('fill_price') or 0)
+    return short_fill > 0 and long_fill > 0
+
+
+def _counts_toward_meic_day_pnl(row, trade, display_state: str) -> bool:
+    """Match MEIC tranche grid totals: real fills in grid-visible states only."""
+    if trade is None or not _trade_has_position(trade):
+        return False
+    if display_state not in MEIC_GRID_PNL_STATES:
+        return False
+    if getattr(row, 'state', '') == 'failed' and not getattr(row, 'trade_path', ''):
+        return False
+    return True
+
+
 def _resolve_trade_for_row(row, active_trades):
     if row.trade_path:
         resolved = _resolve_trade_path(row.trade_path)
@@ -369,6 +403,8 @@ def _resolve_trade_for_row(row, active_trades):
                 state['_filepath'] = resolved
                 state['_filename'] = os.path.basename(resolved)
                 return state
+    if getattr(row, 'state', '') == 'failed':
+        return None
     matching = [t for t in active_trades if _match_trade_to_slot(t, row.lot, row.side)]
     return pick_best_trade(matching)
 
@@ -613,35 +649,41 @@ def build_summary():
             if session_plan:
                 slot['state'] = _session_display_state(row, trade)
 
-            if status == 'closed':
-                slip_usd = slippage_dollars(trade)
-                if slip_usd is not None:
-                    day_slippage += slip_usd
+            counts_pnl = (
+                _counts_toward_meic_day_pnl(row, trade, slot['state'])
+                if session_plan else _trade_has_position(trade)
+            )
 
             if status == 'closed':
-                closed_count += 1
-                day_pnl += live_pnl
-                _sync_key = (lot, side)
-                if _sync_key not in _synced_trades:
-                    try:
-                        upsert_trade({
-                            'date_opened': entry.get('timestamp', '')[:10],
-                            'time_opened': entry.get('timestamp', ''),
-                            'lot': lot, 'side': side,
-                            'short_symbol': short_sym, 'long_symbol': long_sym,
-                            'quantity': quantity,
-                            'filled_price': net_credit,
-                            'short_open_price': short_leg.get('fill_price', 0),
-                            'long_open_price': long_leg.get('fill_price', 0),
-                            'short_close_price': trade.get('short_close_price'),
-                            'long_close_price': trade.get('long_close_price'),
-                        })
-                        _synced_trades.add(_sync_key)
-                    except Exception:
-                        pass
-            else:
-                open_count += 1
-                day_pnl += live_pnl
+                slip_usd = slippage_dollars(trade)
+                if slip_usd is not None and counts_pnl:
+                    day_slippage += slip_usd
+
+            if counts_pnl:
+                if status == 'closed':
+                    closed_count += 1
+                    day_pnl += live_pnl
+                    _sync_key = (lot, side)
+                    if _sync_key not in _synced_trades:
+                        try:
+                            upsert_trade({
+                                'date_opened': entry.get('timestamp', '')[:10],
+                                'time_opened': entry.get('timestamp', ''),
+                                'lot': lot, 'side': side,
+                                'short_symbol': short_sym, 'long_symbol': long_sym,
+                                'quantity': quantity,
+                                'filled_price': net_credit,
+                                'short_open_price': short_leg.get('fill_price', 0),
+                                'long_open_price': long_leg.get('fill_price', 0),
+                                'short_close_price': trade.get('short_close_price'),
+                                'long_close_price': trade.get('long_close_price'),
+                            })
+                            _synced_trades.add(_sync_key)
+                        except Exception:
+                            pass
+                else:
+                    open_count += 1
+                    day_pnl += live_pnl
 
         grid.append(slot)
 
