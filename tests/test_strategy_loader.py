@@ -18,6 +18,17 @@ class TestStrategyLoader(unittest.TestCase):
         self.assertTrue(by_name['MEIC_IC'].schedule())
         self.assertEqual(by_name['MANUAL_SPREAD'].schedule(), [])
 
+    def test_skyline_loaded_when_enabled(self):
+        from strategies.loader import load_standalone_strategies
+
+        standalone = {cfg.name: (strat, cfg) for strat, cfg in load_standalone_strategies()}
+        self.assertIn('SKYLINE_SPX', standalone)
+        strat, cfg = standalone['SKYLINE_SPX']
+        self.assertTrue(cfg.paper)
+        self.assertTrue(cfg.confirmed)
+        self.assertFalse(cfg.scheduled)
+        self.assertEqual(strat.schedule(), [])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,29 @@
+---
+description: North-star doc for every new strategy — read before adding or changing strategies
+globs: strategies/**/*,config/strategies.yaml,changes/design/**,changes/strategies/**
+alwaysApply: false
+---
+
+# Strategy design north star
+
+Before adding or materially changing any strategy, read:
+
+`changes/design/STRATEGY_DESIGN_PATTERN.md`
+
+That doc is the **living reference** for how strategies should be shaped in this codebase. Follow it unless the user explicitly overrides.
+
+## Non-negotiables (from the doc)
+
+1. **MEIC_IC and MANUAL_SPREAD live paths are never modified** to accommodate a new strategy — changes are additive only.
+2. **New strategies default to paper** with explicit opt-in (`enabled` + `confirmed` / env acknowledgment).
+3. Pick **tranche (session-CSV)** vs **standalone** per the decision tree in §4 — do not invent a third lifecycle pattern.
+4. New non-vertical strategies use `legs[]` / `structures[]` trade JSON, `StandaloneStrategyRunner`, and `place_multi_leg_order` when needed.
+5. Ship checklist and definition-of-done are in §7–§8 of the north-star doc.
+
+## Related docs (by folder)
+
+- `changes/design/` — architecture and component design specs
+- `changes/strategies/` — per-strategy plans, research, paper-day logs
+- `changes/sessions/` — live session notes and daily observations
+- `changes/fixes/` — incidents, point fixes, phase/release reports
+- `changes/CHANGES_SINCE_2026-07-06.md` — dated changelog (update after every ship)

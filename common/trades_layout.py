@@ -9,11 +9,14 @@ from typing import List, Optional
 
 STRATEGY_MEIC = 'MEIC_IC'
 STRATEGY_MANUAL = 'MANUAL_SPREAD'
+STRATEGY_SKYLINE = 'SKYLINE_SPX'
 
 MEIC_ACTIVE = 'trades/active/MEIC_IC'
 MEIC_HISTORY = 'trades/history/MEIC_IC'
 MANUAL_ACTIVE = 'trades/active/MANUAL_SPREAD'
 MANUAL_HISTORY = 'trades/history/MANUAL_SPREAD'
+SKYLINE_ACTIVE = 'trades/active/SKYLINE_SPX'
+SKYLINE_HISTORY = 'trades/history/SKYLINE_SPX'
 
 # Test fixtures — never scanned for dashboard History / PnL totals.
 TEST_ROOT = 'trades/test'
@@ -32,20 +35,27 @@ def trades_root(root: Optional[str] = None) -> str:
 
 
 def active_dir_for_strategy(strategy: str, root: Optional[str] = None) -> str:
-    if strategy == STRATEGY_MANUAL:
-        return os.path.join(root or project_root(), MANUAL_ACTIVE)
-    return os.path.join(root or project_root(), MEIC_ACTIVE)
+    return os.path.join(root or project_root(), 'trades', 'active', strategy)
 
 
 def history_dir_for_strategy(strategy: str, root: Optional[str] = None) -> str:
-    if strategy == STRATEGY_MANUAL:
-        return os.path.join(root or project_root(), MANUAL_HISTORY)
-    return os.path.join(root or project_root(), MEIC_HISTORY)
+    return os.path.join(root or project_root(), 'trades', 'history', strategy)
 
 
 def all_active_dirs(root: Optional[str] = None) -> List[str]:
     base = root or project_root()
-    return [
+    active_root = os.path.join(base, 'trades', 'active')
+    if not os.path.isdir(active_root):
+        return [
+            os.path.join(base, MEIC_ACTIVE),
+            os.path.join(base, MANUAL_ACTIVE),
+        ]
+    dirs = []
+    for name in sorted(os.listdir(active_root)):
+        path = os.path.join(active_root, name)
+        if os.path.isdir(path):
+            dirs.append(path)
+    return dirs or [
         os.path.join(base, MEIC_ACTIVE),
         os.path.join(base, MANUAL_ACTIVE),
     ]
@@ -60,6 +70,10 @@ def ops_path(name: str, root: Optional[str] = None) -> str:
     return os.path.join(trades_root(root), name)
 
 
+def registered_strategies() -> List[str]:
+    return [STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE]
+
+
 def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
     base = root or project_root()
     for path in (
@@ -67,6 +81,8 @@ def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
         os.path.join(base, MEIC_HISTORY),
         os.path.join(base, MANUAL_ACTIVE),
         os.path.join(base, MANUAL_HISTORY),
+        os.path.join(base, SKYLINE_ACTIVE),
+        os.path.join(base, SKYLINE_HISTORY),
         os.path.join(base, TEST_MEIC_ACTIVE),
         os.path.join(base, TEST_MEIC_HISTORY),
         os.path.join(base, TEST_MANUAL_ACTIVE),

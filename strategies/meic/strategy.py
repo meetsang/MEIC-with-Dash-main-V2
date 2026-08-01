@@ -31,6 +31,9 @@ MEIC_TRANCHE_SLOTS = [
     TrancheSlot('01-15', time(13, 14), time(13, 20), 'MEIC_IC'),
 ]
 
+# Lots paused on daily session bootstrap (operator can unpause via dashboard).
+MEIC_DEFAULT_PAUSED_LOTS = frozenset({'10-00', '10-30'})
+
 
 @dataclass
 class MEICConfig(StrategyConfig):

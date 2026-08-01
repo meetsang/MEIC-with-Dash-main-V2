@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class ComboLeg:
+    symbol: str
+    action: str  # BUY_TO_OPEN | SELL_TO_OPEN | BUY_TO_CLOSE | SELL_TO_CLOSE
+    quantity: int
+
+
+@dataclass
 class OrderResult:
     success: bool
     order_id: Optional[str]
@@ -54,6 +61,16 @@ class BrokerBase(ABC):
         self, short_symbol: str, long_symbol: str, qty: int, credit: float
     ) -> OrderResult:
         ...
+
+    def place_multi_leg_order(
+        self,
+        legs: List[ComboLeg],
+        *,
+        price: float,
+        order_type: str = 'LIMIT',
+        time_in_force: str = 'DAY',
+    ) -> OrderResult:
+        raise NotImplementedError
 
     @abstractmethod
     def place_spread_close_order(

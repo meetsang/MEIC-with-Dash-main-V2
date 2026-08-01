@@ -21,7 +21,7 @@ from common.rest_limiter import get_rest_limiter
 from common.mqtt_prices import ensure_cache_started
 from common.option_ticks import round_spx_option_price
 from common.symbols import symbols_equivalent, to_schwab, to_tastytrade
-from brokers.base import BrokerBase, OrderResult
+from brokers.base import BrokerBase, ComboLeg, OrderResult
 
 log = logging.getLogger(__name__)
 
@@ -562,6 +562,72 @@ class TastyTradeBroker(BrokerBase):
                     message='No order id returned (was dry_run enabled?)',
                     raw=resp,
                 )
+            return result
+        except Exception as exc:
+            if '401' in str(exc) or 'unauthorized' in str(exc).lower():
+                self.validate_session()
+            return OrderResult(False, None, 'rejected', message=str(exc))
+
+    def place_multi_leg_order(
+        self,
+        legs: List[ComboLeg],
+        *,
+        price: float,
+        order_type: str = 'LIMIT',
+        time_in_force: str = 'DAY',
+    ) -> OrderResult:
+        if len(legs) > 4:
+            return OrderResult(False, None, 'rejected', message='max 4 legs per order')
+        if not legs:
+            return OrderResult(False, None, 'rejected', message='no legs provided')
+
+        from common.trading_gate import effective_new_risk_blocked, gate_enabled
+
+        if gate_enabled() and effective_new_risk_blocked():
+            return OrderResult(
+                False, None, 'rejected',
+                message='new_risk_gate_blocked',
+            )
+
+        from tastytrade.order import (
+            NewOrder,
+            OrderAction,
+            OrderTimeInForce,
+            OrderType,
+        )
+
+        async def _build_and_place():
+            built_legs = []
+            for leg in legs:
+                opt = await self._get_option(to_tastytrade(leg.symbol))
+                action = OrderAction[leg.action]
+                built_legs.append(opt.build_leg(Decimal(leg.quantity), action))
+            tif = OrderTimeInForce[time_in_force]
+            otype = OrderType[order_type]
+            magnitude = _round_option_price(abs(price))
+            signed = -magnitude if price < 0 else magnitude
+            order = NewOrder(
+                time_in_force=tif,
+                order_type=otype,
+                legs=built_legs,
+                price=signed,
+            )
+            return await self.account.place_order(self.session, order, dry_run=False)
+
+        try:
+            resp = _retry_on_transient(
+                lambda: self._run(_build_and_place(), priority='HIGH', op='place_multi_leg_order'),
+            )
+            result = _order_result_from_response(resp)
+            if not result.order_id:
+                return OrderResult(
+                    False, None, 'rejected',
+                    message='No order id returned (was dry_run enabled?)',
+                    raw=resp,
+                )
+            if result.filled_price is None and result.order_limit_price is None:
+                result.filled_price = price
+                result.filled_price_source = 'order_limit_fallback'
             return result
         except Exception as exc:
             if '401' in str(exc) or 'unauthorized' in str(exc).lower():

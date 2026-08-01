@@ -14,3 +14,20 @@ strategies:
     broker: tastytrade
     stop_profile: meic_credit_spread
     scheduled: false
+
+  - name: SKYLINE_SPX
+    enabled: true
+    confirmed: true
+    module: strategies.skyline.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: skyline_hold_to_expiry
+    scheduled: false
+    paper: true
+    config_overrides:
+      entry_time_et: '09:45'
+      gap_down_skip_points: 25
+      atm_rounding: 5
+      quantity: 1
+      entry_fill_wait_sec: 20
+      entry_price_style: mid

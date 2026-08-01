@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Iterable, List, Optional
 
-from common.symbols import build_schwab_symbol, parse_canonical
+from common.symbols import build_schwab_symbol, parse_canonical, to_schwab
 
 log = logging.getLogger(__name__)
 
@@ -33,4 +33,36 @@ def register_spread_symbols(state: dict, lot: str, logger: Optional[logging.Logg
         return util.update_options_symbols([short_sym, long_sym], lot, slog)
     except Exception as exc:
         slog.error('register_spread_symbols failed: %s', exc)
+        return False
+
+
+def register_option_symbols(
+    symbols: Iterable[str],
+    lot: str,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """Register one or more option legs (Schwab or TastyTrade format) for MQTT streaming."""
+    slog = logger or log
+    schwab: List[str] = []
+    seen: set[str] = set()
+    for sym in symbols:
+        text = str(sym).strip()
+        if not text:
+            continue
+        converted = to_schwab(text) if parse_canonical(text) else text
+        if converted in seen:
+            continue
+        seen.add(converted)
+        schwab.append(converted)
+    if not schwab:
+        return False
+    try:
+        from meic0dte.app import utilities as util
+
+        ok = util.update_options_symbols(schwab, lot, slog)
+        if ok:
+            slog.info('Registered %d streamer symbol(s) for %s', len(schwab), lot)
+        return ok
+    except Exception as exc:
+        slog.error('register_option_symbols failed: %s', exc)
         return False

@@ -12,7 +12,9 @@ Modular rewrite of the SPX MEIC autotrader. **V1 remains frozen** at `../MEIC-wi
 | Strategies | `config/strategies.yaml` — MEIC + Manual Spread |
 | Blocks | `blocks/` — migration target; runtime still uses ported V1 modules |
 
-Design docs: `changes/V2_MODULAR_REWRITE.md`, `changes/V2_APPENDIX_GAPS.md`.
+**Strategy north star:** [changes/design/STRATEGY_DESIGN_PATTERN.md](changes/design/STRATEGY_DESIGN_PATTERN.md) — read before adding or changing any strategy.
+
+Design docs: [changes/README.md](changes/README.md) — `design/` (architecture), `strategies/` (plans), `sessions/` (live notes), `fixes/` (incidents). Start with `changes/design/V2_MODULAR_REWRITE.md`, `changes/design/V2_APPENDIX_GAPS.md`.
 
 **Living changelog (since Jul 6, 2026):** [changes/CHANGES_SINCE_2026-07-06.md](changes/CHANGES_SINCE_2026-07-06.md) — dated implementations, findings, learnings, open items. **Add a new section here after every change.**
 

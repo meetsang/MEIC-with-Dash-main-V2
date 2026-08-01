@@ -8,6 +8,7 @@ auth/bearer.py
 auth/token
 
 # Personal trade data & runtime state
+runtime/
 dashboard/meic_trades.db
 dashboard/bot_status.json
 trades/active/

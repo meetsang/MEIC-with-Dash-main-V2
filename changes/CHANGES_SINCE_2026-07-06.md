@@ -4,11 +4,29 @@
 **Started:** 2026-07-06  
 **Purpose:** Living changelog — every implementation, finding, and operator decision **from July 6 onward**.
 
-Older history (V2 rewrite, pre-Jul-6 design) stays in the other `changes/` docs. **Add a new dated section at the top** whenever you ship fixes, discover issues, or make operator decisions.
+Older history (V2 rewrite, pre-Jul-6 design) stays in the other `changes/` docs — see [README.md](README.md) for folder layout (`design/`, `strategies/`, `sessions/`, `fixes/`). **Strategy north star:** [design/STRATEGY_DESIGN_PATTERN.md](design/STRATEGY_DESIGN_PATTERN.md). **Add a new dated section at the top** whenever you ship fixes, discover issues, or make operator decisions.
 
 ---
 
-## How to maintain this doc
+## 2026-07-31 — Reorganize `changes/` folder + strategy north-star rule
+
+**Status:** implemented  
+**Tests:** n/a (docs only)
+
+### What changed
+- Split flat `changes/` into four subfolders: `design/`, `strategies/`, `sessions/`, `fixes/`
+- Added `changes/README.md` index; **north star** is `changes/design/STRATEGY_DESIGN_PATTERN.md`
+- Added `.cursor/rules/strategy-design-north-star.mdc` so agents read the north-star doc before strategy work
+- Updated `V2_README.md`, changelog rule, and a few code comments pointing at old paths
+
+### Findings / learnings
+- Historical session/fix docs keep old inline `changes/FOO.md` links — use `changes/README.md` or folder names when navigating
+
+### Validation
+- [x] All 57 docs moved; root retains only `CHANGES_SINCE_2026-07-06.md` + `README.md`
+
+---
+
 
 After any meaningful change (code merge, live session finding, incident, config decision):
 

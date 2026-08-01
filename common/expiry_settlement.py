@@ -381,6 +381,24 @@ def get_spx_settlement_close(
     return float(resolved['value']) if resolved else None
 
 
+def resolve_daily_close(
+    root: str,
+    for_date: date,
+) -> Optional[tuple[float, str]]:
+    """Best-available SPX close for for_date from recorded market data.
+
+    Priority: ohlc_daily → spx_polls → spx_1m. Returns (price, source) or None.
+    """
+    resolved = resolve_spx_settlement_close(for_date, root=root)
+    if resolved:
+        return float(resolved['value']), str(resolved.get('source', 'settlement'))
+    for source in ('spx_polls', 'spx_1m'):
+        val = _spx_from_market_data(root, for_date, source=source)
+        if val is not None:
+            return float(val), source
+    return None
+
+
 def _spx_from_market_data(
     root: str,
     for_date: date,
@@ -662,6 +680,11 @@ def trade_to_history_row(
     assume_otm_expiry: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Map trade JSON to dashboard/db upsert payload."""
+    from common.history_adapter import is_skyline_trade, skyline_trade_to_history_row
+
+    if is_skyline_trade(trade):
+        return skyline_trade_to_history_row(trade)
+
     entry = trade.get('entry') or {}
     short_leg = trade.get('short_leg') or {}
     long_leg = trade.get('long_leg') or {}
@@ -727,31 +750,29 @@ def trade_to_history_row(
         'open_order_id': trade.get('open_order_id', ''),
         'short_close_order_id': trade.get('short_close_order_id', ''),
         'settled_at_expiry': settled.get('settled', False),
+        'paper': 1 if bool(trade.get('paper', False)) else 0,
     }
 
 
 def iter_trade_json_paths(root: str, for_date: Optional[date] = None) -> list[str]:
-    """Active + dated history JSON paths for MEIC and Manual (excludes trades/test/)."""
-    from common import trades_layout
+    """Active + dated history JSON paths for all production strategies."""
+    from common.history_adapter import is_syncable_trade_path, production_strategy_dirs
     from common.test_trades import is_test_trade_path
 
     paths: list[str] = []
     base = root or trades_layout.project_root()
-    strategies = (
-        (trades_layout.STRATEGY_MEIC, trades_layout.MEIC_ACTIVE, trades_layout.MEIC_HISTORY),
-        (trades_layout.STRATEGY_MANUAL, trades_layout.MANUAL_ACTIVE, trades_layout.MANUAL_HISTORY),
-    )
     iso = for_date.isoformat() if for_date else None
-    for _strategy, active_rel, history_rel in strategies:
+    for _strategy, active_rel, history_rel in production_strategy_dirs():
         active = os.path.join(base, active_rel)
         history = os.path.join(base, history_rel)
         if os.path.isdir(active):
-            paths.extend(sorted(glob.glob(os.path.join(active, '*.json'))))
+            for path in sorted(glob.glob(os.path.join(active, '*.json'))):
+                if is_syncable_trade_path(path):
+                    paths.append(path)
         if iso and os.path.isdir(os.path.join(history, iso)):
             paths.extend(sorted(glob.glob(os.path.join(history, iso, '*.json'))))
         if os.path.isdir(history):
             paths.extend(sorted(glob.glob(os.path.join(history, '*.json'))))
-    # de-dupe while preserving order
     seen = set()
     out = []
     for p in paths:
@@ -766,19 +787,18 @@ def iter_trade_json_paths(root: str, for_date: Optional[date] = None) -> list[st
 
 def iter_all_trade_json_paths(root: str) -> list[str]:
     """Every production trade JSON under active + history trees (recursive)."""
-    from common import trades_layout
+    from common.history_adapter import is_syncable_trade_path, production_strategy_dirs
     from common.test_trades import is_test_trade_path
 
     paths: list[str] = []
     base = root or trades_layout.project_root()
-    for active_rel, history_rel in (
-        (trades_layout.MEIC_ACTIVE, trades_layout.MEIC_HISTORY),
-        (trades_layout.MANUAL_ACTIVE, trades_layout.MANUAL_HISTORY),
-    ):
+    for _strategy, active_rel, history_rel in production_strategy_dirs():
         for rel in (active_rel, history_rel):
             directory = os.path.join(base, rel)
             if os.path.isdir(directory):
-                paths.extend(sorted(glob.glob(os.path.join(directory, '**', '*.json'), recursive=True)))
+                for path in sorted(glob.glob(os.path.join(directory, '**', '*.json'), recursive=True)):
+                    if is_syncable_trade_path(path):
+                        paths.append(path)
     seen = set()
     out = []
     for p in paths:

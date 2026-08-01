@@ -38,6 +38,19 @@ from common import trades_layout
 
 STRATEGY_MEIC = trades_layout.STRATEGY_MEIC
 STRATEGY_MANUAL = trades_layout.STRATEGY_MANUAL
+STRATEGY_SKYLINE = trades_layout.STRATEGY_SKYLINE
+
+
+def _truthy_paper(value) -> bool:
+    return value in (1, True, '1', 'true', 'True')
+
+
+def _paper_sql_clause(*, include_paper: bool = False, paper_only: bool = False) -> str:
+    if paper_only:
+        return 'AND paper = 1'
+    if not include_paper:
+        return 'AND (paper IS NULL OR paper = 0)'
+    return ''
 
 
 def infer_strategy(lot: str, entry_strategy: str | None = None) -> str:
@@ -105,6 +118,8 @@ def _migrate_db(conn):
             "UPDATE trades SET strategy = ? WHERE lot LIKE 'ms-%' OR lot LIKE 'ms%'",
             (STRATEGY_MANUAL,),
         )
+    if 'paper' not in cols:
+        conn.execute('ALTER TABLE trades ADD COLUMN paper INTEGER NOT NULL DEFAULT 0')
 
 def upsert_trade(trade: dict):
     """Insert or update a trade record. Called whenever order_params.json changes."""
@@ -133,12 +148,12 @@ def upsert_trade(trade: dict):
             (date_opened, time_opened, strategy, lot, side, short_symbol, long_symbol,
              quantity, open_credit, short_open_price, long_open_price,
              short_close_price, long_close_price, close_debit, pnl, status,
-             open_order_id, short_close_order_id, created_at)
+             open_order_id, short_close_order_id, created_at, paper)
         VALUES
             (:date_opened,:time_opened,:strategy,:lot,:side,:short_symbol,:long_symbol,
              :quantity,:open_credit,:short_open_price,:long_open_price,
              :short_close_price,:long_close_price,:close_debit,:pnl,:status,
-             :open_order_id,:short_close_order_id,:created_at)
+             :open_order_id,:short_close_order_id,:created_at,:paper)
         ON CONFLICT(date_opened, lot, side) DO UPDATE SET
             strategy             = excluded.strategy,
             quantity             = excluded.quantity,
@@ -150,8 +165,10 @@ def upsert_trade(trade: dict):
             close_debit          = excluded.close_debit,
             pnl                  = excluded.pnl,
             status               = excluded.status,
-            short_close_order_id = excluded.short_close_order_id
+            short_close_order_id = excluded.short_close_order_id,
+            paper                = excluded.paper
     """
+    paper_val = 1 if _truthy_paper(trade.get('paper')) else 0
     with get_conn() as conn:
         conn.execute(sql, {
             'date_opened':          trade.get('date_opened', central_today_str()),
@@ -176,6 +193,7 @@ def upsert_trade(trade: dict):
             'open_order_id':        trade.get('open_order_id', ''),
             'short_close_order_id': trade.get('short_close_order_id', ''),
             'created_at':           trade.get('created_at', central_now_iso()),
+            'paper':                paper_val,
         })
         _refresh_daily_summary(conn, trade.get('date_opened', central_today_str()))
 
@@ -189,7 +207,7 @@ def _refresh_daily_summary(conn, date):
             SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END),
             SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END)
         FROM trades
-        WHERE date_opened = ? AND status = 'CLOSED'
+        WHERE date_opened = ? AND status = 'CLOSED' AND (paper IS NULL OR paper = 0)
         GROUP BY date_opened
         ON CONFLICT(date) DO UPDATE SET
             total_pnl  = excluded.total_pnl,
@@ -203,7 +221,7 @@ def _refresh_daily_summary(conn, date):
         (central_now_iso(), date),
     )
 
-def get_trades(date=None, strategy=None, limit=200):
+def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, paper_only=False):
     sql = "SELECT * FROM trades"
     params = []
     clauses = []
@@ -213,12 +231,18 @@ def get_trades(date=None, strategy=None, limit=200):
     if strategy:
         clauses.append('strategy = ?')
         params.append(strategy)
+    paper_clause = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
+    if paper_clause:
+        clauses.append(paper_clause.replace('AND ', '', 1))
     if clauses:
         sql += ' WHERE ' + ' AND '.join(clauses)
     sql += " ORDER BY date_opened DESC, lot ASC, side ASC LIMIT ?"
     params.append(limit)
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    for row in rows:
+        row['paper'] = bool(row.get('paper'))
+    return rows
 
 
 def _stats_sql(where: str = '') -> str:
@@ -245,23 +269,27 @@ def _row_to_stats(row) -> dict:
     return d
 
 
-def get_stats(strategy=None):
-    where = ''
+def get_stats(strategy=None, *, include_paper=False, paper_only=False):
+    where = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     params = []
     if strategy:
-        where = 'AND strategy = ?'
+        where += ' AND strategy = ?'
         params.append(strategy)
     with get_conn() as conn:
         row = conn.execute(_stats_sql(where), params).fetchone()
         return _row_to_stats(row)
 
 
-def get_stats_by_strategy() -> dict:
+def get_stats_by_strategy(*, include_paper=False, paper_only=False) -> dict:
+    where = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     with get_conn() as conn:
-        all_row = conn.execute(_stats_sql()).fetchone()
+        all_row = conn.execute(_stats_sql(where)).fetchone()
         out = {'all': _row_to_stats(all_row)}
-        for key in (STRATEGY_MEIC, STRATEGY_MANUAL):
-            row = conn.execute(_stats_sql('AND strategy = ?'), (key,)).fetchone()
+        for key in trades_layout.registered_strategies():
+            row = conn.execute(
+                _stats_sql(where + ' AND strategy = ?'),
+                (key,),
+            ).fetchone()
             out[key] = _row_to_stats(row)
         return out
 
@@ -290,21 +318,22 @@ def get_daily_summary(days=30, strategy=None):
         return [dict(r) for r in conn.execute(sql, (days,)).fetchall()]
 
 
-def get_daily_breakdown(days=31) -> list[dict]:
+def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> list[dict]:
     """Per-day PnL split by strategy for calendar / charts."""
-    sql = """
+    paper_clause = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
+    sql = f"""
         SELECT date_opened AS date, strategy,
                ROUND(SUM(COALESCE(pnl,0)), 2) AS total_pnl,
                COUNT(*) AS num_trades,
                SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS num_wins
         FROM trades
-        WHERE status = 'CLOSED'
+        WHERE status = 'CLOSED' {paper_clause}
         GROUP BY date_opened, strategy
         ORDER BY date_opened DESC
         LIMIT ?
     """
     with get_conn() as conn:
-        rows = [dict(r) for r in conn.execute(sql, (days * 3,)).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, (days * 4,)).fetchall()]
 
     by_date: dict[str, dict] = {}
     for row in rows:
@@ -317,10 +346,13 @@ def get_daily_breakdown(days=31) -> list[dict]:
                 'num_wins': 0,
                 'meic_pnl': 0.0,
                 'manual_pnl': 0.0,
+                'skyline_pnl': 0.0,
                 'meic_trades': 0,
                 'manual_trades': 0,
+                'skyline_trades': 0,
                 'meic_wins': 0,
                 'manual_wins': 0,
+                'skyline_wins': 0,
             }
         bucket = by_date[d]
         pnl = float(row['total_pnl'] or 0)
@@ -329,10 +361,15 @@ def get_daily_breakdown(days=31) -> list[dict]:
         bucket['pnl'] = round(bucket['pnl'] + pnl, 2)
         bucket['numTrades'] += n
         bucket['num_wins'] += wins
-        if row['strategy'] == STRATEGY_MANUAL:
+        strat = row['strategy']
+        if strat == STRATEGY_MANUAL:
             bucket['manual_pnl'] = round(bucket['manual_pnl'] + pnl, 2)
             bucket['manual_trades'] += n
             bucket['manual_wins'] += wins
+        elif strat == STRATEGY_SKYLINE:
+            bucket['skyline_pnl'] = round(bucket['skyline_pnl'] + pnl, 2)
+            bucket['skyline_trades'] += n
+            bucket['skyline_wins'] += wins
         else:
             bucket['meic_pnl'] = round(bucket['meic_pnl'] + pnl, 2)
             bucket['meic_trades'] += n

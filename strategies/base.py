@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional
 
 
@@ -15,11 +15,27 @@ class StrategyConfig:
     scheduled: bool = True
     dry_run: bool = False
     paper: bool = False
+    confirmed: bool = False
+    stop_profile: str = 'meic_credit_spread'
     data_base_dir: str = 'Data'
     phase_names: List[str] = field(default_factory=list)
+    # Set True on paper-only strategies that need an explicit confirmed: true in yaml.
+    requires_confirmation: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
+
+
+def apply_config_overrides(cfg: StrategyConfig, overrides: dict | None) -> None:
+    """Apply yaml config_overrides onto a StrategyConfig instance in-place."""
+    if not overrides:
+        return
+    allowed = {f.name for f in fields(cfg)}
+    unknown = set(overrides) - allowed
+    if unknown:
+        raise ValueError(f'unknown config_overrides keys: {sorted(unknown)}')
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
 
 
 class BaseStrategy(ABC):

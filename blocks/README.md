@@ -12,4 +12,4 @@ Production runtime still delegates to legacy modules where noted; new code shoul
 | Credit entry | `blocks/entry/credit_spread.py` | **Live** — `CreditSpreadEntry` + `CreditEntryConfig` |
 | Streamer | `streaming/publish_tastytrade.py` | Port target — health file at `trades/streamer_health.json` |
 
-See `changes/V2_MODULAR_REWRITE.md`.
+See `changes/design/V2_MODULAR_REWRITE.md`.

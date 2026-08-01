@@ -63,6 +63,30 @@
   .del-btn { opacity:0; transition:opacity .15s; }
   tr:hover .del-btn { opacity:1; }
 
+  /* Skyline butterflies / history tables — higher row contrast */
+  .skyline-table tbody tr { border-bottom:1px solid #3b4061; }
+  .skyline-table tbody tr:nth-child(odd)  { background:#1e2233; }
+  .skyline-table tbody tr:nth-child(even) { background:#252a3d; }
+  .skyline-table tbody tr:hover { background:#2d3348!important; }
+  .skyline-table tbody td {
+    color:#f1f5f9;
+    padding:.55rem .75rem!important;
+    vertical-align:middle;
+  }
+  .skyline-table .skyline-strikes {
+    font-family:monospace;
+    font-size:.9rem;
+    font-weight:600;
+    color:#e2e8f0;
+    letter-spacing:.02em;
+  }
+  .skyline-table .skyline-opt-type {
+    font-size:.65rem;
+    color:#94a3b8;
+    margin-left:.35rem;
+    font-weight:500;
+  }
+
   /* Tranche grid */
   .tranche-group { border:1px solid #2d3148; border-radius:10px; margin-bottom:2px; overflow:hidden; }
   .tranche-group-header { background:#181b28; padding:4px 12px; font-size:.75rem; font-weight:700; color:#94a3b8; letter-spacing:.06em; }
@@ -548,6 +572,7 @@
     <ul class="nav nav-tabs mb-3" id="strategyTabs" style="border-bottom-color:#2d3148;">
       <li class="nav-item"><a class="nav-link active" href="#" onclick="showStrategy('meic');return false;">MEIC</a></li>
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('manual');return false;">Manual Spread</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('skyline');return false;">Skyline <span class="badge bg-secondary" id="skyline-nav-badge">PAPER</span></a></li>
     </ul>
     <div id="manual-meic-banner" class="alert alert-warning mb-3 d-none" style="border-radius:10px;"></div>
 
@@ -794,6 +819,98 @@
       </div>
     </div><!-- /strategy-manual -->
 
+    <div id="strategy-skyline" style="display:none;">
+      <div class="alert alert-info mb-3" style="border-radius:10px;" id="skyline-header-alert">
+        <strong id="skyline-header-title">Skyline</strong> — four-butterfly 0DTE strategy. P/L is tracked separately from live MEIC/Manual totals.
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Today's Status</div>
+            <div id="skyline-status" class="fw-semibold mt-1">Loading...</div>
+            <small class="text-muted d-block mt-1" id="skyline-skip-reason"></small>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title" id="skyline-pnl-label">P/L (unrealized)</div>
+            <div id="skyline-pnl" class="fs-4 fw-bold mt-1">$0.00</div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Actions</div>
+            <button class="btn btn-sm btn-outline-warning mt-2" id="skyline-pause-btn" onclick="skylineTogglePause()">Pause Today</button>
+            <button class="btn btn-sm btn-outline-danger mt-2 ms-1" onclick="skylineCloseAll()">Close All</button>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Config</div>
+            <div id="skyline-config-summary" class="small text-muted mt-1">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Today's Overrides</span>
+          <small class="text-muted">Applied on next launcher start (except Pause Today)</small>
+        </div>
+        <div class="card-body py-2">
+          <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Entry time (ET)</label>
+              <input type="text" id="skyline-ov-entry-time" class="form-control form-control-sm"
+                placeholder="09:45" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Gap-down skip (pts)</label>
+              <input type="number" id="skyline-ov-gap-down" class="form-control form-control-sm" min="0" step="1"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Quantity</label>
+              <input type="number" id="skyline-ov-quantity" class="form-control form-control-sm" min="1" step="1"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Max daily loss ($)</label>
+              <input type="number" id="skyline-ov-max-loss" class="form-control form-control-sm" min="0" step="50"
+                placeholder="off"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-12 col-md-4 d-flex gap-2 flex-wrap">
+              <button class="btn btn-sm btn-outline-primary" onclick="skylineSaveOverrides()">Save Overrides</button>
+              <button class="btn btn-sm btn-outline-secondary" onclick="skylineClearOverrides()">Clear Overrides</button>
+            </div>
+          </div>
+          <div id="skyline-ov-status" class="small text-muted mt-2"></div>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Butterflies</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 skyline-table">
+            <thead><tr>
+              <th>Name</th><th>Strikes</th><th>Status</th><th>Net Debit</th><th>Unrealized P/L</th><th></th>
+            </tr></thead>
+            <tbody id="skyline-structures"><tr><td colspan="6" class="text-muted text-center py-3">No data</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Recent History</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 skyline-table">
+            <thead><tr>
+              <th>Date</th><th>Status</th><th>ATM</th><th>Realized P/L</th><th>Paper</th>
+            </tr></thead>
+            <tbody id="skyline-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /strategy-skyline -->
+
   </div><!-- /tab-today -->
 
   <!-- ═══ HISTORY TAB ═══ -->
@@ -842,6 +959,14 @@
             <option value="">All strategies</option>
             <option value="MEIC_IC">MEIC only</option>
             <option value="MANUAL_SPREAD">Manual only</option>
+            <option value="SKYLINE_SPX">Skyline only</option>
+          </select>
+          <select id="hist-money-filter-cal" class="form-select form-select-sm"
+            style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
+            onchange="onHistoryMoneyChange(this.value)">
+            <option value="live">Live $</option>
+            <option value="paper">Paper $</option>
+            <option value="all">All $</option>
           </select>
           <div class="cal-toggle">
             <button class="cal-toggle-btn active" id="cal-pnl-btn" onclick="setCalendarMode('pnl')">PNL</button>
@@ -884,6 +1009,14 @@
             <option value="">All strategies</option>
             <option value="MEIC_IC">MEIC only</option>
             <option value="MANUAL_SPREAD">Manual only</option>
+            <option value="SKYLINE_SPX">Skyline only</option>
+          </select>
+          <select id="hist-money-filter" class="form-select form-select-sm"
+            style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
+            onchange="onHistoryMoneyChange(this.value)">
+            <option value="live">Live $</option>
+            <option value="paper">Paper $</option>
+            <option value="all">All $</option>
           </select>
           <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
         </div>
@@ -896,7 +1029,7 @@
     <!-- Trade History Table -->
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-table me-2"></i>All Trades</span>
+        <span><i class="bi bi-table me-2"></i>All Trades <small class="text-muted" id="hist-money-note">(live money only)</small></span>
         <div class="d-flex gap-2 align-items-center">
           <input type="date" id="filter-date" class="form-control form-control-sm"
             style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:160px;"
@@ -908,11 +1041,11 @@
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead><tr>
-              <th>Date</th><th>Strategy</th><th>Lot</th><th>Side</th><th>Short</th><th>Long</th>
+              <th>Date</th><th>Strategy</th><th>Money</th><th>Lot</th><th>Side</th><th>Short</th><th>Long</th>
               <th>Qty</th><th>Credit</th><th>Debit</th><th>P&amp;L</th><th>Status</th><th></th>
             </tr></thead>
             <tbody id="history-tbody">
-              <tr><td colspan="12" class="text-center text-muted py-3">Loading&hellip;</td></tr>
+              <tr><td colspan="13" class="text-center text-muted py-3">Loading&hellip;</td></tr>
             </tbody>
           </table>
         </div>
@@ -1218,6 +1351,21 @@ let summaryPollTimer = null;
 /** Session plan + logs panel — off by default; no plan render or log poll until opened. */
 let setupLogsPanelOpen = false;
 let logPollTimer = null;
+const SKYLINE_POLL_MS = 15000;
+let skylinePollTimer = null;
+
+function startSkylinePolling() {
+  if (skylinePollTimer) return;
+  skylinePollTimer = setInterval(() => {
+    if (activeTab === 'today' && activeStrategy === 'skyline') loadSkyline();
+  }, SKYLINE_POLL_MS);
+}
+
+function stopSkylinePolling() {
+  if (!skylinePollTimer) return;
+  clearInterval(skylinePollTimer);
+  skylinePollTimer = null;
+}
 
 function startSummaryPolling() {
   if (summaryPollTimer) return;
@@ -1270,9 +1418,17 @@ function showStrategy(s) {
   activeStrategy = s;
   document.getElementById('strategy-meic').style.display = (s === 'meic') ? '' : 'none';
   document.getElementById('strategy-manual').style.display = (s === 'manual') ? '' : 'none';
+  const skylineEl = document.getElementById('strategy-skyline');
+  if (skylineEl) skylineEl.style.display = (s === 'skyline') ? '' : 'none';
   document.querySelectorAll('#strategyTabs .nav-link').forEach((el, i) => {
-    el.classList.toggle('active', ['meic','manual'][i] === s);
+    el.classList.toggle('active', ['meic','manual','skyline'][i] === s);
   });
+  if (s === 'skyline') {
+    loadSkyline();
+    startSkylinePolling();
+  } else {
+    stopSkylinePolling();
+  }
   if (lastData) render(lastData);
 }
 
@@ -1594,7 +1750,16 @@ function strategyBadge(strategy) {
   if (strategy === 'MANUAL_SPREAD') {
     return '<span class="strategy-pill-manual">Manual</span>';
   }
+  if (strategy === 'SKYLINE_SPX') {
+    return '<span class="badge bg-secondary">Skyline</span>';
+  }
   return '<span class="strategy-pill-meic">MEIC</span>';
+}
+
+function moneyBadge(paper) {
+  return paper
+    ? '<span class="badge bg-secondary">Paper</span>'
+    : '<span class="badge bg-success">Live</span>';
 }
 
 function stopMonitorMqttDot(mqttHealth) {
@@ -2640,6 +2805,12 @@ function getHistoryStrategyFilter() {
     || '';
 }
 
+function getHistoryMoneyFilter() {
+  return document.getElementById('hist-money-filter')?.value
+    || document.getElementById('hist-money-filter-cal')?.value
+    || 'live';
+}
+
 function syncHistoryStrategyFilters(value) {
   ['hist-strategy-filter', 'hist-strategy-filter-cal'].forEach(id => {
     const el = document.getElementById(id);
@@ -2647,22 +2818,50 @@ function syncHistoryStrategyFilters(value) {
   });
 }
 
+function syncHistoryMoneyFilters(value) {
+  ['hist-money-filter', 'hist-money-filter-cal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+  const note = document.getElementById('hist-money-note');
+  if (note) {
+    note.textContent = value === 'live' ? '(live money only)'
+      : value === 'paper' ? '(paper only)' : '(live + paper)';
+  }
+}
+
 function onHistoryStrategyChange(value) {
   syncHistoryStrategyFilters(value);
   loadHistory();
 }
 
+function onHistoryMoneyChange(value) {
+  syncHistoryMoneyFilters(value);
+  loadHistory();
+}
+
+function historyQuerySuffix(stratFilter, moneyFilter) {
+  const params = [];
+  if (stratFilter) params.push(`strategy=${encodeURIComponent(stratFilter)}`);
+  if (moneyFilter) params.push(`money=${encodeURIComponent(moneyFilter)}`);
+  return params.length ? '?' + params.join('&') : '';
+}
+
 async function loadHistory() {
   const stratFilter = getHistoryStrategyFilter();
+  const moneyFilter = getHistoryMoneyFilter();
   syncHistoryStrategyFilters(stratFilter);
-  const statsUrl = '/api/stats' + (stratFilter ? `?strategy=${encodeURIComponent(stratFilter)}` : '');
+  syncHistoryMoneyFilters(moneyFilter);
+  const q = historyQuerySuffix(stratFilter, moneyFilter);
+  const statsUrl = '/api/stats' + q;
   const [stats, allTimeStats] = await Promise.all([
     fetch(statsUrl).then(r => r.json()),
-    stratFilter ? fetch('/api/stats').then(r => r.json()) : Promise.resolve(null),
+    stratFilter ? fetch('/api/stats' + historyQuerySuffix('', moneyFilter)).then(r => r.json()) : Promise.resolve(null),
   ]);
   const breakdown = allTimeStats || stats;
   const meicStats = breakdown.MEIC_IC || (stratFilter === 'MEIC_IC' ? stats : {});
   const manualStats = breakdown.MANUAL_SPREAD || (stratFilter === 'MANUAL_SPREAD' ? stats : {});
+  const skylineStats = breakdown.SKYLINE_SPX || (stratFilter === 'SKYLINE_SPX' ? stats : {});
   const allStats = breakdown.all || breakdown;
   const rowStats = stratFilter ? stats : allStats;
 
@@ -2680,7 +2879,7 @@ async function loadHistory() {
   document.getElementById('s-total').textContent   = rowStats.total_trades ?? 0;
   document.getElementById('s-days').textContent    = rowStats.trading_days ?? 0;
 
-  const chartUrl = '/api/daily_calendar?days=30' + (stratFilter ? `&strategy=${encodeURIComponent(stratFilter)}` : '');
+  const chartUrl = '/api/daily_calendar?days=30' + (stratFilter ? `&strategy=${encodeURIComponent(stratFilter)}` : '') + `&money=${encodeURIComponent(moneyFilter)}`;
   const chartRes = await fetch(chartUrl);
   let daily = [];
   if (chartRes.ok) {
@@ -2708,15 +2907,12 @@ async function loadHistory() {
   });
 
   const dateFilter = document.getElementById('filter-date').value;
-  let url = '/api/history';
-  const params = [];
-  if (dateFilter) params.push(`date=${dateFilter}`);
-  if (stratFilter) params.push(`strategy=${encodeURIComponent(stratFilter)}`);
-  if (params.length) url += '?' + params.join('&');
+  let url = '/api/history' + historyQuerySuffix(stratFilter, moneyFilter);
+  if (dateFilter) url += (url.includes('?') ? '&' : '?') + `date=${dateFilter}`;
   const trades = await fetch(url).then(r=>r.json());
   const tbody = document.getElementById('history-tbody');
   if (trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">No trades found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-3">No trades found</td></tr>';
     return;
   }
   tbody.innerHTML = trades.map(t => {
@@ -2727,8 +2923,9 @@ async function loadHistory() {
     return `<tr>
       <td class="small">${t.date_opened}</td>
       <td>${strategyBadge(t.strategy)}</td>
+      <td>${moneyBadge(t.paper)}</td>
       <td><span class="badge-lot">${t.lot}</span></td>
-      <td><span class="badge ${t.side==='P'?'bg-primary':'bg-warning text-dark'}">${t.side}</span></td>
+      <td><span class="badge ${t.side==='P'?'bg-primary':t.side==='C'?'bg-warning text-dark':'bg-secondary'}">${t.side}</span></td>
       <td class="font-monospace small">${t.short_symbol||''}</td>
       <td class="font-monospace small text-muted">${t.long_symbol||''}</td>
       <td>${t.quantity}</td>
@@ -2765,7 +2962,10 @@ function setCalendarMode(mode) {
 async function loadCalendarData(strategyFilter) {
   try {
     const strat = strategyFilter != null ? strategyFilter : getHistoryStrategyFilter();
-    const url = '/api/daily_calendar?days=60' + (strat ? `&strategy=${encodeURIComponent(strat)}` : '');
+    const money = getHistoryMoneyFilter();
+    const url = '/api/daily_calendar?days=60'
+      + (strat ? `&strategy=${encodeURIComponent(strat)}` : '')
+      + `&money=${encodeURIComponent(money)}`;
     const response = await fetch(url);
     calendarData = await response.json();
     renderCalendar();
@@ -3311,6 +3511,223 @@ function renderGexHeatmap(d) {
     const spotRow = document.querySelector('#gex-hm-body tr.gex-hm-spot');
     if (spotRow) spotRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
+}
+
+// ── Skyline (Paper) tab ───────────────────────────────────────────────────────
+function skylineDisplayPnl(structOrTrade, pointsKey, dollarsKey) {
+  if (!structOrTrade) return '—';
+  if (structOrTrade[dollarsKey] != null) return fmtPnl(structOrTrade[dollarsKey]);
+  if (structOrTrade[pointsKey] != null) return fmtPnl(Number(structOrTrade[pointsKey]) * 100);
+  return '—';
+}
+
+function skylineFillOverrideForm(cfg) {
+  const eff = cfg.effective || {};
+  const ov = cfg.overrides || {};
+  const setVal = (id, key) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = ov[key] != null ? ov[key] : (eff[key] != null ? eff[key] : '');
+  };
+  setVal('skyline-ov-entry-time', 'entry_time_et');
+  setVal('skyline-ov-gap-down', 'gap_down_skip_points');
+  setVal('skyline-ov-quantity', 'quantity');
+  setVal('skyline-ov-max-loss', 'max_daily_loss');
+}
+
+async function skylineSaveOverrides() {
+  const body = {};
+  const entryTime = document.getElementById('skyline-ov-entry-time')?.value?.trim();
+  const gapDown = document.getElementById('skyline-ov-gap-down')?.value;
+  const qty = document.getElementById('skyline-ov-quantity')?.value;
+  const maxLoss = document.getElementById('skyline-ov-max-loss')?.value;
+  if (entryTime) body.entry_time_et = entryTime;
+  if (gapDown !== '') body.gap_down_skip_points = Number(gapDown);
+  if (qty !== '') body.quantity = Number(qty);
+  if (maxLoss !== '' && maxLoss != null) body.max_daily_loss = Number(maxLoss);
+  const statusEl = document.getElementById('skyline-ov-status');
+  try {
+    const r = await fetch('/api/strategy/SKYLINE_SPX/overrides', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Save failed');
+    if (statusEl) statusEl.textContent = 'Overrides saved for today.';
+    loadSkyline();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message || String(e);
+  }
+}
+
+async function skylineClearOverrides() {
+  const cfg = await fetch('/api/strategy/SKYLINE_SPX/config').then(r => r.json());
+  const keys = Object.keys(cfg.overrides || {});
+  for (const key of keys) {
+    await fetch(`/api/strategy/SKYLINE_SPX/overrides/${encodeURIComponent(key)}`, {method: 'DELETE'});
+  }
+  const statusEl = document.getElementById('skyline-ov-status');
+  if (statusEl) statusEl.textContent = keys.length ? 'Overrides cleared.' : 'No overrides to clear.';
+  loadSkyline();
+}
+
+/** Parse TastyTrade / OCC SPXW symbol → { strike, optType } or null. */
+function parseSpxOptionSymbol(symbol) {
+  if (!symbol) return null;
+  const m = String(symbol).trim().match(/^\.?SPXW\d{6}([CP])(\d+)$/i);
+  if (!m) return null;
+  return { optType: m[1].toUpperCase(), strike: parseInt(m[2], 10) };
+}
+
+/** Butterfly legs → "6700/6725/6750" (wing / body / wing order). */
+function skylineStrikesLabel(legs) {
+  if (!legs || !legs.length) return '—';
+  const parsed = legs.map(l => parseSpxOptionSymbol(l.symbol));
+  if (parsed.some(p => !p)) return '—';
+  const strikes = parsed.map(p => p.strike);
+  const optType = parsed[0].optType;
+  const sameType = parsed.every(p => p.optType === optType);
+  const label = strikes.join('/');
+  if (!sameType) return label;
+  const typeHint = optType === 'C' ? 'call' : 'put';
+  return `<span class="skyline-strikes">${label}</span><span class="skyline-opt-type">${typeHint}</span>`;
+}
+
+async function loadSkyline() {
+  try {
+    const [todayRes, cfgRes] = await Promise.all([
+      fetch('/api/skyline/today'),
+      fetch('/api/strategy/SKYLINE_SPX/config'),
+    ]);
+    const data = await todayRes.json();
+    const cfg = await cfgRes.json();
+    skylineFillOverrideForm(cfg);
+    renderSkyline(data);
+  } catch (e) {
+    console.error('Skyline load failed:', e);
+  }
+}
+
+function renderSkyline(data) {
+  const session = data.session || {};
+  const trade = data.trade;
+  const paper = !!data.paper;
+  const statusEl = document.getElementById('skyline-status');
+  const skipEl = document.getElementById('skyline-skip-reason');
+  const pnlEl = document.getElementById('skyline-pnl');
+  const tbody = document.getElementById('skyline-structures');
+  const histBody = document.getElementById('skyline-history');
+  const navBadge = document.getElementById('skyline-nav-badge');
+  const titleEl = document.getElementById('skyline-header-title');
+  const pnlLabel = document.getElementById('skyline-pnl-label');
+  const cfgEl = document.getElementById('skyline-config-summary');
+  const pauseBtn = document.getElementById('skyline-pause-btn');
+
+  if (navBadge) navBadge.textContent = paper ? 'PAPER' : 'LIVE';
+  if (titleEl) titleEl.textContent = paper ? 'Skyline (Paper)' : 'Skyline (Live)';
+  if (pnlLabel) pnlLabel.textContent = paper ? 'Paper P/L (unrealized)' : 'P/L (unrealized)';
+
+  const disabledToday = session.overrides && session.overrides.enabled === false;
+  if (pauseBtn) {
+    pauseBtn.textContent = disabledToday ? 'Resume Today' : 'Pause Today';
+    pauseBtn.className = disabledToday
+      ? 'btn btn-sm btn-outline-success mt-2'
+      : 'btn btn-sm btn-outline-warning mt-2';
+  }
+  if (cfgEl) {
+    const ov = session.overrides || {};
+    const ovText = Object.keys(ov).length ? `Overrides: ${JSON.stringify(ov)}` : 'No overrides today';
+    cfgEl.textContent = `${paper ? 'Paper account' : 'Live account'} · ${ovText}`;
+  }
+
+  if (session.skip_reason) {
+    statusEl.textContent = 'Skipped today';
+    skipEl.textContent = session.skip_reason;
+  } else if (disabledToday) {
+    statusEl.textContent = 'Paused today';
+    skipEl.textContent = 'Disabled via dashboard override';
+  } else if (session.entered || (trade && trade.status)) {
+    statusEl.textContent = trade ? trade.status.toUpperCase() : 'Entered';
+    skipEl.textContent = trade ? `ATM ${trade.atm} @ ${trade.entry_time_et || ''} ET` : '';
+  } else {
+    statusEl.textContent = 'Waiting';
+    skipEl.textContent = '';
+  }
+
+  const pnl = trade ? (trade.unrealized_pnl_dollars ?? (trade.unrealized_pnl_total != null ? trade.unrealized_pnl_total * 100 : 0)) : 0;
+  pnlEl.textContent = fmtPnl(pnl);
+  pnlEl.className = 'fs-4 fw-bold mt-1 ' + (pnl >= 0 ? 'text-success' : 'text-danger');
+
+  const structs = (trade && trade.structures) || [];
+  if (!structs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-3">No butterflies today</td></tr>';
+  } else {
+    tbody.innerHTML = structs.map(s => `
+      <tr>
+        <td class="fw-semibold">${s.name}</td>
+        <td>${skylineStrikesLabel(s.legs)}</td>
+        <td>${s.status || '—'}</td>
+        <td>${s.net_debit != null ? '$' + Number(s.net_debit).toFixed(2) : '—'}</td>
+        <td>${skylineDisplayPnl(s, 'unrealized_pnl', 'unrealized_pnl_dollars')}</td>
+        <td>${s.status === 'open' || s.status === 'filled' ? `<button class="btn btn-sm btn-outline-warning" onclick="skylineClose('${s.name}')">Close</button>` : ''}</td>
+      </tr>
+    `).join('');
+  }
+
+  const history = data.history || [];
+  if (!history.length) {
+    histBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr>';
+  } else {
+    histBody.innerHTML = history.map(h => `
+      <tr>
+        <td>${h.date || '—'}</td>
+        <td>${(h.status || '—').toUpperCase()}</td>
+        <td>${h.atm != null ? h.atm : '—'}</td>
+        <td class="${pnlClass(h.realized_pnl_dollars ?? (h.realized_pnl_total || 0) * 100)}">${h.realized_pnl_total != null ? skylineDisplayPnl(h, 'realized_pnl_total', 'realized_pnl_dollars') : '—'}</td>
+        <td>${moneyBadge(h.paper !== false)}</td>
+      </tr>
+    `).join('');
+  }
+}
+
+async function skylineTogglePause() {
+  const cfg = await fetch('/api/strategy/SKYLINE_SPX/config').then(r => r.json());
+  const disabled = cfg.overrides && cfg.overrides.enabled === false;
+  const body = disabled ? {} : { enabled: false };
+  const method = disabled ? 'DELETE' : 'POST';
+  const url = disabled
+    ? '/api/strategy/SKYLINE_SPX/overrides/enabled'
+    : '/api/strategy/SKYLINE_SPX/overrides';
+  await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: method === 'POST' ? JSON.stringify(body) : undefined,
+  });
+  loadSkyline();
+}
+
+async function skylineClose(name) {
+  if (!confirm(`Close butterfly ${name}?`)) return;
+  const r = await fetch('/api/strategy/SKYLINE_SPX/close', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({structure: name}),
+  });
+  const data = await r.json();
+  if (!r.ok) alert(data.message || data.error || 'Close failed');
+  loadSkyline();
+}
+
+async function skylineCloseAll() {
+  if (!confirm('Close ALL Skyline butterflies?')) return;
+  const r = await fetch('/api/strategy/SKYLINE_SPX/close', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({structure: 'all'}),
+  });
+  await r.json();
+  loadSkyline();
 }
 
 // Initial render on page load — don't wait for SocketIO first push

@@ -9,7 +9,7 @@ import meic0dte.app.config as meic_config
 from blocks.session.plan import SessionPlan, SessionRow, format_time_field, meic_session_path
 from common import trades_layout
 from orchestrator.scheduler import TrancheSlot
-from strategies.meic.strategy import MEIC_TRANCHE_SLOTS
+from strategies.meic.strategy import MEIC_DEFAULT_PAUSED_LOTS, MEIC_TRANCHE_SLOTS
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def _default_rows(slots: List[TrancheSlot]) -> List[SessionRow]:
                 entry_window_start=format_time_field(slot.window_start),
                 entry_window_end=format_time_field(slot.window_end),
                 entry_condition='time',
-                paused=False,
+                paused=slot.lot in MEIC_DEFAULT_PAUSED_LOTS,
                 skip=False,
                 quantity=meic_config.QUANTITY,
                 stop_mode='multiplier',

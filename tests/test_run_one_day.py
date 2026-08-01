@@ -67,12 +67,45 @@ class TestRunOneDay(unittest.TestCase):
         now = datetime(2026, 7, 10, 8, 0, 0)
         with patch.object(launcher, '_central_now', return_value=now), \
              patch.object(launcher, 'validate_startup_config'), \
-             patch.object(launcher, 'check_trading_day', return_value=(False, 'FOMC')), \
+             patch.object(launcher, 'is_market_closed_today', return_value=True), \
              patch.object(launcher, '_write_status') as mock_status, \
              patch.object(launcher, 'start_streamer') as mock_stream:
             launcher.main()
         mock_stream.assert_not_called()
         mock_status.assert_called()
+
+    def test_fomc_day_still_records_prices(self):
+        now = datetime(2026, 7, 10, 8, 35, 0)
+        streamer = MagicMock(poll=MagicMock(return_value=None), terminate=MagicMock(), wait=MagicMock())
+        market_data = MagicMock(poll=MagicMock(return_value=None), terminate=MagicMock(), wait=MagicMock())
+        stop_flags = {'stop': False}
+
+        def _should_stop(session_started, now, profile=None):
+            return stop_flags['stop']
+
+        with patch.object(launcher, '_central_now', return_value=now), \
+             patch.object(launcher, 'validate_startup_config'), \
+             patch.object(launcher, 'is_market_closed_today', return_value=False), \
+             patch.object(launcher, 'check_trading_day', return_value=(False, 'FOMC day')), \
+             patch('common.trading_gate.initialize_for_session_date'), \
+             patch('common.probe_coordinator.start_coordinator'), \
+             patch('common.probe_coordinator.stop_coordinator'), \
+             patch('common.entry_coordinator.stop_entry_coordinator'), \
+             patch.object(launcher, 'wait_until'), \
+             patch.object(launcher, 'runtime_should_stop_for_session', side_effect=_should_stop), \
+             patch.object(launcher, '_run_eod_cleanup_if_due'), \
+             patch.object(launcher, '_write_status'), \
+             patch.object(launcher, 'start_streamer', return_value=streamer) as mock_stream, \
+             patch.object(launcher, 'start_market_data_recorder', return_value=market_data) as mock_md, \
+             patch.object(launcher, 'start_stop_monitor', return_value=None), \
+             patch.object(launcher, 'load_enabled_strategies', return_value=[]) as mock_load, \
+             patch.object(launcher, 'time') as mock_time:
+            mock_time.sleep = MagicMock(side_effect=lambda s: stop_flags.__setitem__('stop', True))
+            mock_time.monotonic = MagicMock(return_value=100.0)
+            launcher.main(force=False, no_stop_monitor=True)
+        mock_stream.assert_called_once()
+        mock_md.assert_called_once()
+        mock_load.assert_not_called()
 
     def test_session_closed_before_start_skips_entries(self):
         now = datetime(2026, 7, 10, 16, 0, 0)

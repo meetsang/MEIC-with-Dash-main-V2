@@ -15,8 +15,8 @@ WATCH_SYMBOLS = _WATCH_SYMBOLS
 # Legacy — index OHLC is driven by per-tick MQTT listeners, not interval polling.
 POLL_INTERVAL_SEC = 30
 
-# Snapshot all registered spread option mids to one CSV (no OHLC) — trade legs only.
-OPTION_SNAPSHOT_INTERVAL_SEC = 180
+# Snapshot all registered spread option mids to one CSV (no OHLC) — MQTT cache only, no REST.
+OPTION_SNAPSHOT_INTERVAL_SEC = 60
 
 # Sidecar ladder snapshot cadence (aligned with ladder JSON refresh).
 SPX_LADDER_SNAPSHOT_SEC = SPX_LADDER_REFRESH_SEC

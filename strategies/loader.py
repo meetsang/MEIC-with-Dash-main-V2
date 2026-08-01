@@ -8,7 +8,8 @@ from typing import List, Tuple, Type
 
 import yaml
 
-from strategies.base import BaseStrategy, StrategyConfig
+from common import tt_config
+from strategies.base import BaseStrategy, StrategyConfig, apply_config_overrides
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ _MODULE_DEFAULTS = {
     'strategies.manual_spread.strategy': ('ManualSpreadStrategy', 'ManualSpreadConfig'),
     'strategies.meic_ic.strategy': ('MEICStrategy', 'MEICConfig'),
     'strategies.iron_fly.strategy': ('IronFlyStrategy', 'IronFlyConfig'),
+    'strategies.skyline.strategy': ('SkylineStrategy', 'SkylineConfig'),
 }
 
 
@@ -47,15 +49,42 @@ def _resolve_classes(module_path: str, entry: dict) -> Tuple[Type[BaseStrategy],
     return getattr(mod, f'{base.title()}Strategy'), getattr(mod, f'{base.title()}Config')
 
 
+def _build_config(entry: dict, cfg_cls: Type[StrategyConfig]) -> StrategyConfig:
+    name = entry.get('name', cfg_cls.name if hasattr(cfg_cls, 'name') else 'UNKNOWN')
+    overrides = entry.get('entry_config') or entry.get('config_overrides') or {}
+
+    paper = entry.get('paper')
+    if paper is None:
+        paper = tt_config.PAPER_MODE
+
+    cfg = cfg_cls(
+        name=name,
+        broker=entry.get('broker', 'tastytrade'),
+        ticker=entry.get('instrument', entry.get('ticker', 'SPX')),
+        enabled=bool(entry.get('enabled', True)),
+        scheduled=bool(entry.get('scheduled', True)),
+        paper=bool(paper),
+        confirmed=bool(entry.get('confirmed', False)),
+        stop_profile=str(entry.get('exit_profile') or entry.get('stop_profile', 'meic_credit_spread')),
+    )
+    apply_config_overrides(cfg, overrides if isinstance(overrides, dict) else None)
+    return cfg
+
+
 def load_strategies(*, include_disabled: bool = False) -> List[Tuple[BaseStrategy, StrategyConfig]]:
     from strategies.validate import validate_startup_config
 
-    validate_startup_config(fail_on_disabled=include_disabled)
+    valid_enabled = validate_startup_config(fail_on_disabled=include_disabled)
+    valid_names = {e['name'] for e in valid_enabled}
     entries = load_strategies_yaml_raw()
 
     result: List[Tuple[BaseStrategy, StrategyConfig]] = []
     for entry in entries:
-        if not entry.get('enabled', True) and not include_disabled:
+        name = entry.get('name', '')
+        is_enabled = bool(entry.get('enabled', True))
+        if not is_enabled and not include_disabled:
+            continue
+        if is_enabled and name not in valid_names:
             continue
         module_path = entry.get('module', '')
         if not module_path:
@@ -66,17 +95,19 @@ def load_strategies(*, include_disabled: bool = False) -> List[Tuple[BaseStrateg
         except Exception as exc:
             log.error('Failed to load strategy module %s: %s', module_path, exc)
             continue
-        cfg = cfg_cls(
-            name=entry.get('name', cfg_cls.name if hasattr(cfg_cls, 'name') else 'UNKNOWN'),
-            broker=entry.get('broker', 'tastytrade'),
-            ticker=entry.get('instrument', entry.get('ticker', 'SPX')),
-            enabled=bool(entry.get('enabled', True)),
-            scheduled=bool(entry.get('scheduled', True)),
-        )
+        cfg = _build_config(entry, cfg_cls)
         result.append((strat_cls(cfg), cfg))
     return result
 
 
 def load_enabled_strategies() -> List[BaseStrategy]:
-    """Return instantiated enabled strategies (scheduled + manual)."""
+    """Return instantiated enabled strategies (scheduled + manual + standalone)."""
     return [strat for strat, _cfg in load_strategies()]
+
+
+def load_standalone_strategies() -> List[Tuple[BaseStrategy, StrategyConfig]]:
+    """Return enabled strategies that are not session-CSV tranche strategies."""
+    return [
+        (strat, cfg) for strat, cfg in load_strategies()
+        if not cfg.scheduled
+    ]

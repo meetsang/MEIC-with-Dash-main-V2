@@ -20,6 +20,7 @@ from blocks.session.csv_update import (
 from blocks.session.plan import load_manual_session_today, load_meic_session_today
 from common import trades_layout
 from common.market_hours import session_row_past_0dte_close
+from common.portfolio_guard import is_strategy_halted
 from common.probe_coordinator import get_coordinator
 from common.trading_gate import evaluate_new_risk_gate, gate_enabled
 from meic0dte.app import utilities as util
@@ -275,6 +276,8 @@ class EntryMonitorRunner:
             )
 
     def _should_fire_meic(self, row, now_time, now: datetime) -> bool:
+        if is_strategy_halted(trades_layout.STRATEGY_MEIC, self.root):
+            return False
         if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MEIC, now=now):
             return False
         return (

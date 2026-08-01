@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from brokers.base import BrokerBase, OrderResult
+from brokers.base import BrokerBase, ComboLeg, OrderResult
 from common.symbols import to_tastytrade
 
 
 class MockBroker(BrokerBase):
   def __init__(self):
     self._connected = False
+    self._is_paper = True
     self._order_seq = 1000
     self.orders: Dict[str, OrderResult] = {}
     self.prices: Dict[str, float] = {'SPX': 5500.0}
@@ -51,6 +52,13 @@ class MockBroker(BrokerBase):
     r = OrderResult(True, oid, 'filled', filled_price=credit, filled_quantity=qty)
     self.orders[oid] = r
     self.placed.append(('spread', short_symbol, credit))
+    return r
+
+  def place_multi_leg_order(self, legs, *, price, order_type='LIMIT', time_in_force='DAY') -> OrderResult:
+    oid = self._next_id()
+    r = OrderResult(True, oid, 'filled', filled_price=abs(price), filled_quantity=1)
+    self.orders[oid] = r
+    self.placed.append(('multi_leg', len(legs), price))
     return r
 
   def place_spread_close_order(

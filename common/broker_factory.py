@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from common import tt_config
 
@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 _shared_broker: Any = None
 _shared_key: Optional[Tuple[Any, ...]] = None
+_strategy_brokers: Dict[Tuple[Any, ...], Any] = {}
 _shared_lock = threading.Lock()
 _shared_created_at: Optional[float] = None
 _shared_use_count = 0
@@ -71,6 +72,45 @@ def get_shared_broker(paper: Optional[bool] = None, *, reset: bool = False):
         return _shared_broker
 
 
+def get_shared_broker_for_strategy(
+    strategy_name: str,
+    *,
+    paper: bool,
+    timeout_sec: Optional[float] = None,
+    reset: bool = False,
+):
+    """One cached broker per (strategy_name, paper) pair per process."""
+    global _strategy_brokers
+
+    key = (tt_config.BROKER, bool(paper), strategy_name, os.getpid())
+
+    with _shared_lock:
+        if not reset and key in _strategy_brokers:
+            return _strategy_brokers[key]
+
+    # Build outside the lock — get_shared_broker() also acquires _shared_lock.
+    if paper:
+        from brokers.journal_broker import JournalBroker
+
+        underlying = get_shared_broker(paper=False)
+        broker = JournalBroker(underlying, strategy_name=strategy_name)
+        log.info(
+            'Strategy journal broker created strategy=%s (live data, no orders) pid=%s',
+            strategy_name, os.getpid(),
+        )
+    else:
+        broker = get_broker(paper=False)
+        log.info(
+            'Strategy broker created strategy=%s paper=%s pid=%s',
+            strategy_name, paper, os.getpid(),
+        )
+
+    with _shared_lock:
+        if reset or key not in _strategy_brokers:
+            _strategy_brokers[key] = broker
+        return _strategy_brokers[key]
+
+
 def get_shared_broker_bounded(
     paper: Optional[bool] = None,
     *,
@@ -96,12 +136,13 @@ def get_shared_broker_bounded(
 
 
 def reset_shared_broker() -> None:
-    global _shared_broker, _shared_key, _shared_created_at, _shared_use_count
+    global _shared_broker, _shared_key, _shared_created_at, _shared_use_count, _strategy_brokers
     with _shared_lock:
         _shared_broker = None
         _shared_key = None
         _shared_created_at = None
         _shared_use_count = 0
+        _strategy_brokers = {}
 
 
 def shared_broker_stats() -> dict:

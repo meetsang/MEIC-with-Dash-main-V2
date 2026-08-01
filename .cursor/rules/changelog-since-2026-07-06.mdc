@@ -9,7 +9,9 @@ After **any meaningful implementation, fix, live finding, or operator decision**
 
 `changes/CHANGES_SINCE_2026-07-06.md`
 
-Do **not** create separate root-level summary docs. Deep specs stay in `changes/` (incident/design docs); the changelog is the dated index of what shipped and what we learned.
+Do **not** create separate root-level summary docs. Deep specs go in `changes/design/`, `changes/strategies/`, `changes/sessions/`, or `changes/fixes/` (see `changes/README.md`); the changelog is the dated index of what shipped and what we learned.
+
+**Strategy north star:** `changes/design/STRATEGY_DESIGN_PATTERN.md` — read before any new strategy work.
 
 ## When to update
 

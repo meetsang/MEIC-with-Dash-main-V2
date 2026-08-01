@@ -1,7 +1,7 @@
 """Session cleanup — morning (8:20) archives active trades; EOD syncs history only.
 
 Archiving runs at morning only so same-day trades stay in the dashboard for
-evening review. See changes/PREMARKET_CLEANUP.md.
+evening review. See changes/fixes/PREMARKET_CLEANUP.md.
 """
 from __future__ import annotations
 
@@ -280,6 +280,23 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         except Exception as exc:
             lg.exception('EOD history sync failed: %s', exc)
             summary['history_sync_error'] = str(exc)
+
+        try:
+            import glob
+            from strategies.skyline.settlement import settle_open_trade
+            from common import trades_layout
+
+            active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, root)
+            settled = 0
+            for path in glob.glob(os.path.join(active, 'skyline_*.json')):
+                if settle_open_trade(path, root, for_date=today):
+                    settled += 1
+            summary['skyline_settled'] = settled
+            if settled:
+                lg.info('Skyline EOD settlement: %d trade(s) moved to history', settled)
+        except Exception as exc:
+            lg.exception('Skyline EOD settlement failed: %s', exc)
+            summary['skyline_settlement_error'] = str(exc)
 
     return summary
 

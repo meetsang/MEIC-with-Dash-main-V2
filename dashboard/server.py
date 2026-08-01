@@ -37,6 +37,32 @@ import paho.mqtt.client as mqtt
 from streaming.config import MQTT_BROKER_ADDR
 
 log = logging.getLogger(__name__)
+
+
+def _history_money_flags() -> dict:
+    """Parse history/stats money filter: live (default), paper, or all."""
+    money = (request.args.get('money') or '').strip().lower()
+    include_paper = request.args.get('include_paper', '').lower() in ('1', 'true', 'yes')
+    paper_only = request.args.get('paper_only', '').lower() in ('1', 'true', 'yes')
+    if money == 'paper':
+        return {'include_paper': True, 'paper_only': True}
+    if money == 'all':
+        return {'include_paper': True, 'paper_only': False}
+    if money == 'live':
+        return {'include_paper': False, 'paper_only': False}
+    return {
+        'include_paper': include_paper,
+        'paper_only': paper_only,
+    }
+
+
+def _strategy_paper_flag(name: str) -> bool:
+    from strategies.loader import load_strategies
+    for _strat, cfg in load_strategies(include_disabled=True):
+        if cfg.name == name:
+            return bool(getattr(cfg, 'paper', False))
+    return True
+
 from common import tt_config
 from common.broker_factory import get_mqtt_topic_prefix
 from common.option_prices import sanitize_option_mid
@@ -44,6 +70,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from db import (
     upsert_trade, get_trades, get_daily_summary, get_stats, get_stats_by_strategy,
     get_daily_breakdown, delete_trade, get_conn, STRATEGY_MEIC, STRATEGY_MANUAL,
+    STRATEGY_SKYLINE,
 )
 from manual_spread_handlers import (
     build_manual_trades,
@@ -1293,10 +1320,16 @@ def api_history():
     from dashboard.history_sync import sync_history_from_disk
 
     sync_history_from_disk(ROOT)
-    date  = request.args.get('date')
+    flags = _history_money_flags()
+    date_val = request.args.get('date')
     strategy = request.args.get('strategy')
     limit = int(request.args.get('limit', 200))
-    return jsonify(get_trades(date=date, strategy=strategy, limit=limit))
+    return jsonify(get_trades(
+        date=date_val,
+        strategy=strategy,
+        limit=limit,
+        **flags,
+    ))
 
 
 @app.route('/api/history/sync', methods=['POST'])
@@ -1334,10 +1367,11 @@ def api_stats():
     from dashboard.history_sync import sync_history_from_disk
 
     sync_history_from_disk(ROOT)
+    flags = _history_money_flags()
     strategy = request.args.get('strategy')
     if strategy:
-        return jsonify(get_stats(strategy=strategy))
-    payload = get_stats_by_strategy()
+        return jsonify(get_stats(strategy=strategy, **flags))
+    payload = get_stats_by_strategy(**flags)
     payload['total_pnl'] = payload['all']['total_pnl']
     payload['total_trades'] = payload['all']['total_trades']
     payload['win_rate'] = payload['all']['win_rate']
@@ -1348,25 +1382,33 @@ def api_daily_calendar():
     from dashboard.history_sync import sync_history_from_disk
 
     sync_history_from_disk(ROOT)
+    flags = _history_money_flags()
     days = int(request.args.get('days', 31))
     strategy = request.args.get('strategy')
-    rows = get_daily_breakdown(days=days)
+    rows = get_daily_breakdown(days=days, **flags)
+    strategy_keys = {
+        STRATEGY_MEIC: ('meic_pnl', 'meic_trades', 'meic_wins'),
+        STRATEGY_MANUAL: ('manual_pnl', 'manual_trades', 'manual_wins'),
+        STRATEGY_SKYLINE: ('skyline_pnl', 'skyline_trades', 'skyline_wins'),
+    }
     if strategy:
-        key = 'meic_pnl' if strategy == STRATEGY_MEIC else 'manual_pnl'
-        trade_key = 'meic_trades' if strategy == STRATEGY_MEIC else 'manual_trades'
-        win_key = 'meic_wins' if strategy == STRATEGY_MEIC else 'manual_wins'
+        pnl_key, trade_key, win_key = strategy_keys.get(
+            strategy, ('pnl', 'numTrades', 'num_wins'),
+        )
         filtered = []
         for row in rows:
             n = row.get(trade_key, 0)
             filtered.append({
                 'date': row['date'],
-                'pnl': row.get(key, 0),
+                'pnl': row.get(pnl_key, 0),
                 'winRate': round((row.get(win_key, 0) / n * 100) if n else 0, 0),
                 'numTrades': n,
                 'meic_trades': row.get('meic_trades', 0),
                 'manual_trades': row.get('manual_trades', 0),
+                'skyline_trades': row.get('skyline_trades', 0),
                 'meic_pnl': row.get('meic_pnl', 0),
                 'manual_pnl': row.get('manual_pnl', 0),
+                'skyline_pnl': row.get('skyline_pnl', 0),
             })
         return jsonify(filtered)
 
@@ -1379,6 +1421,7 @@ def api_daily_calendar():
             'numTrades': row['numTrades'],
             'meic_pnl': row.get('meic_pnl', 0),
             'manual_pnl': row.get('manual_pnl', 0),
+            'skyline_pnl': row.get('skyline_pnl', 0),
         })
     return jsonify(result)
 
@@ -1386,6 +1429,142 @@ def api_daily_calendar():
 def api_delete_trade(trade_id):
     delete_trade(trade_id)
     return jsonify({'status': 'deleted', 'id': trade_id})
+
+
+@app.route('/api/skyline/today')
+def api_skyline_today():
+    """Read-only Skyline status for today's trade."""
+    import glob
+    from strategies.skyline.settlement import attach_dollar_pnl_display, update_unrealized_marks
+
+    paper = _strategy_paper_flag(trades_layout.STRATEGY_SKYLINE)
+    today = date.today().isoformat()
+    active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+    session_path = os.path.join(active, f'session_{today}.json')
+    trade_path = os.path.join(active, f'skyline_{today}.json')
+
+    session = {}
+    if os.path.isfile(session_path):
+        try:
+            with open(session_path, encoding='utf-8') as f:
+                session = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    trade = None
+    if os.path.isfile(trade_path):
+        try:
+            with open(trade_path, encoding='utf-8') as f:
+                trade = json.load(f)
+            if trade and trade.get('status') == 'open':
+                symbols = []
+                for struct in trade.get('structures') or []:
+                    for leg in struct.get('legs') or []:
+                        sym = leg.get('symbol')
+                        if sym:
+                            symbols.append(sym)
+                if symbols:
+                    try:
+                        from common.broker_factory import get_shared_broker_for_strategy
+                        broker = get_shared_broker_for_strategy(
+                            trades_layout.STRATEGY_SKYLINE, paper=paper,
+                        )
+                        mids = broker.fetch_option_mids_api(symbols)
+                        update_unrealized_marks(trade, mids)
+                        attach_dollar_pnl_display(trade)
+                    except Exception:
+                        pass
+            if trade:
+                attach_dollar_pnl_display(trade)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    history = []
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+    if os.path.isdir(hist_dir):
+        for path in sorted(glob.glob(os.path.join(hist_dir, 'skyline_*.json')), reverse=True)[:30]:
+            try:
+                with open(path, encoding='utf-8') as f:
+                    row = json.load(f)
+                attach_dollar_pnl_display(row)
+                history.append(row)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+    return jsonify({
+        'strategy': trades_layout.STRATEGY_SKYLINE,
+        'paper': paper,
+        'date': today,
+        'session': session,
+        'trade': trade,
+        'history': history,
+    })
+
+
+def _resolve_strategy_config(name: str):
+    from strategies.loader import load_strategies
+    for strat, cfg in load_strategies(include_disabled=True):
+        if cfg.name == name:
+            return strat, cfg, type(cfg)
+    return None, None, None
+
+
+@app.route('/api/strategy/<name>/config')
+def api_strategy_config(name):
+    _, cfg, cfg_cls = _resolve_strategy_config(name)
+    if cfg is None:
+        return jsonify({'error': f'unknown strategy {name!r}'}), 404
+    from common.daily_overrides import effective_config, get_overrides
+    eff = effective_config(cfg, name, ROOT)
+    return jsonify({
+        'strategy': name,
+        'yaml_defaults': cfg.to_dict(),
+        'overrides': get_overrides(name, ROOT),
+        'effective': eff.to_dict(),
+    })
+
+
+@app.route('/api/strategy/<name>/overrides', methods=['POST'])
+def api_strategy_overrides_post(name):
+    _, cfg, cfg_cls = _resolve_strategy_config(name)
+    if cfg is None or cfg_cls is None:
+        return jsonify({'error': f'unknown strategy {name!r}'}), 404
+    data = request.get_json(force=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'body must be a JSON object'}), 400
+    try:
+        from common.daily_overrides import set_overrides
+        overrides = set_overrides(name, ROOT, data, cfg_cls)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'status': 'ok', 'overrides': overrides})
+
+
+@app.route('/api/strategy/<name>/overrides/<key>', methods=['DELETE'])
+def api_strategy_overrides_delete(name, key):
+    _, cfg, _ = _resolve_strategy_config(name)
+    if cfg is None:
+        return jsonify({'error': f'unknown strategy {name!r}'}), 404
+    from common.daily_overrides import delete_override
+    overrides = delete_override(name, ROOT, key)
+    return jsonify({'status': 'ok', 'overrides': overrides})
+
+
+@app.route('/api/strategy/<name>/close', methods=['POST'])
+def api_strategy_close(name):
+    data = request.get_json(force=True) or {}
+    structure = data.get('structure', 'all')
+    paper = _strategy_paper_flag(name)
+    from common.manual_close import close_all_structures, close_structure
+    if structure == 'all':
+        results = close_all_structures(name, root=ROOT, paper=paper)
+        return jsonify({
+            'status': 'ok',
+            'results': [r.__dict__ for r in results],
+        })
+    result = close_structure(name, structure, root=ROOT, paper=paper)
+    code = 200 if result.success else 400
+    return jsonify({'status': 'ok' if result.success else 'error', **result.__dict__}), code
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 register_manual_spread_routes(

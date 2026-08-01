@@ -937,7 +937,7 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 | `tests/test_close_fills.py` | V2.9 tests for manual_close null-long policy |
 | `blocks/stop/breach.py` | `spread_mark_price`, breach threshold helpers |
 | `dashboard/server.py` | `/api/close_trade`, `/api/killswitch` |
-| `changes/GAP_ANALYSIS.md` | GAP-22 round-robin discussion |
+| `changes/design/GAP_ANALYSIS.md` | GAP-22 round-robin discussion |
 
 ### 14.2 V3 (implemented)
 
@@ -959,7 +959,7 @@ These are the **pass/fail** criteria for V3 rollout. “All trades closed” dep
 | `blocks/stop/v3/handlers/monitor_adapter.py` | Shared `StopMonitor` adapter for handlers |
 | `scripts/v3_broker_spike.py` | V3-0 read-only TT parallelism probe |
 | `scripts/seed_dual_manual_kill_fixture.py` | Offline dual-kill fixture (sandbox or `--apply`) |
-| `changes/STOP_MONITOR_V3_REVIEW_FIXES.md` | Post-ship review findings + fix tracker |
+| `changes/fixes/STOP_MONITOR_V3_REVIEW_FIXES.md` | Post-ship review findings + fix tracker |
 
 ### 14.3 V3 tests (253 total in suite)
 

@@ -43,11 +43,16 @@ def all_active_dirs() -> List[str]:
 
 
 def iter_active_trade_paths() -> Iterator[str]:
-    """Yield every trades/active/{strategy}/*.json path."""
+    """Yield every trades/active/{strategy}/*.json path (vertical-spread trades only)."""
+    skip_prefixes = ('session_', 'halted_', 'skyline_')
     for directory in all_active_dirs():
         if not os.path.isdir(directory):
             continue
-        yield from glob.glob(os.path.join(directory, '*.json'))
+        for path in glob.glob(os.path.join(directory, '*.json')):
+            base = os.path.basename(path)
+            if any(base.startswith(prefix) for prefix in skip_prefixes):
+                continue
+            yield path
 
 
 def closed_dir() -> str:

@@ -32,7 +32,7 @@ from common.session_cleanup import run_session_cleanup
 from common.trades_layout import ops_path
 from blocks.entry.runner import EntryMonitorRunner
 from blocks.session.bootstrap import bootstrap_meic_session_if_missing
-from strategies.loader import load_enabled_strategies
+from strategies.loader import load_enabled_strategies, load_standalone_strategies
 from strategies.validate import StrategyConfigError, validate_startup_config
 from common.session_logs import LAUNCHER_BASE, MARKET_DATA_BASE, new_session_log_path, relocate_all_legacy_logs
 from common.logging_config import setup_session_logging, terminal_info
@@ -328,6 +328,14 @@ def integration_session(
     log.info('Integration session complete.')
 
 
+def is_market_closed_today() -> bool:
+    """True only for a real NYSE holiday. FOMC days are open — not included."""
+    today = _central_now()
+    today_str = today.strftime('%y%m%d')
+    market_closed = set(common_config._get_nyse_holidays(today.year))
+    return today_str in market_closed
+
+
 def check_trading_day():
     """Returns (should_trade, reason). Fetches fresh FOMC dates from the Fed site."""
     today     = _central_now()
@@ -387,15 +395,22 @@ def main(
         _write_status('skipped', str(exc))
         return
 
-    # --- Daily check: skip if holiday or FOMC ---
+    # --- Daily check: real holidays exit immediately; FOMC days skip trading only ---
+    should_trade = True
+    skip_reason = ''
     if not force:
-        should_trade, reason = check_trading_day()
-        if not should_trade:
-            terminal_info(log, reason)
-            log.info("Exiting. No trades will be placed today.")
-            _write_status('skipped', reason)
+        if is_market_closed_today():
+            should_trade = False
+            skip_reason = 'NYSE is CLOSED today. No trading, no data.'
+            terminal_info(log, skip_reason)
+            log.info('Exiting. Market is closed today.')
+            _write_status('skipped', skip_reason)
             return
-        log.info(reason)
+        should_trade, skip_reason = check_trading_day()
+        if not should_trade:
+            log.info('Trading disabled today (%s) — market is open, price recording continues.', skip_reason)
+        else:
+            log.info(skip_reason)
     else:
         log.info('Force mode — skipping trading-day check.')
 
@@ -454,7 +469,19 @@ def main(
         log.info('stop_monitor disabled for this session.')
     time.sleep(10)  # give streamer time to connect before first tranche
 
-    strategies = load_enabled_strategies()
+    standalone_runners = []
+    if should_trade:
+        from common.standalone_runner import StandaloneStrategyRunner
+
+        for strat, cfg in load_standalone_strategies():
+            if cfg.name in ('MANUAL_SPREAD',):
+                continue  # manual uses dashboard, not standalone runner
+            runner = StandaloneStrategyRunner(strat, root=ROOT, logger=log)
+            runner.start()
+            standalone_runners.append(runner)
+            log.info('Started standalone strategy runner: %s (paper=%s)', cfg.name, cfg.paper)
+
+    strategies = load_enabled_strategies() if should_trade else []
     scheduled = [s for s in strategies if s.schedule()]
     log.info(
         'Loaded %d enabled strategies (%d scheduled): %s',
@@ -462,28 +489,33 @@ def main(
         len(scheduled),
         ', '.join(s.config.name for s in strategies) or 'none',
     )
-    if not scheduled:
+    if not should_trade:
+        _write_status('skipped_trading_only', skip_reason)
+    elif not scheduled:
         log.warning('No scheduled strategies enabled — entry monitor will have no MEIC rows.')
 
-    bootstrap_meic_session_if_missing(ROOT)
-    # Prefer session CSV pause/skip eligibility when available
-    try:
-        from blocks.session.plan import load_meic_session_today
-        from common.probe_coordinator import get_coordinator, meic_tranches_from_session_plan
-
-        plan = load_meic_session_today(ROOT)
-        coord = get_coordinator()
-        if plan is not None and coord is not None:
-            eligible = meic_tranches_from_session_plan(plan)
-            if eligible:
-                coord.set_tranches(eligible)
-    except Exception:
-        log.exception('Could not refresh probe coordinator tranche list from session CSV')
-
-    entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
+    entry_runner = None
     entry_coord = None
 
-    if tranche_now:
+    if should_trade:
+        bootstrap_meic_session_if_missing(ROOT)
+        # Prefer session CSV pause/skip eligibility when available
+        try:
+            from blocks.session.plan import load_meic_session_today
+            from common.probe_coordinator import get_coordinator, meic_tranches_from_session_plan
+
+            plan = load_meic_session_today(ROOT)
+            coord = get_coordinator()
+            if plan is not None and coord is not None:
+                eligible = meic_tranches_from_session_plan(plan)
+                if eligible:
+                    coord.set_tranches(eligible)
+        except Exception:
+            log.exception('Could not refresh probe coordinator tranche list from session CSV')
+
+        entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
+
+    if tranche_now and should_trade:
         log.info('Tranche-now: firing entry workers for lot via app_main ...')
         code = run_tranche(wait=True, lot=lot or 'test-offhours')
         log.info('Tranche-now finished (exit %s).', code)
@@ -505,7 +537,8 @@ def main(
         stop_entry_coordinator,
     )
 
-    entry_coord = start_entry_coordinator(entry_runner, root=ROOT, logger=log)
+    if should_trade and entry_runner is not None:
+        entry_coord = start_entry_coordinator(entry_runner, root=ROOT, logger=log)
 
     # Token refresh is handled by the global thread started in __main__
     last_tick_mono = time.monotonic()
@@ -558,12 +591,12 @@ def main(
 
             if entry_coord is not None and coordinator_enabled():
                 entry_coord.check_stall()
-            else:
+            elif entry_runner is not None:
                 entry_runner.tick(now)
             # Entry monitor background thread when coordinator enabled (common.entry_coordinator)
             # Fill sync is owned solely by stop_monitor (see BROKER_REST_RESILIENCE spec §9)
 
-            if once and entry_runner.any_fired():
+            if once and entry_runner is not None and entry_runner.any_fired():
                 log.info('--once: entry worker fired, shutting down.')
                 break
 
@@ -571,6 +604,11 @@ def main(
             time.sleep(5)
 
     finally:
+        for runner in standalone_runners:
+            try:
+                runner.stop()
+            except Exception:
+                log.exception('Failed to stop standalone runner %s', runner.strategy.config.name)
         stop_entry_coordinator()
         stop_coordinator()
         log.info("Stopping streamer ...")
