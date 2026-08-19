@@ -22,6 +22,7 @@ _MODULE_DEFAULTS = {
     'strategies.meic_ic.strategy': ('MEICStrategy', 'MEICConfig'),
     'strategies.iron_fly.strategy': ('IronFlyStrategy', 'IronFlyConfig'),
     'strategies.skyline.strategy': ('SkylineStrategy', 'SkylineConfig'),
+    'strategies.perma_bull_pcs.strategy': ('PermaBullPCSStrategy', 'PermaBullPCSConfig'),
 }
 
 

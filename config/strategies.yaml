@@ -31,3 +31,19 @@ strategies:
       quantity: 1
       entry_fill_wait_sec: 20
       entry_price_style: mid
+
+  - name: PERMA_BULL_PCS
+    enabled: true
+    confirmed: true
+    module: strategies.perma_bull_pcs.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: perma_bull_pcs
+    scheduled: false
+    paper: false
+    config_overrides:
+      entry_time_et: '08:45'  # US/Central (MEIC session clock)
+      spread_width: 5
+      target_credit: 1.0
+      quantity: 1
+      profit_target_debit: 0.15

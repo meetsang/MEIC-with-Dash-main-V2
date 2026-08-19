@@ -29,6 +29,20 @@ class TestStrategyLoader(unittest.TestCase):
         self.assertFalse(cfg.scheduled)
         self.assertEqual(strat.schedule(), [])
 
+    def test_perma_bull_loaded_when_enabled(self):
+        from strategies.loader import load_standalone_strategies
+
+        standalone = {cfg.name: (strat, cfg) for strat, cfg in load_standalone_strategies()}
+        self.assertIn('PERMA_BULL_PCS', standalone)
+        strat, cfg = standalone['PERMA_BULL_PCS']
+        self.assertFalse(cfg.paper)
+        self.assertTrue(cfg.confirmed)
+        self.assertFalse(cfg.scheduled)
+        self.assertEqual(cfg.entry_time_et, '08:45')
+        self.assertEqual(cfg.spread_width, 5)
+        self.assertEqual(cfg.target_credit, 1.0)
+        self.assertEqual(strat.schedule(), [])
+
 
 if __name__ == '__main__':
     unittest.main()

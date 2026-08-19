@@ -52,3 +52,32 @@ class PhaseProfitTarget(PhaseBase):
 
     def execute(self, monitor) -> None:
         monitor.replace_with_limit_close(reason='profit_target_hit')
+
+
+class PhaseSpreadDebitProfitTarget(PhaseBase):
+    """Place a resting spread-close limit at profit_target_debit as soon as the entry is open."""
+
+    priority = 5
+    name = 'phase_spread_debit_profit_target'
+
+    def should_activate(self, monitor) -> bool:
+        state = monitor.state
+        exit_cfg = state.get('exit_config') or {}
+        if state.get('status') != 'open':
+            return False
+        if exit_cfg.get('profit_target_debit') is None:
+            return False
+        if state.get('spread_close_order_id') or state.get('close_only_mode'):
+            return False
+        return True
+
+    def _evaluate_active(self, monitor) -> str:
+        return PhaseAction.MAINTENANCE
+
+    def execute(self, monitor) -> None:
+        exit_cfg = monitor.state.get('exit_config') or {}
+        debit_limit = float(exit_cfg.get('profit_target_debit'))
+        monitor.replace_with_spread_close(
+            reason='profit_target_resting',
+            debit_limit=debit_limit,
+        )
