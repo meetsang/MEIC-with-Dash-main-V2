@@ -55,6 +55,7 @@ streaming/       # DXLink → MQTT (→ blocks/streamer)
 dashboard/       # Flask UI
 strategies/      # MEIC + ManualSpread registry classes
 config/          # strategies.yaml
+mnq_paper/       # paper MNQ webhook bot — TastyTrade prices only, no broker orders
 ```
 
 ## Tests

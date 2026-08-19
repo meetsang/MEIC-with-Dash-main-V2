@@ -78,6 +78,34 @@ class TestRestProbe(unittest.TestCase):
         self.assertFalse(broker_cooldown.cooldown_active())
         self.assertTrue(read_state()['new_risk_latched'])
 
+    def test_min_interval_suppression_does_not_block_entries(self):
+        os.environ['REST_PROBE_MIN_INTERVAL_SEC'] = '60'
+        now = time.time()
+        broker = MagicMock()
+        broker.probe_orders_rest.return_value = RestProbeResult(
+            ok=True,
+            status='healthy',
+            attempted_at_epoch=now,
+            completed_at_epoch=now + 0.05,
+            latency_ms=50,
+            http_status=200,
+            detail='',
+        )
+        run_rest_probe(
+            broker,
+            source='startup',
+            bypass_local_cooldown=True,
+            bypass_min_interval=True,
+        )
+        self.assertEqual(read_state()['rest_status'], 'healthy')
+        suppressed = run_rest_probe(broker, source='dashboard', bypass_local_cooldown=True)
+        self.assertEqual(suppressed.status, 'suppressed_min_interval')
+        state = read_state()
+        self.assertEqual(state['rest_status'], 'healthy')
+        from common.trading_gate import effective_new_risk_blocked
+
+        self.assertFalse(effective_new_risk_blocked())
+
 
 if __name__ == '__main__':
     unittest.main()

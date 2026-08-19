@@ -24,6 +24,7 @@ implenment.md
 
 # Market data (MQTT recorder output)
 data/
+mnq_paper/data/
 
 # Logs
 logs/

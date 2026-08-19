@@ -54,7 +54,7 @@ class TestOrchestrator(unittest.TestCase):
         slots = MEICStrategy().schedule()
         self.assertEqual(len(slots), 6)
         lots = [s.lot for s in slots]
-        self.assertEqual(lots, ['10-00', '10-30', '11-00', '12-00', '12-30', '01-15'])
+        self.assertEqual(lots, ['10-45', '11-15', '11-45', '12-15', '12-45', '01-30'])
         self.assertNotIn('01-45', lots)
         self.assertNotIn('02-00', lots)
 

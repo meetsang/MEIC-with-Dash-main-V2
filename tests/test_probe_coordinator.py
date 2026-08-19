@@ -67,12 +67,12 @@ class TestProbeCoordinator(unittest.TestCase):
 
     def test_one_startup_and_one_per_tranche_budget(self):
         slots = [
-            TrancheSlot('10-00', dt_time(9, 59), dt_time(10, 5), 'MEIC_IC'),
-            TrancheSlot('10-30', dt_time(10, 29), dt_time(10, 35), 'MEIC_IC'),
-            TrancheSlot('11-00', dt_time(10, 59), dt_time(11, 5), 'MEIC_IC'),
-            TrancheSlot('12-00', dt_time(11, 59), dt_time(12, 5), 'MEIC_IC'),
-            TrancheSlot('12-30', dt_time(12, 29), dt_time(12, 35), 'MEIC_IC'),
-            TrancheSlot('01-15', dt_time(13, 14), dt_time(13, 20), 'MEIC_IC'),
+            TrancheSlot('10-45', dt_time(10, 44), dt_time(10, 50), 'MEIC_IC'),
+            TrancheSlot('11-15', dt_time(11, 14), dt_time(11, 20), 'MEIC_IC'),
+            TrancheSlot('11-45', dt_time(11, 44), dt_time(11, 50), 'MEIC_IC'),
+            TrancheSlot('12-15', dt_time(12, 14), dt_time(12, 20), 'MEIC_IC'),
+            TrancheSlot('12-45', dt_time(12, 44), dt_time(12, 50), 'MEIC_IC'),
+            TrancheSlot('01-30', dt_time(13, 29), dt_time(13, 35), 'MEIC_IC'),
         ]
         coord = ProbeCoordinator(
             session_date_ct='2026-07-13',
@@ -88,12 +88,12 @@ class TestProbeCoordinator(unittest.TestCase):
 
         # Advance through each lead time
         for h, m, s in (
-            (9, 58, 30),
-            (10, 28, 30),
-            (10, 58, 30),
-            (11, 58, 30),
-            (12, 28, 30),
-            (13, 13, 30),
+            (10, 43, 30),
+            (11, 13, 30),
+            (11, 43, 30),
+            (12, 13, 30),
+            (12, 43, 30),
+            (13, 28, 30),
         ):
             self._clock['now'] = datetime(2026, 7, 13, h, m, s)
             time.sleep(0.15)

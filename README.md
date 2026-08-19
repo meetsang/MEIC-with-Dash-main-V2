@@ -312,7 +312,7 @@ All times below are **US Central (CT)**. Tranche windows are defined in `run.py`
 | --------- | ------------ |
 | **8:20 AM** | Launcher wakes on weekdays (sleeps over weekends until Monday 8:20 AM) |
 | **8:30 AM** | Streamer + `stop_monitor` start (if before 8:30, launcher waits) |
-| **10:59 AM – 2:05 PM** | Six tranche windows — each opens **1 PCS + 1 CCS** (see table below) |
+| **10:44 AM – 1:35 PM** | Six tranche windows — each opens **1 PCS + 1 CCS** (see table below) |
 | **2:51 PM** | Phase 3: SPX proximity stop logic begins (`STRK_CHK_MIN` in `meic0dte/app/config.py`) |
 | **3:00 PM** | Streamer + stop_monitor shut down until next trading day |
 
@@ -324,12 +324,12 @@ Each window fires **once per day** the first time the clock is inside the range.
 
 | Lot name | Window start | Window end | Sides opened |
 | -------- | ------------ | ---------- | ------------ |
-| `10-00` | 9:59 AM | 10:05 AM | Put spread + Call spread |
-| `10-30` | 10:29 AM | 10:35 AM | Put spread + Call spread |
-| `11-00` | 10:59 AM | 11:05 AM | Put spread + Call spread |
-| `12-00` | 11:59 AM | 12:05 PM | Put spread + Call spread |
-| `12-30` | 12:29 PM | 12:35 PM | Put spread + Call spread |
-| `01-15` | 1:14 PM | 1:20 PM | Put spread + Call spread |
+| `10-45` | 10:44 AM | 10:50 AM | Put spread + Call spread |
+| `11-15` | 11:14 AM | 11:20 AM | Put spread + Call spread |
+| `11-45` | 11:44 AM | 11:50 AM | Put spread + Call spread |
+| `12-15` | 12:14 PM | 12:20 PM | Put spread + Call spread |
+| `12-45` | 12:44 PM | 12:50 PM | Put spread + Call spread |
+| `01-30` | 1:29 PM | 1:35 PM | Put spread + Call spread |
 
 To change these times, edit `MEIC_TRANCHE_SLOTS` in `strategies/meic/strategy.py`. The dashboard derives `TRANCHE_LOTS` from that list automatically.
 
@@ -380,7 +380,7 @@ Real-time single-page app (Flask + Socket.IO). The server pushes an update every
 
 #### Tranche grid
 
-All 12 trade slots (6 lots x 2 sides) are shown at all times, even before any trades are placed. Slots are grouped by lot (e.g. `10-00 CT`) with Call and Put rows paired together.
+All 12 trade slots (6 lots x 2 sides) are shown at all times, even before any trades are placed. Slots are grouped by lot (e.g. `10-45 CT`) with Call and Put rows paired together.
 
 Each row shows: Lot · Side · State · Short/Long strikes · Entry credit · Qty · Live short/long/spread prices · Live PnL · Stop phase · Stop price · Heartbeat
 
