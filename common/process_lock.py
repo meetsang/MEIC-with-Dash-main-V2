@@ -58,13 +58,59 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _windows_process_command_line(pid: int) -> str:
+    import subprocess
+
+    flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    try:
+        result = subprocess.run(
+            [
+                'powershell', '-NoProfile', '-Command',
+                f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=flags,
+        )
+        return (result.stdout or '').strip()
+    except Exception:
+        return ''
+
+
+def _lock_holder_matches(pid: int, lock_meta: Dict[str, Any]) -> bool:
+    """True when a live PID still looks like the process that acquired the lock."""
+    expected = str(lock_meta.get('command') or '')
+    if not expected:
+        return True
+    if sys.platform != 'win32':
+        return True
+    cmd = _windows_process_command_line(pid).lower()
+    if not cmd:
+        return False
+    expected_low = expected.lower()
+    if expected_low in cmd:
+        return True
+    for token in (
+        'dashboard/server.py',
+        'dashboard\\server.py',
+        'run.py',
+        'stop_monitor',
+        'streamer',
+        'market_data',
+    ):
+        if token in expected_low and token in cmd:
+            return True
+    return False
+
+
 def active_lock_pid(name: str) -> Optional[int]:
     """Return PID holding lock if alive, else None."""
     meta = read_lock(name)
     if not meta:
         return None
     pid = int(meta.get('pid') or 0)
-    if pid and _pid_alive(pid):
+    if pid and _pid_alive(pid) and _lock_holder_matches(pid, meta):
         return pid
     return None
 
@@ -114,12 +160,19 @@ def acquire_lock(
             log.warning('Process lock %s already held by this PID — already_running', name)
             return False
         if _pid_alive(pid):
+            if _lock_holder_matches(pid, existing):
+                log.warning(
+                    'Process lock %s held by live PID %s — already_running',
+                    name,
+                    pid,
+                )
+                return False
             log.warning(
-                'Process lock %s held by live PID %s — already_running',
+                'Process lock %s stale — PID %s alive but not lock holder (%s); reclaiming',
                 name,
                 pid,
+                existing.get('command') or '',
             )
-            return False
 
     payload = {
         'pid': os.getpid(),

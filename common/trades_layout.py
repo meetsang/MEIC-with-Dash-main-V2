@@ -10,6 +10,7 @@ from typing import List, Optional
 STRATEGY_MEIC = 'MEIC_IC'
 STRATEGY_MANUAL = 'MANUAL_SPREAD'
 STRATEGY_SKYLINE = 'SKYLINE_SPX'
+STRATEGY_PERMA_BULL = 'PERMA_BULL_PCS'
 
 MEIC_ACTIVE = 'trades/active/MEIC_IC'
 MEIC_HISTORY = 'trades/history/MEIC_IC'
@@ -17,6 +18,8 @@ MANUAL_ACTIVE = 'trades/active/MANUAL_SPREAD'
 MANUAL_HISTORY = 'trades/history/MANUAL_SPREAD'
 SKYLINE_ACTIVE = 'trades/active/SKYLINE_SPX'
 SKYLINE_HISTORY = 'trades/history/SKYLINE_SPX'
+PERMA_BULL_ACTIVE = 'trades/active/PERMA_BULL_PCS'
+PERMA_BULL_HISTORY = 'trades/history/PERMA_BULL_PCS'
 
 # Test fixtures — never scanned for dashboard History / PnL totals.
 TEST_ROOT = 'trades/test'
@@ -71,7 +74,7 @@ def ops_path(name: str, root: Optional[str] = None) -> str:
 
 
 def registered_strategies() -> List[str]:
-    return [STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE]
+    return [STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE, STRATEGY_PERMA_BULL]
 
 
 def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
@@ -83,6 +86,8 @@ def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
         os.path.join(base, MANUAL_HISTORY),
         os.path.join(base, SKYLINE_ACTIVE),
         os.path.join(base, SKYLINE_HISTORY),
+        os.path.join(base, PERMA_BULL_ACTIVE),
+        os.path.join(base, PERMA_BULL_HISTORY),
         os.path.join(base, TEST_MEIC_ACTIVE),
         os.path.join(base, TEST_MEIC_HISTORY),
         os.path.join(base, TEST_MANUAL_ACTIVE),

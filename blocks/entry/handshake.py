@@ -24,6 +24,9 @@ def write_credit_spread_handshake(
     entry_ts: str | None = None,
     reason: str = 'placed',
     on_unfilled_step: str | None = None,
+    stop_profile: str | None = None,
+    phases: dict | None = None,
+    exit_config: dict | None = None,
 ) -> str:
     state_mod.ensure_dirs()
     short_tt = to_tastytrade(short_symbol)
@@ -60,6 +63,18 @@ def write_credit_spread_handshake(
     filename = state_mod.stable_trade_filename(lot, side, entry_ts)
     path = os.path.join(dest_dir, filename)
 
+    from blocks.stop.profiles.hold_to_expiry import HOLD_TO_EXPIRY_PROFILE
+    from blocks.stop.profiles.perma_bull_pcs import PERMA_BULL_PCS_PROFILE
+
+    if phases is None:
+        if stop_profile == HOLD_TO_EXPIRY_PROFILE:
+            hold_phases = {}
+        elif stop_profile == PERMA_BULL_PCS_PROFILE:
+            hold_phases = {}
+        else:
+            hold_phases = None
+    else:
+        hold_phases = phases
     state = state_mod.create_pending_state(
         strategy=strategy,
         lot=lot,
@@ -71,6 +86,9 @@ def write_credit_spread_handshake(
         target_quantity=quantity,
         open_order_id=open_order_id,
         limit_credit=limit_credit,
+        stop_profile=stop_profile,
+        phases=hold_phases,
+        exit_config=exit_config,
     )
     state_mod.append_order_history(
         state,

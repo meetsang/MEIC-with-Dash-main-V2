@@ -104,6 +104,10 @@ log = setup_session_logging('launcher', LAUNCHER_LOG, stream_prefix='LAUNCHER', 
 if _relocated:
     log.info("Relocated legacy logs: %s", ", ".join(str(p) for p in _relocated))
 log.info("Launcher log: %s", LAUNCHER_LOG)
+log.info(
+    "MEIC entry policy: one tranche REST warm per lot (like Manual Load Chain); "
+    "P/C scans use Loaded chain lookup — no per-worker REST quote fetch"
+)
 
 STATUS_FILE = os.path.join(ROOT, 'dashboard', 'bot_status.json')
 _SUBPROCESS_QUIET = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -671,18 +675,35 @@ if __name__ == "__main__":
     atexit.register(release_lock, 'launcher')
 
     # Start dashboard server once — stays running all week
+    dash_log = os.path.join(ROOT, 'logs', f'dashboard_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
+    dash_log_fh = open(dash_log, 'w', encoding='utf-8')
     dash = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, 'dashboard', 'server.py')],
         cwd=ROOT,
-        **_SUBPROCESS_QUIET,
+        stdout=dash_log_fh,
+        stderr=subprocess.STDOUT,
     )
-    log.info("Dashboard started (PID %s) at http://localhost:5002", dash.pid)
-    time.sleep(0.75)
+    log.info("Dashboard started (PID %s) at http://localhost:5002 log=%s", dash.pid, dash_log)
+    time.sleep(1.5)
+    try:
+        from common.trading_gate import reconcile_gate_for_session
+
+        session_date_ct = _central_now().strftime('%Y-%m-%d')
+        reconcile_gate_for_session(session_date_ct)
+        log.info('Trading gate reconciled for session %s', session_date_ct)
+    except Exception:
+        log.exception('Trading gate reconcile failed on launcher start')
     if dash.poll() is not None:
+        try:
+            dash_log_fh.flush()
+            with open(dash_log, encoding='utf-8') as fh:
+                tail = fh.read().strip()
+        except OSError:
+            tail = ''
         log.critical(
-            'DASHBOARD failed to stay running (exit code %s) — '
-            'often a stale runtime/locks/dashboard.lock; remove it if no dashboard is listening on :5002',
+            'DASHBOARD failed to stay running (exit code %s) — %s',
             dash.returncode,
+            tail or 'see dashboard log',
         )
 
     # Refresh Schwab token only when using Schwab broker

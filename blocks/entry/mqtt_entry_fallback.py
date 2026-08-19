@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -107,12 +108,24 @@ def _count_valid_rest_quotes(price_map: Dict[str, float], symbols: List[str]) ->
     return valid
 
 
+def _entry_rest_batch_delay_sec() -> float:
+    return float(os.environ.get('ENTRY_REST_BATCH_DELAY_SEC', '0.2'))
+
+
+def _entry_rest_chunk_size() -> int:
+    from common.chain_snapshot import default_rest_chunk_size
+    return int(os.environ.get('ENTRY_REST_CHUNK_SIZE', str(default_rest_chunk_size())))
+
+
 def attempt_rest_entry_quotes(
     broker,
     symbols: List[str],
     logger,
     *,
-    chunk_size: int = 40,
+    chunk_size: int | None = None,
+    expiry: str | None = None,
+    otm_max_needed: int | None = None,
+    spx_price: int | None = None,
 ) -> RestEntryFetchResult:
     """Fetch REST entry quotes with cooldown guard and coverage tracking."""
     from common.broker_cooldown import cooldown_active
@@ -120,6 +133,7 @@ def attempt_rest_entry_quotes(
 
     unique = list(dict.fromkeys(symbols))
     requested = len(unique)
+    batch_size = chunk_size if chunk_size is not None else _entry_rest_chunk_size()
 
     if cooldown_active():
         try:
@@ -143,37 +157,60 @@ def attempt_rest_entry_quotes(
 
     out: Dict[str, float] = {}
     rate_limited = False
-    for i in range(0, len(unique), chunk_size):
-        batch = unique[i:i + chunk_size]
+
+    if expiry and otm_max_needed is not None:
+        from common.chain_snapshot import fetch_entry_mids_fresh
+
         try:
-            out.update(broker.fetch_option_mids_api(batch))
+            out = fetch_entry_mids_fresh(
+                broker,
+                unique,
+                expiry,
+                logger,
+                chunk_size=batch_size,
+            )
         except Exception as exc:
             err = str(exc).lower()
             if '429' in err or 'rate limit' in err or 'cooldown' in err:
                 rate_limited = True
-                logger.warning('Entry REST batch halted: %s', exc)
-                break
-            logger.warning('Entry REST batch failed: %s', exc)
-            continue
+                logger.warning('Entry REST snapshot fetch halted: %s', exc)
+            else:
+                logger.warning('Entry REST snapshot fetch failed: %s', exc)
+    else:
+        batch_delay = _entry_rest_batch_delay_sec()
+        for i in range(0, len(unique), batch_size):
+            if i > 0 and batch_delay > 0:
+                time.sleep(batch_delay)
+            batch = unique[i:i + batch_size]
+            try:
+                out.update(broker.fetch_option_mids_api(batch))
+            except Exception as exc:
+                err = str(exc).lower()
+                if '429' in err or 'rate limit' in err or 'cooldown' in err:
+                    rate_limited = True
+                    logger.warning('Entry REST batch halted: %s', exc)
+                    break
+                logger.warning('Entry REST batch failed: %s', exc)
+                continue
 
-        if rate_limited:
-            break
-
-        missing = [sym for sym in batch if to_tastytrade(sym) not in out]
-        if missing:
-            for j in range(0, len(missing), 10):
-                retry_batch = missing[j:j + 10]
-                try:
-                    out.update(broker.fetch_option_mids_api(retry_batch))
-                except Exception as exc:
-                    err = str(exc).lower()
-                    if '429' in err or 'rate limit' in err or 'cooldown' in err:
-                        rate_limited = True
-                        logger.warning('Entry REST retry halted: %s', exc)
-                        break
-                    logger.warning('Entry REST retry failed: %s', exc)
             if rate_limited:
                 break
+
+            missing = [sym for sym in batch if to_tastytrade(sym) not in out]
+            if missing:
+                for j in range(0, len(missing), 10):
+                    retry_batch = missing[j:j + 10]
+                    try:
+                        out.update(broker.fetch_option_mids_api(retry_batch))
+                    except Exception as exc:
+                        err = str(exc).lower()
+                        if '429' in err or 'rate limit' in err or 'cooldown' in err:
+                            rate_limited = True
+                            logger.warning('Entry REST retry halted: %s', exc)
+                            break
+                        logger.warning('Entry REST retry failed: %s', exc)
+                if rate_limited:
+                    break
 
     valid = _count_valid_rest_quotes(out, unique)
     coverage_pct = (100.0 * valid / requested) if requested else 0.0

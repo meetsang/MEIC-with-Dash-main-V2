@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -23,6 +24,16 @@ REST_HEALTHY = 'healthy'
 REST_STATUSES_BLOCKING = frozenset({
     'rate_limited', 'auth_failed', 'unavailable', 'unknown', 'timed_out',
 })
+# Internal throttle — not a brokerage failure; must not block entries or poison rest_status.
+REST_STATUSES_THROTTLE_ONLY = frozenset({'suppressed_min_interval'})
+
+
+def _rest_status_blocks_entries(rest_status: str) -> bool:
+    if rest_status == REST_HEALTHY:
+        return False
+    if rest_status in REST_STATUSES_THROTTLE_ONLY:
+        return False
+    return True
 
 
 def _gate_path() -> str:
@@ -105,6 +116,29 @@ def initialize_for_session_date(session_date_ct: str) -> Dict[str, Any]:
         return state
 
 
+def reconcile_gate_for_session(session_date_ct: str) -> Dict[str, Any]:
+    """Weekend/dashboard-safe gate init — new session day + repair throttle-poisoned REST."""
+    state = initialize_for_session_date(session_date_ct)
+    rest = str(state.get('rest_status') or 'unknown')
+
+    def _repair(s: Dict[str, Any]) -> None:
+        r = str(s.get('rest_status') or 'unknown')
+        if r not in REST_STATUSES_THROTTLE_ONLY:
+            return
+        last_ok = float(s.get('last_successful_probe_epoch') or 0)
+        if last_ok > 0:
+            s['rest_status'] = REST_HEALTHY
+            s['rest_detail'] = ''
+        elif not s.get('new_risk_latched'):
+            s['rest_status'] = 'unknown'
+            s['rest_detail'] = ''
+
+    if rest in REST_STATUSES_THROTTLE_ONLY:
+        state = _mutate(_repair)
+        log.info('Trading gate repaired throttle-only REST status (%s)', rest)
+    return state
+
+
 def rest_healthy() -> bool:
     if not gate_enabled():
         return True
@@ -119,7 +153,7 @@ def effective_new_risk_blocked() -> bool:
     state = read_state()
     if state.get('new_risk_latched'):
         return True
-    return state.get('rest_status') != REST_HEALTHY
+    return _rest_status_blocks_entries(str(state.get('rest_status') or 'unknown'))
 
 
 @dataclass(frozen=True)
@@ -144,7 +178,7 @@ def _blocked_reason(state: Dict[str, Any]) -> GateDecision:
             detail=str(state.get('rest_detail') or state.get('latch_source') or ''),
         )
     rest = state.get('rest_status') or 'unknown'
-    if rest != REST_HEALTHY:
+    if _rest_status_blocks_entries(str(rest)):
         return GateDecision(
             blocked=True,
             reason=f'rest_{rest}',
@@ -199,7 +233,7 @@ def evaluate_new_risk_gate(
 
     # Manual / non-tranche: global REST must be healthy + recent success on file
     rest = state.get('rest_status') or 'unknown'
-    if rest != REST_HEALTHY:
+    if _rest_status_blocks_entries(str(rest)):
         return GateDecision(
             blocked=True,
             reason=f'rest_{rest}',
@@ -350,10 +384,7 @@ def record_probe_result(result) -> Dict[str, Any]:
     """Apply RestProbeResult — successful probe does not clear latch."""
 
     def _apply(state: Dict[str, Any]) -> None:
-        state['rest_status'] = result.status
-        state['rest_detail'] = result.detail
-        state['rest_source'] = getattr(result, 'source', '') or state.get('rest_source', '')
-        state['rest_observed_at_epoch'] = result.completed_at_epoch
+        throttle_only = result.status in REST_STATUSES_THROTTLE_ONLY
         rec = _probe_record_from_result(result)
         state['last_probe'] = {
             'attempted_at_epoch': result.attempted_at_epoch,
@@ -377,6 +408,12 @@ def record_probe_result(result) -> Dict[str, Any]:
             probes = dict(state.get('probes_by_tranche') or {})
             probes[tranche_id] = rec
             state['probes_by_tranche'] = probes
+        if throttle_only:
+            return
+        state['rest_status'] = result.status
+        state['rest_detail'] = result.detail
+        state['rest_source'] = getattr(result, 'source', '') or state.get('rest_source', '')
+        state['rest_observed_at_epoch'] = result.completed_at_epoch
         if result.ok:
             state['last_successful_probe_epoch'] = result.completed_at_epoch
         elif result.status in REST_STATUSES_BLOCKING:
@@ -432,7 +469,8 @@ def resume_new_risk(cleared_by: str = 'operator') -> GateDecision:
     if effective_new_risk_blocked() and cooldown_active():
         return GateDecision(blocked=True, reason='broker_cooldown_active', detail='cooldown still active')
     state = read_state()
-    if state.get('rest_status') != REST_HEALTHY:
+    rest = str(state.get('rest_status') or 'unknown')
+    if _rest_status_blocks_entries(rest):
         return GateDecision(
             blocked=True,
             reason=f'rest_{state.get("rest_status")}',
@@ -485,20 +523,44 @@ def has_unresolved_visibility_unknown(root: Optional[str] = None) -> bool:
     return False
 
 
+def _sanitize_detail_for_dashboard(detail: str) -> str:
+    """Strip HTML/nginx noise from broker exceptions for operator-facing banners."""
+    if not detail:
+        return ''
+    low = detail.lower()
+    if '429' in low and ('too many requests' in low or 'rate limit' in low):
+        return 'HTTP 429 Too Many Requests (TastyTrade rate limit)'
+    if '<html' in low or '<title>' in low:
+        match = re.search(r'<title>([^<]+)</title>', detail, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip()
+            if '429' in title:
+                return 'HTTP 429 Too Many Requests (TastyTrade rate limit)'
+            return title
+    if len(detail) > 140:
+        return detail[:137] + '...'
+    return detail
+
+
 def summary_for_dashboard() -> Dict[str, Any]:
     state = read_state()
     snap = cooldown_snapshot()
     blocked = effective_new_risk_blocked()
     rest = state.get('rest_status') or 'unknown'
     latched = bool(state.get('new_risk_latched'))
+    last_ok_epoch = float(state.get('last_successful_probe_epoch') or 0)
+    rest_display_healthy = (
+        rest == REST_HEALTHY
+        or (rest in REST_STATUSES_THROTTLE_ONLY and last_ok_epoch > 0)
+    )
     fresh_probe = (
-        float(state.get('last_successful_probe_epoch') or 0) > 0
-        and time.time() - float(state.get('last_successful_probe_epoch') or 0) <= _rest_ready_max_age_sec()
+        last_ok_epoch > 0
+        and time.time() - last_ok_epoch <= _rest_ready_max_age_sec()
     )
     resume_allowed = (
         latched
         and not cooldown_active()
-        and rest == REST_HEALTHY
+        and rest_display_healthy
         and fresh_probe
         and not has_unresolved_visibility_unknown()
     )
@@ -506,14 +568,14 @@ def summary_for_dashboard() -> Dict[str, Any]:
     last_probe = state.get('last_probe') or {}
     return {
         'rest_status': rest,
-        'rest_healthy': rest == REST_HEALTHY,
+        'rest_healthy': rest_display_healthy,
         'cooldown_active': snap.get('active', False),
         'cooldown_until_epoch': snap.get('until'),
         'cooldown_remaining_sec': snap.get('remaining_sec'),
         'new_risk_latched': bool(state.get('new_risk_latched')),
         'new_risk_blocked': blocked,
         'reason': state.get('latch_reason') or '',
-        'detail': state.get('rest_detail') or '',
+        'detail': _sanitize_detail_for_dashboard(str(state.get('rest_detail') or '')),
         'last_probe': {
             'at_epoch': last_probe.get('completed_at_epoch'),
             'ok': last_probe.get('ok'),

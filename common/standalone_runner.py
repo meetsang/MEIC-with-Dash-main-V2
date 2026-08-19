@@ -86,26 +86,46 @@ class StandaloneStrategyRunner:
 
     def _register_open_trade_streamer_legs(self) -> None:
         """Re-subscribe streamer to open leg symbols after restart (strategy-specific)."""
-        if self.config.name != 'SKYLINE_SPX':
-            return
-        today = date.today().isoformat()
-        path = os.path.join(
-            active_dir_for_strategy(self.config.name, self.root),
-            f'skyline_{today}.json',
-        )
-        if not os.path.isfile(path):
-            return
-        try:
-            with open(path, encoding='utf-8') as f:
-                trade = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
-            self.log.warning('Could not load open Skyline trade for streamer register: %s', exc)
-            return
-        if trade.get('status') == 'closed':
-            return
-        from strategies.skyline.strategy import SkylineStrategy
+        if self.config.name == 'SKYLINE_SPX':
+            today = date.today().isoformat()
+            path = os.path.join(
+                active_dir_for_strategy(self.config.name, self.root),
+                f'skyline_{today}.json',
+            )
+            if not os.path.isfile(path):
+                return
+            try:
+                with open(path, encoding='utf-8') as f:
+                    trade = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                self.log.warning('Could not load open Skyline trade for streamer register: %s', exc)
+                return
+            if trade.get('status') == 'closed':
+                return
+            from strategies.skyline.strategy import SkylineStrategy
 
-        SkylineStrategy.register_open_trade_streamer_legs(trade, self.log)
+            SkylineStrategy.register_open_trade_streamer_legs(trade, self.log)
+            return
+
+        if self.config.name == 'PERMA_BULL_PCS':
+            from blocks.stop import state as state_mod
+            from strategies.perma_bull_pcs.strategy import PermaBullPCSStrategy
+
+            active = active_dir_for_strategy(self.config.name, self.root)
+            for path in state_mod.iter_active_trade_paths():
+                if not path.startswith(active):
+                    continue
+                try:
+                    with open(path, encoding='utf-8') as f:
+                        trade = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    continue
+                entry = trade.get('entry') or {}
+                if entry.get('strategy') != self.config.name:
+                    continue
+                if trade.get('status') == 'closed':
+                    continue
+                PermaBullPCSStrategy.register_open_trade_streamer_legs(trade, self.log)
 
     def _resolve_broker(self) -> None:
         if self.strategy.broker is not None:
