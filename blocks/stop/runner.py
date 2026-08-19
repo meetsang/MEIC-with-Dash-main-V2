@@ -44,7 +44,7 @@ class MonitorRunner:
         alert_listener: Optional[AlertListener] = None,
     ):
         self.broker = broker
-        self.phases = phases or default_phases()
+        self.phases = phases  # None → each StopMonitor uses its trade stop_profile phases
         self.watch_dir = watch_dir or state_mod.active_dir()
         self.poll_interval = poll_interval
         self.alert_listener = alert_listener

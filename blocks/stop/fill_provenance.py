@@ -64,6 +64,15 @@ def ensure_fill_sync(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def is_fill_sync_terminal(state: Dict[str, Any]) -> bool:
+    if state.get('structure_type') == 'butterfly':
+        fs = (state.get('open_order') or {}).get('fill_sync') or {}
+        phase = fs.get('phase', 'fast')
+        if phase in TERMINAL_PHASES:
+            if phase in ('cancelled', 'rejected', 'expired', 'terminal_error'):
+                return True
+            filled = int(state.get('filled_quantity') or 0)
+            return filled > 0
+        return False
     fs = (state.get('open_order') or {}).get('fill_sync') or {}
     phase = fs.get('phase', 'fast')
     if phase not in TERMINAL_PHASES:
@@ -137,6 +146,31 @@ def _is_genuine_aggregate(result: OrderResult) -> bool:
 
 def apply_broker_leg_updates(state: Dict[str, Any], result: OrderResult) -> None:
     """Apply broker-reported leg fills without inferring execution credit from limit."""
+    if state.get('structure_type') == 'butterfly':
+        order_qty = int(result.order_quantity or state.get('quantity') or 0)
+        filled_qty = int(result.filled_quantity or 0)
+        status = (result.status or 'working').lower()
+        if status == 'filled' and order_qty:
+            filled_qty = max(filled_qty, order_qty)
+        if order_qty:
+            filled_qty = min(filled_qty, order_qty)
+        state['quantity'] = order_qty or state.get('quantity', 0)
+        state['filled_quantity'] = filled_qty
+        open_order = state_mod.section(state, 'open_order')
+        open_order['status'] = status
+        open_order['last_sync'] = state_mod.now_iso()
+        open_order['fully_filled'] = bool(
+            order_qty and filled_qty >= order_qty and status == 'filled'
+        )
+        if result.filled_price is not None and filled_qty > 0:
+            px = round(abs(float(result.filled_price)), 2)
+            entry = state_mod.section(state, 'entry')
+            if entry.get('sell'):
+                entry['net_credit'] = px
+            else:
+                entry['net_debit'] = px
+        return
+
     short_fill = result.short_fill_price
     long_fill = result.long_fill_price
     if short_fill is not None:

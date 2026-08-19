@@ -372,6 +372,10 @@ class StopMonitor:
             return
         if state_mod.section(self.state, 'active_stop').get('skip_initial'):
             return
+        if self.state.get('structure_type') == 'butterfly':
+            return
+        if not self.phases:
+            return
 
         if self.state.get('status') != 'open':
             return
@@ -479,7 +483,11 @@ class StopMonitor:
             return True
         return True
 
-    def replace_with_spread_close(self, reason: str = 'manual_close') -> None:
+    def replace_with_spread_close(
+        self,
+        reason: str = 'manual_close',
+        debit_limit: float | None = None,
+    ) -> None:
         """Kill path — close both legs in one spread order (not leg-by-leg)."""
         if self._broker_actions_blocked():
             return
@@ -516,14 +524,16 @@ class StopMonitor:
         short_sym = self.state['short_leg']['symbol']
         long_sym = self.state['long_leg']['symbol']
         qty = stop_qty_for_state(self.state)
-        short_p = self.prices.get_market_mid(short_sym) or self.prices.get(short_sym)
-        long_p = self.prices.get_market_mid(long_sym) or self.prices.get(long_sym)
-        if short_p is None or long_p is None:
-            log.error('Spread close: missing MQTT quotes for %s / %s', short_sym, long_sym)
-            return
-
-        raw_debit = max(float(short_p) - float(long_p), 0.05)
-        debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
+        if debit_limit is not None:
+            debit = round_spx_option_price(float(debit_limit))
+        else:
+            short_p = self.prices.get_market_mid(short_sym) or self.prices.get(short_sym)
+            long_p = self.prices.get_market_mid(long_sym) or self.prices.get(long_sym)
+            if short_p is None or long_p is None:
+                log.error('Spread close: missing MQTT quotes for %s / %s', short_sym, long_sym)
+                return
+            raw_debit = max(float(short_p) - float(long_p), 0.05)
+            debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
         result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
         if not result.success:
             if is_instruments_stopped_trading_error(result.message):

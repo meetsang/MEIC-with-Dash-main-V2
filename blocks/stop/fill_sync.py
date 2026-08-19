@@ -36,6 +36,13 @@ def _recompute_stop_fields(state: Dict[str, Any]) -> None:
 
 
 def _promote_open_if_ready(state: Dict[str, Any]) -> None:
+    if state.get('structure_type') == 'butterfly':
+        filled_qty = int(state.get('filled_quantity') or 0)
+        open_order = state_mod.section(state, 'open_order')
+        status = (open_order.get('status') or '').lower()
+        if filled_qty > 0 and (status == 'filled' or open_order.get('fully_filled')):
+            state['status'] = 'open'
+        return
     short_px = float(state_mod.section(state, 'short_leg').get('fill_price') or 0)
     long_px = float(state_mod.section(state, 'long_leg').get('fill_price') or 0)
     filled_qty = int(state.get('filled_quantity') or 0)

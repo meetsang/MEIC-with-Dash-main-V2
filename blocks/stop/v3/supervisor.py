@@ -59,6 +59,17 @@ from common.streamer_symbols import register_spread_symbols
 log = logging.getLogger(__name__)
 
 
+def _phases_for_state(state: dict) -> List[PhaseBase]:
+    from blocks.stop.stop_profile import resolve_stop_profile
+
+    profile = resolve_stop_profile(state)
+    return sorted(profile.phases, key=lambda p: p.priority)
+
+
+def _requires_exchange_stop(state: dict) -> bool:
+    return any(p.name == 'phase1_initial_stop' for p in _phases_for_state(state))
+
+
 class StopSupervisor:
     """Single-thread scan loop + exit worker pool (V3)."""
 
@@ -74,7 +85,7 @@ class StopSupervisor:
         self.prices = prices
         self.alert_listener = alert_listener
         self.poll_interval = poll_interval
-        self.phases = sorted(phases or default_phases(), key=lambda p: p.priority)
+        self.phases = phases  # None → per-trade phases from stop_profile on each slot
         self.lane = BrokerLane()
         self.exit_pool = ExitWorkerPool()
         self._slots: Dict[str, TradeSlot] = {}
@@ -261,7 +272,7 @@ class StopSupervisor:
                 slot.path,
                 self.broker,
                 self.prices,
-                phases=self.phases,
+                phases=None,
                 fill_queue=fill_q,
                 alert_listener=self.alert_listener,
             )
@@ -424,6 +435,17 @@ class StopSupervisor:
         if short_fill <= 0 or long_fill <= 0:
             return False, 'legs_not_filled'
 
+        if not _requires_exchange_stop(st):
+            watch = st.get('breach_watch') or {}
+            if mqtt_cache_is_stale(mon.prices):
+                return False, 'stale_mqtt'
+            if not watch.get('software_breach_ready', False):
+                reason = str(watch.get('quote_pair_reason') or 'waiting_mqtt')
+                if reason == 'fill_grace':
+                    return False, 'fill_grace'
+                return False, 'waiting_mqtt'
+            return True, 'armed'
+
         active = st.get('active_stop') or {}
         if not active.get('order_id'):
             return False, 'waiting_stop'
@@ -478,7 +500,8 @@ class StopSupervisor:
         return self._stop_is_current_for_slot(slot)
 
     def _maybe_enqueue_phase3_exit(self, slot: TradeSlot, mon: StopMonitor) -> bool:
-        phase3 = next((p for p in self.phases if p.name == 'phase3_spx_proximity'), None)
+        slot_phases = _phases_for_state(slot.state)
+        phase3 = next((p for p in slot_phases if p.name == 'phase3_spx_proximity'), None)
         if phase3 is None:
             return False
         if not self._phase3_scan_ready(slot, mon):
@@ -548,7 +571,11 @@ class StopSupervisor:
                 if exit_handler.startswith('breach_')
                 else 'phase1_initial_stop'
             )
-            phase = next((p for p in self.phases if p.name == phase_name), self.phases[0])
+            slot_phases = _phases_for_state(slot.state)
+            phase = next((p for p in slot_phases if p.name == phase_name), slot_phases[0] if slot_phases else None)
+            if phase is None:
+                log.error('No phases for recovery on %s', slot.path)
+                return True
             log.info(
                 'Recover route %s → %s path=%s',
                 route,
@@ -558,7 +585,8 @@ class StopSupervisor:
             self._enqueue_confirmed_exit(slot, phase)
             return True
         if route == 'resume_phase3_exit':
-            phase = next((p for p in self.phases if p.name == 'phase3_spx_proximity'), None)
+            slot_phases = _phases_for_state(slot.state)
+            phase = next((p for p in slot_phases if p.name == 'phase3_spx_proximity'), None)
             if phase is None:
                 log.error('Phase3 not configured for recovery on %s', slot.path)
                 return True
@@ -631,7 +659,7 @@ class StopSupervisor:
             save_slot(slot)
             return
 
-        if not self._stop_is_current_for_slot(slot):
+        if _requires_exchange_stop(slot.state) and not self._stop_is_current_for_slot(slot):
             mon._ensure_stop_for_filled_qty()
             slot.state = mon.state
             self._lifecycle_section(slot)['breach_arm_status'] = 'waiting_stop'
@@ -651,7 +679,8 @@ class StopSupervisor:
 
         self._mark_breach_armed(slot, mon)
 
-        for phase in self.phases:
+        slot_phases = _phases_for_state(slot.state)
+        for phase in slot_phases:
             if phase.name == 'phase3_spx_proximity':
                 continue
             action = phase.evaluate(mon)

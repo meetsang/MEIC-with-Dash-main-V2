@@ -85,14 +85,24 @@ def section(state: Dict[str, Any], key: str) -> Dict[str, Any]:
     return val if isinstance(val, dict) else {}
 
 
-def _v2_metadata(strategy: str) -> Dict[str, Any]:
+def _v2_metadata(strategy: str, stop_profile: Optional[str] = None) -> Dict[str, Any]:
     from blocks.stop.profiles.meic import MEIC_CREDIT_SPREAD_PROFILE
 
+    profile = stop_profile or MEIC_CREDIT_SPREAD_PROFILE
     return {
         'strategy_version': '2.0',
         'instrument': 'SPX',
         'spread_type': 'credit',
-        'stop_profile': MEIC_CREDIT_SPREAD_PROFILE,
+        'stop_profile': profile,
+    }
+
+
+def _default_meic_phases() -> Dict[str, Any]:
+    return {
+        'phase1_active': True,
+        'phase2_activated_at': None,
+        'phase3_activated_at': None,
+        'short_stoplmt_replaced': False,
     }
 
 
@@ -108,10 +118,14 @@ def create_pending_state(
     target_quantity: int,
     open_order_id: str,
     limit_credit: float = 0.0,
+    stop_profile: Optional[str] = None,
+    phases: Optional[Dict[str, Any]] = None,
+    exit_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Minimal handshake JSON after order place — stop_monitor syncs fills from open_order_id."""
-    meta = _v2_metadata(strategy)
-    return {
+    meta = _v2_metadata(strategy, stop_profile)
+    phase_block = phases if phases is not None else _default_meic_phases()
+    state = {
         **meta,
         'status': 'pending_fill',
         'lot': lot,
@@ -157,12 +171,7 @@ def create_pending_state(
         'active_stop': None,
         'stop_history': [],
         'order_history': [],
-        'phases': {
-            'phase1_active': True,
-            'phase2_activated_at': None,
-            'phase3_activated_at': None,
-            'short_stoplmt_replaced': False,
-        },
+        'phases': phase_block,
         'long_close_order_id': None,
         'long_close_price': None,
         'short_close_price': None,
@@ -174,6 +183,9 @@ def create_pending_state(
             'state_loaded_from_disk': False,
         },
     }
+    if exit_config:
+        state['exit_config'] = dict(exit_config)
+    return state
 
 
 def create_new_state(
@@ -237,6 +249,87 @@ def create_new_state(
             'phase3_activated_at': None,
             'short_stoplmt_replaced': False,
         },
+        'long_close_order_id': None,
+        'long_close_price': None,
+        'short_close_price': None,
+        'close_mechanism': None,
+        'close': None,
+        'recovery': {
+            'module_start_count': 0,
+            'last_heartbeat': now_iso(),
+            'state_loaded_from_disk': False,
+        },
+    }
+
+
+def create_butterfly_pending_state(
+    *,
+    strategy: str,
+    lot: str,
+    side: str,
+    structure_type: str,
+    body_strike: int,
+    wing_low: int,
+    wing_high: int,
+    wing_half: int,
+    legs: List[Dict[str, Any]],
+    target_quantity: int,
+    open_order_id: str,
+    limit_price: float,
+    sell: bool,
+) -> Dict[str, Any]:
+    """Handshake JSON for 1-2-1 butterfly — hold_to_expiry, no automated stop."""
+    from blocks.stop.profiles.hold_to_expiry import HOLD_TO_EXPIRY_PROFILE
+
+    price_label = 'net_credit' if sell else 'net_debit'
+    return {
+        'strategy_version': '2.0',
+        'instrument': 'SPX',
+        'structure_type': 'butterfly',
+        'spread_type': 'credit' if sell else 'debit',
+        'stop_profile': HOLD_TO_EXPIRY_PROFILE,
+        'status': 'pending_fill',
+        'lot': lot,
+        'quantity': target_quantity,
+        'filled_quantity': 0,
+        'stop_quantity': 0,
+        'open_order_id': open_order_id,
+        'open_order': {
+            'status': 'working',
+            'last_sync': now_iso(),
+            'last_sync_epoch': 0,
+            'fully_filled': False,
+            'fill_sync': {
+                'schema_version': 2,
+                'phase': 'fast',
+                'poll_count': 0,
+                'confirm_attempted': False,
+                'next_poll_epoch': 0.0,
+                'audit_due_epoch': None,
+                'audit_attempted': False,
+            },
+        },
+        'entry': {
+            'strategy': strategy,
+            'lot': lot,
+            'side': side,
+            'structure_type': structure_type,
+            'timestamp': now_iso(),
+            'limit_credit': limit_price if sell else 0.0,
+            'limit_debit': limit_price if not sell else 0.0,
+            price_label: limit_price,
+            'body_strike': body_strike,
+            'wing_half': wing_half,
+            'sell': sell,
+        },
+        'body_strike': body_strike,
+        'wing_low': wing_low,
+        'wing_high': wing_high,
+        'legs': legs,
+        'active_stop': None,
+        'stop_history': [],
+        'order_history': [],
+        'phases': {},
         'long_close_order_id': None,
         'long_close_price': None,
         'short_close_price': None,
