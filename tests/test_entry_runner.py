@@ -41,8 +41,9 @@ class TestEntryRunner(unittest.TestCase):
             runner = EntryMonitorRunner(root=tmp)
             now = datetime(2026, 6, 25, 11, 0, 0)
             with patch.object(runner, '_run_worker'):
-                with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
-                    runner.tick(now)
+                with patch.object(runner, '_prepare_meic_tranche_chain', return_value=True):
+                    with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
+                        runner.tick(now)
             self.assertNotIn('11-00_P', runner._fired)
 
     def test_fires_pending_row_in_window(self):
@@ -54,8 +55,9 @@ class TestEntryRunner(unittest.TestCase):
             runner = EntryMonitorRunner(root=tmp)
             now = datetime(2026, 6, 25, 11, 0, 0)
             with patch.object(runner, '_run_worker'):
-                with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
-                    runner.tick(now)
+                with patch.object(runner, '_prepare_meic_tranche_chain', return_value=True):
+                    with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
+                        runner.tick(now)
             plan = load_meic_session_today(tmp)
             self.assertEqual(plan.row_by_slot_key('11-00_P').state, 'entering')
             self.assertIn('11-00_P', runner._fired)
@@ -131,8 +133,9 @@ class TestEntryRunner(unittest.TestCase):
 
             now = datetime(2026, 6, 25, 11, 0, 0)
             with patch.object(runner, '_run_worker'):
-                with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
-                    runner.tick(now)
+                with patch.object(runner, '_prepare_meic_tranche_chain', return_value=True):
+                    with patch('blocks.entry.runner.evaluate_new_risk_gate', return_value=GateDecision(blocked=False)):
+                        runner.tick(now)
             plan = load_meic_session_today(tmp)
             self.assertEqual(plan.row_by_slot_key('11-00_P').state, 'entering')
             self.assertIn('11-00_P', runner._fired)

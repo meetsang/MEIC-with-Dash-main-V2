@@ -27,7 +27,11 @@ class CreditSpreadEntry:
         expiry_yymmdd: str,
         lot: str,
     ) -> List[SpreadCandidate]:
-        """MEIC scheduled entry — width band + credit min/max, first match."""
+        """MEIC scheduled entry — width band + credit min/max, first match.
+
+        Requires prepare_meic_tranche_chain() first (shared REST warm, like Manual Load Chain).
+        P/C workers read mids from that snapshot — no per-worker REST quote fetch.
+        """
         side = side.upper()
         otm_max = resolve_scan_otm_max(credit_min=self.config.credit_min)
         return scan_credit_spreads(
@@ -44,6 +48,7 @@ class CreditSpreadEntry:
             credit_max=self.config.credit_max_for_side(side),
             max_results=1,
             quote_source=self.config.quote_source,
+            use_loaded_chain_only=True,
         )
 
     def scan_for_target(
@@ -55,8 +60,10 @@ class CreditSpreadEntry:
         spread_width: int,
         target_credit: float,
         max_results: int = 3,
-        otm_max: int | None = None,
-    ) -> List[SpreadCandidate]:
+    otm_min: int | None = None,
+    otm_max: int | None = None,
+    use_loaded_chain_only: bool = False,
+) -> List[SpreadCandidate]:
         """Manual spread — fixed width, rank by distance to target credit."""
         if otm_max is None:
             otm_max = resolve_scan_otm_max(target_credit=target_credit)
@@ -67,12 +74,13 @@ class CreditSpreadEntry:
             lot,
             self.log,
             spread_width=spread_width,
-            otm_min=self.config.otm_min,
+            otm_min=otm_min if otm_min is not None else self.config.otm_min,
             otm_max=otm_max if otm_max is not None else self.config.otm_max,
             target_credit=target_credit,
             min_market_credit=self.config.min_market_credit,
             max_results=max_results,
             quote_source=self.config.quote_source,
+            use_loaded_chain_only=use_loaded_chain_only,
         )
 
     def open_candidate(
@@ -121,6 +129,8 @@ class CreditSpreadEntry:
         limit_credit: float,
         strategy: str = 'MEIC_IC',
         active_directory: str | None = None,
+        stop_profile: str | None = None,
+        exit_config: dict | None = None,
     ) -> str:
         from blocks.entry.handshake import write_credit_spread_handshake
 
@@ -136,4 +146,6 @@ class CreditSpreadEntry:
             limit_credit=limit_credit,
             strategy=strategy,
             active_directory=active_directory,
+            stop_profile=stop_profile,
+            exit_config=exit_config,
         )

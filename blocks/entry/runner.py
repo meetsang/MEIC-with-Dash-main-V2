@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 from blocks.entry.manual_worker import run_manual_entry_row
 from blocks.entry.meic_worker import run_meic_entry_row
@@ -31,15 +30,6 @@ _GATE_WARN_AT = 0.0
 _GATE_WARN_COOLDOWN_SEC = 60.0
 
 
-def _side_order() -> List[str]:
-    raw = os.environ.get('MEIC_ENTRY_SIDE_ORDER', 'P,C')
-    return [s.strip().upper() for s in raw.split(',') if s.strip()]
-
-
-def _stagger_sec() -> float:
-    return float(os.environ.get('MEIC_ENTRY_SIDE_STAGGER_SEC', '2.0'))
-
-
 class EntryMonitorRunner:
     """Poll session CSV and spawn one worker thread per due row."""
 
@@ -57,7 +47,6 @@ class EntryMonitorRunner:
         self._fired: Set[str] = set()
         self._missed: Set[str] = set()
         self._lock = threading.Lock()
-        self._lot_side_started_at: Dict[str, float] = {}
         self._manual_probe_requested: Set[str] = set()
 
     def tick(self, now: Optional[datetime] = None) -> None:
@@ -159,25 +148,30 @@ class EntryMonitorRunner:
         if not scheduled:
             self.log.info('Manual REST probe already scheduled/completed for %s', slot_key)
 
-    def _stagger_allows(self, row, *, manual: bool) -> bool:
-        if manual:
+    def _prepare_meic_tranche_chain(self, row) -> bool:
+        try:
+            from blocks.entry.tranche_chain import prepare_meic_tranche_chain
+            from common.broker_factory import get_shared_broker
+            from meic0dte.app import utilities as util
+
+            broker = get_shared_broker()
+            expiry = util.get_expiration_date(self.log)
+            credit_min = float(row.credit_min or 0.60)
+            prepare_meic_tranche_chain(
+                broker,
+                expiry,
+                row.lot,
+                self.log,
+                credit_min=credit_min,
+            )
             return True
-        order = _side_order()
-        side = (row.side or '').upper()
-        if side not in order:
-            return True
-        idx = order.index(side)
-        if idx == 0:
-            return True
-        prev_side = order[idx - 1]
-        prev_key = f'{row.lot}_{prev_side}'
-        with self._lock:
-            if prev_key not in self._fired and prev_key not in self._handles:
-                return False
-            started = self._lot_side_started_at.get(prev_key)
-        if started is None:
+        except Exception as exc:
+            self.log.error(
+                'MEIC tranche chain prep failed lot=%s: %s',
+                row.lot,
+                exc,
+            )
             return False
-        return (time.monotonic() - started) >= _stagger_sec()
 
     def _tick_plan(self, plan, now: datetime, *, manual: bool) -> None:
         strategy = trades_layout.STRATEGY_MANUAL if manual else trades_layout.STRATEGY_MEIC
@@ -196,8 +190,8 @@ class EntryMonitorRunner:
                         self._fired.discard(row.slot_key)
                 if not self._should_fire_meic(row, now.time(), now):
                     continue
-            if not self._stagger_allows(row, manual=manual):
-                continue
+                if not self._prepare_meic_tranche_chain(row):
+                    continue
             # Manual: probe identity is slot_key; MEIC: tranche lot shared by P/C
             tranche_id = row.slot_key if manual else row.lot
             if not self._gate_allows_spawn(
@@ -227,7 +221,6 @@ class EntryMonitorRunner:
                 if row.slot_key in self._fired:
                     continue
                 self._fired.add(row.slot_key)
-                self._lot_side_started_at[row.slot_key] = time.monotonic()
                 thread = threading.Thread(
                     target=self._run_worker,
                     args=(plan.path, row.slot_key, manual, strategy),

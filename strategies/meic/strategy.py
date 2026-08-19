@@ -23,16 +23,16 @@ def meic_entry_block(broker, log=None):
 
 
 MEIC_TRANCHE_SLOTS = [
-    TrancheSlot('10-00', time(9, 59), time(10, 5), 'MEIC_IC'),
-    TrancheSlot('10-30', time(10, 29), time(10, 35), 'MEIC_IC'),
-    TrancheSlot('11-00', time(10, 59), time(11, 5), 'MEIC_IC'),
-    TrancheSlot('12-00', time(11, 59), time(12, 5), 'MEIC_IC'),
-    TrancheSlot('12-30', time(12, 29), time(12, 35), 'MEIC_IC'),
-    TrancheSlot('01-15', time(13, 14), time(13, 20), 'MEIC_IC'),
+    TrancheSlot('10-45', time(10, 44), time(10, 50), 'MEIC_IC'),
+    TrancheSlot('11-15', time(11, 14), time(11, 20), 'MEIC_IC'),
+    TrancheSlot('11-45', time(11, 44), time(11, 50), 'MEIC_IC'),
+    TrancheSlot('12-15', time(12, 14), time(12, 20), 'MEIC_IC'),
+    TrancheSlot('12-45', time(12, 44), time(12, 50), 'MEIC_IC'),
+    TrancheSlot('01-30', time(13, 29), time(13, 35), 'MEIC_IC'),
 ]
 
 # Lots paused on daily session bootstrap (operator can unpause via dashboard).
-MEIC_DEFAULT_PAUSED_LOTS = frozenset({'10-00', '10-30'})
+MEIC_DEFAULT_PAUSED_LOTS = frozenset({'10-45', '11-15'})
 
 
 @dataclass

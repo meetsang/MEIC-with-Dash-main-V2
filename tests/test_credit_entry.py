@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 from blocks.entry.config import CreditEntryConfig
 from blocks.entry.credit_spread import CreditSpreadEntry
@@ -69,10 +70,17 @@ class TestCreditSpreadEntry(unittest.TestCase):
             ),
             log=log,
         )
+        from common.chain_snapshot import warm_chain_snapshot
+
+        warm_chain_snapshot(broker, expiry, log, otm_range=300, spx_price=7225)
+        broker.fetch_option_mids_api = MagicMock()
+        broker.fetch_spx_price_api = MagicMock()
         results = entry.scan_for_meic('P', expiry, 'test-lot')
         self.assertEqual(len(results), 1)
         self.assertGreaterEqual(results[0].market_credit, 0.55)
         self.assertLessEqual(results[0].market_credit, 0.70)
+        broker.fetch_option_mids_api.assert_not_called()
+        broker.fetch_spx_price_api.assert_not_called()
 
     def test_resolve_scan_otm_max(self):
         self.assertEqual(resolve_scan_otm_max(target_credit=0.60), OTM_MAX_DEEP)
