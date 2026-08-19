@@ -15,8 +15,13 @@ from common.streamer_symbols import register_spread_symbols
 from common.strike_guard import leg_overlap_conflict, resolve_leg_overlap
 from common.symbols import build_tastytrade_symbol, parse_canonical, to_tastytrade
 from manual_spread import config as ms_config
-from blocks.entry.spread_scan import SpreadCandidate, resolve_scan_otm_max
+from blocks.entry.spread_scan import SpreadCandidate
+from blocks.entry.butterfly_scan import scan_butterflies as _scan_butterflies
 from blocks.stop import state as state_mod
+from manual_spread.butterfly import (
+    STRUCTURE_TYPES,
+    order_price_for_butterfly,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +96,67 @@ def _candidate_dict(c: SpreadCandidate, rank: int) -> dict:
     }
 
 
+def _butterfly_candidate_dict(c, rank: int) -> dict:
+    return {
+        'rank': rank,
+        'structure_type': c.structure_type,
+        'side': c.side,
+        'body_strike': c.body_strike,
+        'wing_low': c.wing_low,
+        'wing_high': c.wing_high,
+        'wing_half': c.wing_half,
+        'market_price': c.market_price,
+        'distance_from_target': c.distance_from_target,
+        'wing_low_mid': c.wing_low_mid,
+        'body_mid': c.body_mid,
+        'wing_high_mid': c.wing_high_mid,
+        'sell': c.sell,
+        'strike_label': f'{c.wing_low}/{c.body_strike}/{c.wing_high}',
+    }
+
+
+def _is_butterfly_structure(structure_type: str) -> bool:
+    return (structure_type or '').lower() in STRUCTURE_TYPES
+
+
+def load_chain(
+    broker,
+    *,
+    expiry: str,
+    chain_band: int,
+) -> Dict[str, Any]:
+    """REST-fetch ±chain_band pts around SPX for expiry; store until cleared/reloaded."""
+    from common.chain_snapshot import warm_chain_snapshot
+
+    expiry_yymmdd = parse_expiry(expiry)
+    t0 = time.time()
+    snap = warm_chain_snapshot(
+        broker,
+        expiry_yymmdd,
+        log,
+        otm_range=int(chain_band),
+    )
+    return {
+        'status': 'ok',
+        'expiry': expiry_yymmdd,
+        'spx': snap.anchor_strike or snap.spx_price,
+        'anchor_strike': snap.anchor_strike or snap.spx_price,
+        'rest_spx_at_load': snap.spx_price,
+        'chain_band': snap.otm_range,
+        'symbol_count': len(snap.mids),
+        'delta_count': len(snap.deltas),
+        'load_ms': int((time.time() - t0) * 1000),
+    }
+
+
+def clear_chain(expiry: str) -> Dict[str, Any]:
+    from common.chain_snapshot import clear_snapshot
+
+    expiry_yymmdd = parse_expiry(expiry)
+    clear_snapshot(expiry_yymmdd)
+    return {'status': 'ok', 'expiry': expiry_yymmdd, 'cleared': True}
+
+
 def scan_spreads(
     broker,
     *,
@@ -99,7 +165,48 @@ def scan_spreads(
     spread_width: int,
     target_credit: float,
     max_results: int = ms_config.SCAN_MAX_RESULTS,
+    structure_type: str = '',
+    wing_half: int = ms_config.DEFAULT_BF_WING_HALF,
+    otm_min: int | None = None,
+    otm_max: int | None = None,
 ) -> Dict[str, Any]:
+    expiry_yymmdd = parse_expiry(expiry)
+    t0 = time.time()
+
+    if _is_butterfly_structure(structure_type):
+        bf_otm_min = int(otm_min if otm_min is not None else ms_config.BF_OTM_MIN)
+        bf_otm_max = int(otm_max if otm_max is not None else ms_config.BF_OTM_MAX)
+        candidates, diag = _scan_butterflies(
+            broker,
+            structure_type=structure_type,
+            expiry=expiry_yymmdd,
+            wing_half=int(wing_half),
+            target_price=float(target_credit),
+            max_results=max_results,
+            otm_min=bf_otm_min,
+            otm_max=bf_otm_max,
+            use_loaded_chain_only=True,
+        )
+        from common.chain_snapshot import get_snapshot
+
+        snap = get_snapshot(expiry_yymmdd)
+        spx_rounded = (snap.anchor_strike or snap.spx_price) if snap else None
+        meta = STRUCTURE_TYPES[structure_type.lower()]
+        return {
+            'status': 'ok',
+            'scan_kind': 'butterfly',
+            'structure_type': structure_type.lower(),
+            'spx': spx_rounded,
+            'target_price': float(target_credit),
+            'target_credit': float(target_credit),
+            'sell': bool(meta['sell']),
+            'otm_min': bf_otm_min,
+            'otm_max': bf_otm_max,
+            'candidates': [_butterfly_candidate_dict(c, i + 1) for i, c in enumerate(candidates)],
+            'scan_ms': int((time.time() - t0) * 1000),
+            'diagnostics': diag.to_dict(),
+        }
+
     side = side.upper()
     if side not in ('P', 'C'):
         raise ValueError('side must be P or C')
@@ -107,9 +214,10 @@ def scan_spreads(
     lot = 'manual-scan'
     t0 = time.time()
     entry = _manual_entry(broker)
-    otm_max = resolve_scan_otm_max(
-        target_credit=float(target_credit),
-        default=ms_config.OTM_MAX_LOW_TARGET,
+    vert_otm_min = int(otm_min if otm_min is not None else ms_config.DEFAULT_VERTICAL_OTM_MIN)
+    # Respect operator OTM range from the dashboard — do not auto-expand to 300 like MEIC entry.
+    vert_otm_max = int(
+        otm_max if otm_max is not None else ms_config.DEFAULT_VERTICAL_OTM_MAX
     )
     candidates = entry.scan_for_target(
         side,
@@ -118,15 +226,30 @@ def scan_spreads(
         spread_width=int(spread_width),
         target_credit=float(target_credit),
         max_results=max_results,
-        otm_max=otm_max,
+        otm_min=vert_otm_min,
+        otm_max=vert_otm_max,
+        use_loaded_chain_only=True,
     )
-    spx = broker.fetch_spx_price_api() or broker.get_spx_price()
+    from common.chain_snapshot import get_snapshot
+
+    snap = get_snapshot(expiry_yymmdd)
+    spx_rounded = snap.spx_price if snap else None
     return {
         'status': 'ok',
-        'spx': round(spx / 5) * 5 if spx else None,
+        'scan_kind': 'vertical',
+        'spx': spx_rounded,
         'target_credit': float(target_credit),
+        'otm_min': vert_otm_min,
+        'otm_max': vert_otm_max,
         'candidates': [_candidate_dict(c, i + 1) for i, c in enumerate(candidates)],
         'scan_ms': int((time.time() - t0) * 1000),
+        'diagnostics': {
+            'spx': spx_rounded,
+            'otm_min': vert_otm_min,
+            'otm_max': vert_otm_max,
+            'strikes_scanned': max(0, (vert_otm_max - vert_otm_min) // 5 + 1),
+            'candidates_found': len(candidates),
+        },
     }
 
 
@@ -163,6 +286,126 @@ def _resolve_strikes_for_overlap(
             side, shifts, ss, ls,
         )
     return ss, ls, short_symbol, long_symbol, shifts
+
+
+def _write_butterfly_pending(
+    *,
+    lot: str,
+    side: str,
+    structure_type: str,
+    body_strike: int,
+    wing_low: int,
+    wing_high: int,
+    wing_half: int,
+    legs_spec: list,
+    quantity: int,
+    open_order_id: str,
+    limit_price: float,
+    sell: bool,
+    entry_ts: str | None = None,
+) -> str:
+    from common.symbols import to_tastytrade
+
+    active = state_mod.manual_spread_active_dir()
+    os.makedirs(active, exist_ok=True)
+    ts = entry_ts or state_mod.entry_ts_compact()
+    filename = state_mod.stable_trade_filename(lot, side, entry_ts=ts)
+    path = os.path.join(active, filename)
+    leg_rows = [
+        {
+            'symbol': to_tastytrade(leg['symbol']),
+            'action': leg['action'],
+            'qty': int(leg['qty']),
+            'strike': int(leg['strike']),
+            'fill_price': 0.0,
+        }
+        for leg in legs_spec
+    ]
+    state = state_mod.create_butterfly_pending_state(
+        strategy=ms_config.STRATEGY,
+        lot=lot,
+        side=side,
+        structure_type=structure_type,
+        body_strike=int(body_strike),
+        wing_low=int(wing_low),
+        wing_high=int(wing_high),
+        wing_half=int(wing_half),
+        legs=leg_rows,
+        target_quantity=int(quantity),
+        open_order_id=str(open_order_id),
+        limit_price=float(limit_price),
+        sell=bool(sell),
+    )
+    state_mod.save_state(path, state)
+    return path
+
+
+def place_butterfly(
+    broker,
+    *,
+    structure_type: str,
+    expiry: str,
+    body_strike: int,
+    wing_half: int,
+    limit_price: float,
+    quantity: int,
+) -> Dict[str, Any]:
+    from manual_spread.butterfly import build_butterfly_legs, strikes_for_body
+
+    key = (structure_type or '').lower()
+    meta = STRUCTURE_TYPES.get(key)
+    if not meta:
+        return {'status': 'error', 'error': f'unknown structure_type: {structure_type}'}
+
+    expiry_yymmdd = parse_expiry(expiry)
+    side = str(meta['side'])
+    opt_type = str(meta['opt'])
+    sell = bool(meta['sell'])
+    wl, body, wh = strikes_for_body(int(body_strike), int(wing_half))
+    legs = build_butterfly_legs(
+        expiry_yymmdd, opt_type, wl, body, wh, int(quantity), sell=sell,
+    )
+    order_price = order_price_for_butterfly(float(limit_price), sell=sell)
+    result = broker.place_multi_leg_order(legs, price=order_price)
+    if not result.success:
+        return {'status': 'error', 'error': result.message or 'Open order failed'}
+
+    lot = next_lot()
+    legs_spec = []
+    for leg in legs:
+        from common.symbols import parse_canonical
+
+        parsed = parse_canonical(leg.symbol)
+        strike = parsed[2] if parsed else 0
+        legs_spec.append({
+            'symbol': leg.symbol,
+            'action': leg.action,
+            'qty': leg.quantity,
+            'strike': strike,
+        })
+    path = _write_butterfly_pending(
+        lot=lot,
+        side=side,
+        structure_type=key,
+        body_strike=body,
+        wing_low=wl,
+        wing_high=wh,
+        wing_half=int(wing_half),
+        legs_spec=legs_spec,
+        quantity=int(quantity),
+        open_order_id=str(result.order_id),
+        limit_price=float(limit_price),
+        sell=sell,
+    )
+    st = state_mod.load_state(path)
+    state_mod.save_state(path, st)
+    return {
+        'status': 'placed',
+        'filename': os.path.basename(path),
+        'order_id': str(result.order_id),
+        'lot': lot,
+        'filled_quantity': int(st.get('filled_quantity') or 0),
+    }
 
 
 def place_spread(

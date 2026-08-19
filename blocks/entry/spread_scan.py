@@ -100,10 +100,22 @@ def _resolve_overlap_candidate(
         return candidate
 
     if quote_source == 'api':
-        extra = broker.fetch_option_mids_api([short_sym, long_sym])
-        merged = dict(price_map or {})
-        merged.update(extra)
-        price_map = merged
+        if price_map and price_map.get('_loaded_chain_only'):
+            from common.chain_snapshot import lookup_mids_from_snapshot
+
+            extra = lookup_mids_from_snapshot(
+                [short_sym, long_sym],
+                str(price_map.get('_chain_expiry', '')),
+                int(price_map.get('_chain_otm_max', 0)),
+            )
+            merged = dict(price_map)
+            merged.update(extra)
+            price_map = merged
+        else:
+            extra = broker.fetch_option_mids_api([short_sym, long_sym])
+            merged = dict(price_map or {})
+            merged.update(extra)
+            price_map = merged
 
     if quote_source == 'mqtt_fallback':
         from blocks.entry.mqtt_entry_fallback import evaluate_mqtt_entry_pair
@@ -238,15 +250,43 @@ def _fetch_option_mids_robust(
     symbols: List[str],
     log,
     *,
-    chunk_size: int = 40,
+    chunk_size: int | None = None,
+    expiry: str | None = None,
+    otm_max_needed: int | None = None,
+    spx_price: int | None = None,
+    allow_warm: bool = True,
+    force_rest_refresh: bool = False,
 ) -> Dict[str, float]:
     """Fetch option mids in chunks; retry missing symbols in smaller batches."""
+    from common.chain_snapshot import (
+        default_rest_chunk_size,
+        fetch_entry_mids_fresh,
+        fetch_option_mids_with_snapshot,
+    )
+
+    if expiry and otm_max_needed is not None:
+        if force_rest_refresh:
+            return fetch_entry_mids_fresh(
+                broker, symbols, expiry, log, chunk_size=chunk_size,
+            )
+        return fetch_option_mids_with_snapshot(
+            broker,
+            symbols,
+            expiry,
+            log,
+            otm_max_needed=int(otm_max_needed),
+            spx_price=spx_price,
+            chunk_size=chunk_size,
+            allow_warm=allow_warm,
+        )
+
     from common.symbols import to_tastytrade
 
+    batch_size = chunk_size if chunk_size is not None else default_rest_chunk_size()
     unique = list(dict.fromkeys(symbols))
     out: Dict[str, float] = {}
-    for i in range(0, len(unique), chunk_size):
-        batch = unique[i:i + chunk_size]
+    for i in range(0, len(unique), batch_size):
+        batch = unique[i:i + batch_size]
         out.update(broker.fetch_option_mids_api(batch))
 
     missing = [sym for sym in unique if to_tastytrade(sym) not in out]
@@ -357,6 +397,16 @@ def _leg_prices(
         assert price_map is not None
         short_p = price_map.get(to_tastytrade(short_symbol))
         long_p = price_map.get(to_tastytrade(long_symbol))
+        if (short_p is None or long_p is None) and price_map.get('_loaded_chain_only'):
+            from common.chain_snapshot import lookup_mids_from_snapshot
+
+            extra = lookup_mids_from_snapshot(
+                [short_symbol, long_symbol],
+                price_map.get('_chain_expiry', ''),
+                int(price_map.get('_chain_otm_max', 0)),
+            )
+            short_p = short_p or extra.get(to_tastytrade(short_symbol))
+            long_p = long_p or extra.get(to_tastytrade(long_symbol))
         return short_p, long_p
     if quote_source == 'mqtt_fallback':
         return None, None
@@ -443,6 +493,7 @@ def scan_credit_spreads(
     max_results: int = 1,
     check_overlap: bool = True,
     quote_source: str = 'api',
+    use_loaded_chain_only: bool = False,
 ) -> List[SpreadCandidate]:
     """Scan OTM grid and return spread candidates.
 
@@ -453,7 +504,20 @@ def scan_credit_spreads(
     Manual mode: fixed width + target_credit ranking (max_results=N).
     """
     opt_type = opt_type.upper()
-    spx_price = _resolve_spx_price(broker, quote_source, log)
+
+    snap = None
+    if use_loaded_chain_only:
+        from common.chain_snapshot import require_loaded_chain
+
+        # Tranche warm (manual Load Chain pattern) — grid + mids from snapshot, no REST.
+        snap = require_loaded_chain(expiry, otm_max)
+        spx_price = int(snap.spx_price)
+        log.info(
+            'MEIC scan grid anchor (tranche chain): %s (age=%.0fs)',
+            spx_price, snap.age_sec(),
+        )
+    else:
+        spx_price = _resolve_spx_price(broker, quote_source, log)
 
     if spread_width is not None:
         widths = [int(spread_width)]
@@ -464,6 +528,7 @@ def scan_credit_spreads(
 
     legs = list(_iter_spread_legs(widths, opt_type, spx_price, expiry, otm_min, otm_max))
     price_map: Optional[Dict[str, float]] = None
+    rest_price_map: Optional[Dict[str, float]] = None
     active_quote_source = quote_source
     scan_request_epoch: Optional[float] = None
     diagnostics = None
@@ -478,13 +543,33 @@ def scan_credit_spreads(
         )
 
         symbols = [sym for _, _, _, short_sym, long_sym in legs for sym in (short_sym, long_sym)]
-        if ENTRY_MQTT_FALLBACK_ENABLED:
+        if use_loaded_chain_only:
+            from common.chain_snapshot import lookup_mids_from_snapshot
+
+            assert snap is not None
+            price_map = lookup_mids_from_snapshot(symbols, expiry, otm_max)
+            got = len({to_tastytrade(s) for s in symbols if to_tastytrade(s) in price_map})
+            log.info(
+                'Loaded chain lookup expiry=%s (%d/%d symbols, age=%.0fs)',
+                expiry, got, len(symbols), snap.age_sec(),
+            )
+            price_map['_loaded_chain_only'] = True
+            price_map['_chain_expiry'] = expiry
+            price_map['_chain_otm_max'] = otm_max
+            active_quote_source = 'api'
+        elif ENTRY_MQTT_FALLBACK_ENABLED:
             diagnostics = EntryScanDiagnostics()
-            rest_out = attempt_rest_entry_quotes(broker, symbols, log)
+            rest_out = attempt_rest_entry_quotes(
+                broker, symbols, log,
+                expiry=expiry,
+                otm_max_needed=otm_max,
+                spx_price=spx_price,
+            )
             diagnostics.rest_symbols_requested = rest_out.requested
             diagnostics.rest_symbols_valid = rest_out.valid
             diagnostics.cooldown = rest_out.cooldown
             diagnostics.rate_limited = rest_out.rate_limited
+            rest_price_map = dict(rest_out.price_map)
             if rest_out.should_fallback:
                 use_mqtt = (
                     rest_out.cooldown
@@ -507,13 +592,18 @@ def scan_credit_spreads(
                     )
                     price_map = {'_scan_request_epoch': scan_request_epoch}
                 else:
-                    price_map = rest_out.price_map
+                    price_map = rest_price_map
                     active_quote_source = 'api'
             else:
-                price_map = rest_out.price_map
+                price_map = rest_price_map
                 active_quote_source = 'api'
         else:
-            price_map = _fetch_option_mids_robust(broker, symbols, log)
+            price_map = _fetch_option_mids_robust(
+                broker, symbols, log,
+                expiry=expiry,
+                otm_max_needed=otm_max,
+                spx_price=spx_price,
+            )
             active_quote_source = 'api'
     elif quote_source == 'mqtt':
         _register_scan_symbols(
@@ -533,9 +623,16 @@ def scan_credit_spreads(
                 spread_width=width,
                 diagnostics=diagnostics,
             )
-            if pair is None:
+            if pair is not None:
+                short_p, long_p = pair
+            elif rest_price_map:
+                short_p, long_p = _leg_prices(
+                    broker, short_symbol, long_symbol, 'api', rest_price_map,
+                )
+            else:
+                short_p, long_p = None, None
+            if short_p is None or long_p is None:
                 continue
-            short_p, long_p = pair
         else:
             short_p, long_p = _leg_prices(
                 broker, short_symbol, long_symbol, active_quote_source, price_map,

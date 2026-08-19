@@ -11,5 +11,13 @@ OTM_MAX = 250
 # Low target credits need deeper OTM; MEIC band (~0.9–1.85) only needs ~150.
 OTM_MAX_LOW_TARGET = 300
 MIN_MARKET_CREDIT = 0.05
+DEFAULT_BF_WING_HALF = 5
+DEFAULT_BF_TARGET_SELL = 0.50
+DEFAULT_BF_TARGET_BUY = 4.50
+BF_OTM_MIN = 5
+BF_OTM_MAX = 25
+DEFAULT_VERTICAL_OTM_MIN = 5
+DEFAULT_VERTICAL_OTM_MAX = 250
+DEFAULT_CHAIN_BAND = 300
 # Entry worker polls brokerage at least this long before handing off to pending_fill_sync.
 OPEN_FILL_POLL_SEC = 90

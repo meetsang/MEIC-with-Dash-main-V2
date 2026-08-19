@@ -21,7 +21,7 @@ def plan_fields_from_request(data: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         'stop_multiplier': float(data.get('stop_multiplier', 2)),
-        'width': '',
+        'width': str(data.get('width') or ''),
         'credit_min': chase_floor,
         'credit_max': 0.0,
         'chase1_mode': 'chase_same_trade' if chase else '',
@@ -43,6 +43,20 @@ def manual_chase_enabled(row: SessionRow) -> bool:
 
 def apply_plan_metadata(state: Dict[str, Any], row: SessionRow) -> None:
     """Persist session plan choices on trade JSON (manual + MEIC)."""
+    from manual_spread.butterfly import is_butterfly_side
+
+    if is_butterfly_side(row.side):
+        state['stop_profile'] = 'hold_to_expiry'
+        state['plan'] = {
+            'stop_profile': 'hold_to_expiry',
+            'on_unfilled': row.on_unfilled or 'none',
+            'fill_wait_sec': int(row.fill_wait_sec or ms_config.OPEN_FILL_POLL_SEC),
+            'max_attempts': int(row.max_attempts or 1),
+            'strategy': ms_config.STRATEGY,
+            'structure_type': (row.width or '').replace('bf:', ''),
+        }
+        return
+
     state['stop_multiplier'] = float(row.stop_multiplier or 2)
     state['on_unfilled'] = row.on_unfilled or 'none'
     state['plan'] = {

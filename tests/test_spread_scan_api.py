@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -93,3 +93,32 @@ def test_manual_scan_api_no_streamer_symbols():
         quote_source='api',
     )
     assert results == []
+
+
+def test_manual_scan_uses_partial_rest_when_mqtt_fallback_empty():
+    """Low REST coverage triggers MQTT path, but REST mids still count."""
+    broker = MockBroker()
+    broker.prices['SPX'] = 6000.0
+    broker._prices = MagicMock()  # noqa: SLF001 — triggers mqtt fallback branch
+    expiry = '260624'
+    log = logging.getLogger('test')
+    short = build_tastytrade_symbol(expiry, 'P', 5970)
+    long = build_tastytrade_symbol(expiry, 'P', 5945)
+    broker.prices[to_tastytrade(short)] = 0.70
+    broker.prices[to_tastytrade(long)] = 0.10
+
+    with patch('blocks.entry.entry_scan_config.ENTRY_MQTT_FALLBACK_ENABLED', True), \
+         patch('blocks.entry.entry_scan_config.ENTRY_REST_MIN_COVERAGE_PCT', 99.0), \
+         patch('blocks.entry.mqtt_entry_fallback.prepare_mqtt_entry_fallback', return_value=0.0), \
+         patch('blocks.entry.mqtt_entry_fallback.evaluate_mqtt_entry_pair', return_value=None):
+        results = scan_credit_spreads(
+            broker, 'P', expiry, 'test-lot', log,
+            spread_width=25,
+            otm_min=30,
+            otm_max=30,
+            target_credit=0.60,
+            max_results=1,
+            quote_source='api',
+        )
+    assert len(results) == 1
+    assert abs(results[0].market_credit - 0.60) <= 0.05
