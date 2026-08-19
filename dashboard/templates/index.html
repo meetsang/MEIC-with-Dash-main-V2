@@ -80,6 +80,19 @@
     color:#e2e8f0;
     letter-spacing:.02em;
   }
+  /* Strategy sub-panels: visibility toggled via showStrategy() */
+  #strategy-meic[data-visible="true"],
+  #strategy-manual[data-visible="true"],
+  #strategy-skyline[data-visible="true"] { display: block !important; min-height: 200px; }
+  #strategy-meic[data-visible="false"],
+  #strategy-manual[data-visible="false"],
+  #strategy-skyline[data-visible="false"] { display: none !important; }
+  #strategy-skyline .alert-info {
+    background: #1e3a5f;
+    border: 1px solid #3b82f6;
+    color: #e2e8f0;
+  }
+  #strategy-skyline .section-title { color: #94a3b8; }
   .skyline-table .skyline-opt-type {
     font-size:.65rem;
     color:#94a3b8;
@@ -550,21 +563,33 @@
 
     <!-- Strategy sub-tabs -->
     <div class="row g-2 mb-3 pnl-strategy-row" id="pnl-by-strategy-row">
-      <div class="col-4">
+      <div class="col-6 col-lg-2">
         <div class="stat-card">
           <div class="section-title">MEIC P&amp;L</div>
           <div class="stat-val" id="pnl-meic-today">$0.00</div>
         </div>
       </div>
-      <div class="col-4">
+      <div class="col-6 col-lg-2">
         <div class="stat-card">
           <div class="section-title">Manual P&amp;L</div>
           <div class="stat-val" id="pnl-manual-today">$0.00</div>
         </div>
       </div>
-      <div class="col-4">
+      <div class="col-6 col-lg-2">
         <div class="stat-card">
-          <div class="section-title">Combined</div>
+          <div class="section-title">Skyline P&amp;L <span class="badge bg-secondary">Paper</span></div>
+          <div class="stat-val" id="pnl-skyline-today">$0.00</div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-2">
+        <div class="stat-card">
+          <div class="section-title">Perma Bull P&amp;L <span class="badge bg-danger">LIVE</span></div>
+          <div class="stat-val" id="pnl-perma-bull-today">$0.00</div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-2">
+        <div class="stat-card">
+          <div class="section-title">Combined (live)</div>
           <div class="stat-val" id="pnl-combined-today">$0.00</div>
         </div>
       </div>
@@ -573,10 +598,161 @@
       <li class="nav-item"><a class="nav-link active" href="#" onclick="showStrategy('meic');return false;">MEIC</a></li>
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('manual');return false;">Manual Spread</a></li>
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('skyline');return false;">Skyline <span class="badge bg-secondary" id="skyline-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('perma-bull');return false;">Perma Bull PCS <span class="badge bg-danger" id="perma-bull-nav-badge">LIVE</span></a></li>
     </ul>
     <div id="manual-meic-banner" class="alert alert-warning mb-3 d-none" style="border-radius:10px;"></div>
 
-    <div id="strategy-meic">
+    <div id="strategy-skyline" class="strategy-panel" data-visible="false" style="display:none;">
+      <div class="alert alert-secondary mb-3" style="border-radius:10px;border-color:#2d3148;background:#22263a;color:#e2e8f0;" id="skyline-weekend-note">
+        <i class="bi bi-calendar-week me-2"></i>Dashboard works on weekends — review paper history below. No new Skyline entry until the next session day.
+      </div>
+      <div class="alert alert-info mb-3" style="border-radius:10px;" id="skyline-header-alert">
+        <strong id="skyline-header-title">Skyline</strong> — four-butterfly 0DTE strategy. P/L is tracked separately from live MEIC/Manual totals.
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Today's Status</div>
+            <div id="skyline-status" class="fw-semibold mt-1">Loading...</div>
+            <small class="text-muted d-block mt-1" id="skyline-skip-reason"></small>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title" id="skyline-pnl-label">P/L (unrealized)</div>
+            <div id="skyline-pnl" class="fs-4 fw-bold mt-1">$0.00</div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Actions</div>
+            <button class="btn btn-sm btn-outline-warning mt-2" id="skyline-pause-btn" onclick="skylineTogglePause()">Pause Today</button>
+            <button class="btn btn-sm btn-outline-danger mt-2 ms-1" onclick="skylineCloseAll()">Close All</button>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Config</div>
+            <div id="skyline-config-summary" class="small text-muted mt-1">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Today's Overrides</span>
+          <small class="text-muted">Applied on next launcher start (except Pause Today)</small>
+        </div>
+        <div class="card-body py-2">
+          <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Entry time (ET)</label>
+              <input type="text" id="skyline-ov-entry-time" class="form-control form-control-sm"
+                placeholder="09:45" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Gap-down skip (pts)</label>
+              <input type="number" id="skyline-ov-gap-down" class="form-control form-control-sm" min="0" step="1"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Quantity</label>
+              <input type="number" id="skyline-ov-quantity" class="form-control form-control-sm" min="1" step="1"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small mb-0">Max daily loss ($)</label>
+              <input type="number" id="skyline-ov-max-loss" class="form-control form-control-sm" min="0" step="50"
+                placeholder="off"
+                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-12 col-md-4 d-flex gap-2 flex-wrap">
+              <button class="btn btn-sm btn-outline-primary" onclick="skylineSaveOverrides()">Save Overrides</button>
+              <button class="btn btn-sm btn-outline-secondary" onclick="skylineClearOverrides()">Clear Overrides</button>
+            </div>
+          </div>
+          <div id="skyline-ov-status" class="small text-muted mt-2"></div>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Butterflies</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 skyline-table">
+            <thead><tr>
+              <th>Name</th><th>Strikes</th><th>Status</th><th>Net Debit</th><th>Unrealized P/L</th><th></th>
+            </tr></thead>
+            <tbody id="skyline-structures"><tr><td colspan="6" class="text-muted text-center py-3">No data</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Recent History</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 skyline-table">
+            <thead><tr>
+              <th>Date</th><th>Status</th><th>ATM</th><th>Realized P/L</th><th>Paper</th>
+            </tr></thead>
+            <tbody id="skyline-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /strategy-skyline -->
+
+    <div id="strategy-perma-bull" class="strategy-panel" data-visible="false" style="display:none;">
+      <div class="alert alert-info mb-3" style="border-radius:10px;" id="perma-bull-header-alert">
+        <strong id="perma-bull-header-title">Perma Bull PCS (Live)</strong> — 5-wide 0DTE put credit spread targeting ~$1.00 credit at 8:45 AM ET. Resting profit-target spread close at 15¢ is placed as soon as the entry fills (no short-leg stop).
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Today's Status</div>
+            <div id="perma-bull-status" class="fw-semibold mt-1">Loading...</div>
+            <small class="text-muted d-block mt-1" id="perma-bull-skip-reason"></small>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title" id="perma-bull-pnl-label">P/L (unrealized)</div>
+            <div id="perma-bull-pnl" class="fs-4 fw-bold mt-1">$0.00</div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Actions</div>
+            <button class="btn btn-sm btn-outline-warning mt-2" id="perma-bull-pause-btn" onclick="permaBullTogglePause()">Pause Today</button>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Config</div>
+            <div id="perma-bull-config-summary" class="small text-muted mt-1">Loading...</div>
+          </div>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Today's Spread</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr>
+              <th>Structure</th><th>Strikes</th><th>Status</th><th>Credit</th><th>P/L</th>
+            </tr></thead>
+            <tbody id="perma-bull-spread"><tr><td colspan="5" class="text-muted text-center py-3">No data</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header">Recent History</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr>
+              <th>Date</th><th>Status</th><th>Strikes</th><th>Credit</th><th>Realized P/L</th>
+            </tr></thead>
+            <tbody id="perma-bull-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /strategy-perma-bull -->
+
+    <div id="strategy-meic" class="strategy-panel" data-visible="true">
     <!-- Top Row: PnL + Bot Status + System Health -->
     <div class="row g-3 mb-3">
       <div class="col-md-3">
@@ -711,7 +887,7 @@
     </div><!-- /strategy-meic -->
 
     <!-- ═══ MANUAL SPREAD TAB ═══ -->
-    <div id="strategy-manual" style="display:none;">
+    <div id="strategy-manual" class="strategy-panel" data-visible="false" style="display:none;">
       <div class="row g-3 mb-3">
         <div class="col-md-4">
           <div class="pnl-card pnl-zero">
@@ -733,22 +909,41 @@
       </div>
 
       <div class="card mb-3">
-        <div class="card-header"><i class="bi bi-search me-2"></i>1. Scan Parameters</div>
+        <div class="card-header"><i class="bi bi-search me-2"></i>1. Load Chain &amp; Search</div>
         <div class="card-body">
-          <div class="row g-2 align-items-end">
-            <div class="col-md-2"><label class="section-title">Underlying</label><input class="form-control form-control-sm" id="ms-underlying" value="SPX" readonly style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
-            <div class="col-md-2"><label class="section-title">Expiry</label><input type="date" class="form-control form-control-sm" id="ms-expiry" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
-            <div class="col-md-2"><label class="section-title">Side</label>
-              <select class="form-select form-select-sm" id="ms-side" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-                <option value="P" selected>Put (PCS)</option><option value="C">Call (CCS)</option>
+          <div class="border rounded p-2" style="border-color:#2d3148;background:#12141c;">
+            <div class="small text-muted mb-2">Load chain — pick underlying &amp; expiry, then REST pull (stays until Clear or reload)</div>
+            <div class="row g-2 align-items-end">
+              <div class="col-md-2"><label class="section-title">Underlying</label><input class="form-control form-control-sm" id="ms-underlying" value="SPX" readonly style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+              <div class="col-md-2"><label class="section-title">Expiry</label><input type="date" class="form-control form-control-sm" id="ms-expiry" onchange="msRefreshChainStatus()" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+              <div class="col-md-2"><label class="section-title">Chain ± pts</label><input type="number" min="25" step="5" class="form-control form-control-sm" id="ms-chain-band" value="300" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;" title="±points from SPX to fetch (calls + puts)"></div>
+              <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#0ea5e9;border:none;color:#fff;" id="ms-load-chain-btn" onclick="msLoadChain()"><i class="bi bi-cloud-download me-1"></i>Load Chain</button></div>
+              <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#374151;border:none;color:#e2e8f0;" id="ms-clear-chain-btn" onclick="msClearChain()"><i class="bi bi-x-circle me-1"></i>Clear</button></div>
+            </div>
+            <div id="ms-chain-status" class="small text-muted mt-2">Chain: not loaded</div>
+          </div>
+          <div class="row g-2 align-items-end mt-3">
+            <div class="col-md-2"><label class="section-title">Structure</label>
+              <select class="form-select form-select-sm" id="ms-structure" onchange="msOnStructureChange()" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                <option value="vertical_p" selected>Put Credit Spread (PCS)</option>
+                <option value="vertical_c">Call Credit Spread (CCS)</option>
+                <option value="sell_call_bf">Sell Call Butterfly (1-2-1)</option>
+                <option value="buy_call_bf">Buy Call Butterfly (1-2-1)</option>
+                <option value="sell_put_bf">Sell Put Butterfly (1-2-1)</option>
+                <option value="buy_put_bf">Buy Put Butterfly (1-2-1)</option>
               </select>
             </div>
-            <div class="col-md-1"><label class="section-title">Width</label><input type="number" class="form-control form-control-sm" id="ms-width" value="25" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
-            <div class="col-md-2"><label class="section-title">Target $</label><input type="number" step="0.05" class="form-control form-control-sm" id="ms-target" value="0.60" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-1" id="ms-width-col"><label class="section-title" id="ms-width-label">Width</label><input type="number" class="form-control form-control-sm" id="ms-width" value="25" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
+            <div class="col-md-2"><label class="section-title" id="ms-target-label">Target credit $</label><input type="number" step="0.05" class="form-control form-control-sm" id="ms-target" value="0.60" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
             <div class="col-md-1"><label class="section-title">Qty</label><input type="number" class="form-control form-control-sm" id="ms-qty" value="1" min="1" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;"></div>
-            <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#6366f1;border:none;color:#fff;" id="ms-scan-btn" onclick="msScan()"><i class="bi bi-search me-1"></i>Scan</button></div>
           </div>
-          <div id="ms-scan-status" class="small text-muted mt-2 d-none">Scanning&hellip;</div>
+          <div class="row g-2 align-items-end mt-2">
+            <div class="col-md-2"><label class="section-title" id="ms-otm-min-label">Search OTM min</label><input type="number" min="5" step="5" class="form-control form-control-sm" id="ms-otm-min" value="5" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;" title="Nearest strike distance from SPX to search"></div>
+            <div class="col-md-2"><label class="section-title" id="ms-otm-max-label">Search OTM max</label><input type="number" min="5" step="5" class="form-control form-control-sm" id="ms-otm-max" value="250" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;" title="Farthest strike distance from SPX to search (must be ≤ Chain ± pts)"></div>
+            <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#6366f1;border:none;color:#fff;" id="ms-scan-btn" onclick="msScan()"><i class="bi bi-search me-1"></i>Search</button></div>
+            <div class="col-md-6"><small class="text-muted" id="ms-otm-hint">Search uses loaded chain for expiry above — no REST. Search OTM max must be ≤ Chain ± pts.</small></div>
+          </div>
+          <div id="ms-scan-status" class="small text-muted mt-2 d-none">Searching&hellip;</div>
         </div>
       </div>
 
@@ -756,7 +951,7 @@
         <div class="card-header"><i class="bi bi-list-ol me-2"></i>2. Candidates</div>
         <div class="card-body p-0">
           <table class="table table-sm table-hover mb-0">
-            <thead><tr><th></th><th>Strikes</th><th>Mkt $</th><th>&Delta; Target</th><th>Short</th><th>Long</th><th>Warn</th></tr></thead>
+            <thead><tr><th></th><th id="ms-cand-strikes-h">Strikes</th><th id="ms-cand-mkt-h">Mkt $</th><th>&Delta; Target</th><th id="ms-cand-leg1-h">Short</th><th id="ms-cand-leg2-h">Long</th><th>Warn</th></tr></thead>
             <tbody id="ms-candidates"><tr><td colspan="7" class="text-center text-muted py-3">Run Scan to find spreads</td></tr></tbody>
           </table>
         </div>
@@ -767,12 +962,12 @@
         <div class="card-body">
           <div class="row g-2 align-items-end mb-2">
             <div class="col-md-3"><label class="section-title">Selected</label><div id="ms-selected-label" class="font-monospace">&mdash;</div></div>
-            <div class="col-md-2"><label class="section-title">Limit credit</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-limit" value="0.60"></div>
+            <div class="col-md-2"><label class="section-title" id="ms-limit-label">Limit credit</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-limit" value="0.60"></div>
             <div class="col-md-1"><label class="section-title">Qty</label><input type="number" class="form-control form-control-sm plan-input" id="ms-place-qty" value="1" min="1"></div>
-            <div class="col-md-1"><label class="section-title">Stop&times;</label><input type="number" step="0.1" min="0.5" max="10" class="form-control form-control-sm plan-input" id="ms-place-stop" value="2" title="Stop multiplier (e.g. 1.5, 2, 3)"></div>
+            <div class="col-md-1 ms-vertical-only"><label class="section-title">Stop&times;</label><input type="number" step="0.1" min="0.5" max="10" class="form-control form-control-sm plan-input" id="ms-place-stop" value="2" title="Stop multiplier (e.g. 1.5, 2, 3)"></div>
             <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#16a34a;border:none;color:#fff;" id="ms-place-btn" onclick="msPlace()" disabled>Place Trade</button></div>
           </div>
-          <div class="row g-2 align-items-end">
+          <div class="row g-2 align-items-end ms-vertical-only">
             <div class="col-md-3"><label class="section-title">If unfilled after wait</label>
               <select class="form-select form-select-sm plan-input" id="ms-place-unfilled" onchange="msToggleChaseFields()">
                 <option value="none" selected>Leave order working</option>
@@ -784,6 +979,7 @@
             <div class="col-md-2 ms-chase-fields d-none"><label class="section-title">Max reprices</label><input type="number" min="1" max="20" class="form-control form-control-sm plan-input" id="ms-place-chase-max" value="3" title="Cancel and reprice at most this many times"></div>
           </div>
           <p class="ms-place-hint mt-2 mb-0" id="ms-place-hint">Stop&times; and fill settings are saved to session CSV and trade JSON. Width comes from scan (step 1).</p>
+          <p class="ms-bf-hint mt-2 mb-0 d-none" id="ms-bf-hint">Butterflies use hold-to-expiry — no automated stop. Close manually from the active table.</p>
         </div>
       </div>
 
@@ -818,98 +1014,6 @@
         </div>
       </div>
     </div><!-- /strategy-manual -->
-
-    <div id="strategy-skyline" style="display:none;">
-      <div class="alert alert-info mb-3" style="border-radius:10px;" id="skyline-header-alert">
-        <strong id="skyline-header-title">Skyline</strong> — four-butterfly 0DTE strategy. P/L is tracked separately from live MEIC/Manual totals.
-      </div>
-      <div class="row g-3 mb-3">
-        <div class="col-md-3">
-          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
-            <div class="section-title">Today's Status</div>
-            <div id="skyline-status" class="fw-semibold mt-1">Loading...</div>
-            <small class="text-muted d-block mt-1" id="skyline-skip-reason"></small>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
-            <div class="section-title" id="skyline-pnl-label">P/L (unrealized)</div>
-            <div id="skyline-pnl" class="fs-4 fw-bold mt-1">$0.00</div>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
-            <div class="section-title">Actions</div>
-            <button class="btn btn-sm btn-outline-warning mt-2" id="skyline-pause-btn" onclick="skylineTogglePause()">Pause Today</button>
-            <button class="btn btn-sm btn-outline-danger mt-2 ms-1" onclick="skylineCloseAll()">Close All</button>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
-            <div class="section-title">Config</div>
-            <div id="skyline-config-summary" class="small text-muted mt-1">Loading...</div>
-          </div>
-        </div>
-      </div>
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <span>Today's Overrides</span>
-          <small class="text-muted">Applied on next launcher start (except Pause Today)</small>
-        </div>
-        <div class="card-body py-2">
-          <div class="row g-2 align-items-end">
-            <div class="col-6 col-md-2">
-              <label class="form-label small mb-0">Entry time (ET)</label>
-              <input type="text" id="skyline-ov-entry-time" class="form-control form-control-sm"
-                placeholder="09:45" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-            </div>
-            <div class="col-6 col-md-2">
-              <label class="form-label small mb-0">Gap-down skip (pts)</label>
-              <input type="number" id="skyline-ov-gap-down" class="form-control form-control-sm" min="0" step="1"
-                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-            </div>
-            <div class="col-6 col-md-2">
-              <label class="form-label small mb-0">Quantity</label>
-              <input type="number" id="skyline-ov-quantity" class="form-control form-control-sm" min="1" step="1"
-                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-            </div>
-            <div class="col-6 col-md-2">
-              <label class="form-label small mb-0">Max daily loss ($)</label>
-              <input type="number" id="skyline-ov-max-loss" class="form-control form-control-sm" min="0" step="50"
-                placeholder="off"
-                style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-            </div>
-            <div class="col-12 col-md-4 d-flex gap-2 flex-wrap">
-              <button class="btn btn-sm btn-outline-primary" onclick="skylineSaveOverrides()">Save Overrides</button>
-              <button class="btn btn-sm btn-outline-secondary" onclick="skylineClearOverrides()">Clear Overrides</button>
-            </div>
-          </div>
-          <div id="skyline-ov-status" class="small text-muted mt-2"></div>
-        </div>
-      </div>
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Butterflies</div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0 skyline-table">
-            <thead><tr>
-              <th>Name</th><th>Strikes</th><th>Status</th><th>Net Debit</th><th>Unrealized P/L</th><th></th>
-            </tr></thead>
-            <tbody id="skyline-structures"><tr><td colspan="6" class="text-muted text-center py-3">No data</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Recent History</div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0 skyline-table">
-            <thead><tr>
-              <th>Date</th><th>Status</th><th>ATM</th><th>Realized P/L</th><th>Paper</th>
-            </tr></thead>
-            <tbody id="skyline-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </div><!-- /strategy-skyline -->
 
   </div><!-- /tab-today -->
 
@@ -964,9 +1068,9 @@
           <select id="hist-money-filter-cal" class="form-select form-select-sm"
             style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
             onchange="onHistoryMoneyChange(this.value)">
+            <option value="all" selected>All $</option>
             <option value="live">Live $</option>
             <option value="paper">Paper $</option>
-            <option value="all">All $</option>
           </select>
           <div class="cal-toggle">
             <button class="cal-toggle-btn active" id="cal-pnl-btn" onclick="setCalendarMode('pnl')">PNL</button>
@@ -1014,9 +1118,9 @@
           <select id="hist-money-filter" class="form-select form-select-sm"
             style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
             onchange="onHistoryMoneyChange(this.value)">
+            <option value="all" selected>All $</option>
             <option value="live">Live $</option>
             <option value="paper">Paper $</option>
-            <option value="all">All $</option>
           </select>
           <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
         </div>
@@ -1029,7 +1133,7 @@
     <!-- Trade History Table -->
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-table me-2"></i>All Trades <small class="text-muted" id="hist-money-note">(live money only)</small></span>
+        <span><i class="bi bi-table me-2"></i>All Trades <small class="text-muted" id="hist-money-note">(live + paper)</small></span>
         <div class="d-flex gap-2 align-items-center">
           <input type="date" id="filter-date" class="form-control form-control-sm"
             style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:160px;"
@@ -1303,10 +1407,10 @@
 </div><!-- /container -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.2/dist/socket.io.min.js"></script>
+<script src="/static/js/socket.io.min.js"></script>
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const LOTS  = ['10-00','10-30','11-00','12-00','12-30','01-15'];
+const LOTS  = ['10-45','11-15','11-45','12-15','12-45','01-30'];
 const SIDES = ['C','P'];
 const STATE_DOT = {
   pending:'dot-grey', open:'dot-green', closing:'dot-blue', working:'dot-yellow',
@@ -1353,6 +1457,8 @@ let setupLogsPanelOpen = false;
 let logPollTimer = null;
 const SKYLINE_POLL_MS = 15000;
 let skylinePollTimer = null;
+const PERMA_BULL_POLL_MS = 15000;
+let permaBullPollTimer = null;
 
 function startSkylinePolling() {
   if (skylinePollTimer) return;
@@ -1367,6 +1473,19 @@ function stopSkylinePolling() {
   skylinePollTimer = null;
 }
 
+function startPermaBullPolling() {
+  if (permaBullPollTimer) return;
+  permaBullPollTimer = setInterval(() => {
+    if (activeTab === 'today' && activeStrategy === 'perma-bull') loadPermaBull();
+  }, PERMA_BULL_POLL_MS);
+}
+
+function stopPermaBullPolling() {
+  if (!permaBullPollTimer) return;
+  clearInterval(permaBullPollTimer);
+  permaBullPollTimer = null;
+}
+
 function startSummaryPolling() {
   if (summaryPollTimer) return;
   summaryPollTimer = setInterval(() => {
@@ -1374,23 +1493,74 @@ function startSummaryPolling() {
   }, SUMMARY_POLL_MS);
 }
 
-try {
-  socket = io();
-  socket.on('connect', () => {
-    document.getElementById('conn-dot').className = 'status-dot dot-green';
-    document.getElementById('conn-label').textContent = 'Live';
+function initSocket() {
+  if (typeof io !== 'function') {
+    console.warn('Socket.IO client not loaded — live updates disabled (summary polling still active)');
+    const label = document.getElementById('conn-label');
+    if (label) label.textContent = 'Polling';
+    return;
+  }
+  try {
+    socket = io({ transports: ['websocket', 'polling'] });
+    socket.on('connect', () => {
+      const dot = document.getElementById('conn-dot');
+      const label = document.getElementById('conn-label');
+      if (dot) dot.className = 'status-dot dot-green';
+      if (label) label.textContent = 'Live';
+    });
+    socket.on('disconnect', () => {
+      const dot = document.getElementById('conn-dot');
+      const label = document.getElementById('conn-label');
+      if (dot) dot.className = 'status-dot dot-red';
+      if (label) label.textContent = 'Disconnected';
+    });
+    socket.on('update', data => { lastData = data; if (activeTab === 'today') render(data); });
+  } catch (e) {
+    console.error('socket init:', e);
+  }
+}
+
+function ensureSocketIoClient() {
+  if (typeof io === 'function') return Promise.resolve();
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = '/static/js/socket.io.min.js';
+    s.onload = () => resolve();
+    s.onerror = () => {
+      const fallback = document.createElement('script');
+      fallback.src = 'https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js';
+      fallback.onload = () => resolve();
+      fallback.onerror = () => {
+        console.warn('Socket.IO client unavailable');
+        resolve();
+      };
+      document.head.appendChild(fallback);
+    };
+    document.head.appendChild(s);
   });
-  socket.on('disconnect', () => {
-    document.getElementById('conn-dot').className = 'status-dot dot-red';
-    document.getElementById('conn-label').textContent = 'Disconnected';
-  });
-  socket.on('update', data => { lastData = data; if (activeTab === 'today') render(data); });
-} catch(e) { console.error('socket init:', e); }
+}
+
+function setStrategyPanelVisible(el, visible) {
+  if (!el) return;
+  el.style.display = visible ? 'block' : 'none';
+  el.classList.toggle('active', visible);
+  el.dataset.visible = visible ? 'true' : 'false';
+}
 
 document.addEventListener('DOMContentLoaded', () => {
+  ensureSocketIoClient().then(() => {
+    initSocket();
+  });
   const exp = document.getElementById('ms-expiry');
   if (exp) exp.value = new Date().toISOString().slice(0, 10);
+  if (typeof msOnStructureChange === 'function') msOnStructureChange();
+  if (typeof msRefreshChainStatus === 'function') msRefreshChainStatus();
   startSummaryPolling();
+  // Ensure MEIC panel visible on first load (inline display wins over any stale CSS)
+  setStrategyPanelVisible(document.getElementById('strategy-meic'), activeStrategy === 'meic');
+  setStrategyPanelVisible(document.getElementById('strategy-manual'), activeStrategy === 'manual');
+  setStrategyPanelVisible(document.getElementById('strategy-skyline'), activeStrategy === 'skyline');
+  setStrategyPanelVisible(document.getElementById('strategy-perma-bull'), activeStrategy === 'perma-bull');
   const planWrap = document.getElementById('session-plan-table-wrap');
   if (planWrap) {
     planWrap.addEventListener('input', onPlanFieldEdit);
@@ -1412,22 +1582,46 @@ function showTab(tab) {
   });
   if (tab === 'history') loadHistory();
   if (tab === 'gex') gexInit();
+  if (tab === 'today' && activeStrategy === 'skyline') loadSkyline();
+  if (tab === 'today' && activeStrategy === 'perma-bull') loadPermaBull();
 }
 
 function showStrategy(s) {
   activeStrategy = s;
-  document.getElementById('strategy-meic').style.display = (s === 'meic') ? '' : 'none';
-  document.getElementById('strategy-manual').style.display = (s === 'manual') ? '' : 'none';
+  const meicEl = document.getElementById('strategy-meic');
+  const manualEl = document.getElementById('strategy-manual');
   const skylineEl = document.getElementById('strategy-skyline');
-  if (skylineEl) skylineEl.style.display = (s === 'skyline') ? '' : 'none';
+  const permaBullEl = document.getElementById('strategy-perma-bull');
+  const pnlRow = document.getElementById('pnl-by-strategy-row');
+  setStrategyPanelVisible(meicEl, s === 'meic');
+  setStrategyPanelVisible(manualEl, s === 'manual');
+  setStrategyPanelVisible(skylineEl, s === 'skyline');
+  setStrategyPanelVisible(permaBullEl, s === 'perma-bull');
+  if (!skylineEl && s === 'skyline') {
+    toast('Skyline panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
+  }
+  if (!permaBullEl && s === 'perma-bull') {
+    toast('Perma Bull PCS panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
+  }
+  // Keep summary row visible so the tab never looks empty below the sub-tabs
+  if (pnlRow) pnlRow.style.display = '';
+  const strategyKeys = ['meic', 'manual', 'skyline', 'perma-bull'];
   document.querySelectorAll('#strategyTabs .nav-link').forEach((el, i) => {
-    el.classList.toggle('active', ['meic','manual','skyline'][i] === s);
+    el.classList.toggle('active', strategyKeys[i] === s);
   });
   if (s === 'skyline') {
+    setSkylineLoading(true);
     loadSkyline();
     startSkylinePolling();
+    stopPermaBullPolling();
+  } else if (s === 'perma-bull') {
+    setPermaBullLoading(true);
+    loadPermaBull();
+    startPermaBullPolling();
+    stopSkylinePolling();
   } else {
     stopSkylinePolling();
+    stopPermaBullPolling();
   }
   if (lastData) render(lastData);
 }
@@ -1470,34 +1664,42 @@ function render(d) {
   // Status banner
   const banner = document.getElementById('status-banner');
   const bs = d.bot_status || {};
-  if (bs.state === 'skipped') {
-    banner.className = 'alert alert-warning mb-3';
-    banner.style.borderRadius = '10px';
-    banner.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-2"></i><strong>No Trading Today</strong> &mdash; ${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
-    banner.classList.remove('d-none');
-  } else if (bs.state === 'stopped' && bs.reason) {
-    banner.className = 'alert alert-secondary mb-3';
-    banner.style.borderRadius = '10px';
-    banner.innerHTML = `<i class="bi bi-info-circle me-2"></i>${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
-    banner.classList.remove('d-none');
-  } else {
-    banner.classList.add('d-none');
+  if (banner) {
+    if (bs.state === 'skipped') {
+      banner.className = 'alert alert-warning mb-3';
+      banner.style.borderRadius = '10px';
+      banner.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-2"></i><strong>No Trading Today</strong> &mdash; ${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
+      banner.classList.remove('d-none');
+    } else if (bs.state === 'stopped' && bs.reason) {
+      banner.className = 'alert alert-secondary mb-3';
+      banner.style.borderRadius = '10px';
+      banner.innerHTML = `<i class="bi bi-info-circle me-2"></i>${bs.reason} <span class="text-muted small ms-2">(${bs.ts})</span>`;
+      banner.classList.remove('d-none');
+    } else {
+      banner.classList.add('d-none');
+    }
   }
 
   renderTradingGateBanner(d.trading_gate || {});
 
-  document.getElementById('spx-price').textContent = d.spx !== undefined && d.spx !== '–' ? Number(d.spx).toFixed(2) : '–';
-  document.getElementById('last-updated').textContent = d.timestamp;
+  const spxEl = document.getElementById('spx-price');
+  if (spxEl) spxEl.textContent = d.spx !== undefined && d.spx !== '–' ? Number(d.spx).toFixed(2) : '–';
+  const updatedEl = document.getElementById('last-updated');
+  if (updatedEl) updatedEl.textContent = d.timestamp || '–';
 
   renderStrategyPnlToday(d);
 
-  // PnL card (active strategy detail)
+  if (activeStrategy === 'skyline') return;
+
+  // PnL card (MEIC active strategy detail)
   const pnlEl   = document.getElementById('day-pnl');
   const pnlCard = document.getElementById('pnl-card');
-  pnlEl.textContent = fmtPnl(d.day_pnl);
-  pnlEl.className   = 'fs-2 fw-bold ' + (d.day_pnl >= 0 ? 'text-success' : 'text-danger');
-  pnlCard.className = 'pnl-card ' + (d.day_pnl > 0 ? 'pnl-pos' : d.day_pnl < 0 ? 'pnl-neg' : 'pnl-zero');
-  renderSlippage('day-slippage', d.day_slippage);
+  if (pnlEl && pnlCard) {
+    pnlEl.textContent = fmtPnl(d.day_pnl);
+    pnlEl.className   = 'fs-2 fw-bold ' + (d.day_pnl >= 0 ? 'text-success' : 'text-danger');
+    pnlCard.className = 'pnl-card ' + (d.day_pnl > 0 ? 'pnl-pos' : d.day_pnl < 0 ? 'pnl-neg' : 'pnl-zero');
+    renderSlippage('day-slippage', d.day_slippage);
+  }
 
   // Bot / launcher status (bot_status.json when run.py started externally)
   const dotEl = document.getElementById('bot-dot');
@@ -1514,12 +1716,14 @@ function render(d) {
     botLabel = 'Skipped';
     botDot = 'dot-yellow';
   }
-  document.getElementById('bot-label').textContent = botLabel;
-  dotEl.className = 'status-dot ' + botDot;
+  const botLabelEl = document.getElementById('bot-label');
+  if (botLabelEl) botLabelEl.textContent = botLabel;
+  if (dotEl) dotEl.className = 'status-dot ' + botDot;
   if (reasonEl) {
     reasonEl.textContent = d.bot_running && bs.reason ? bs.reason : (bs.ts ? `Last update ${bs.ts}` : '');
   }
-  document.getElementById('open-count').textContent = `${d.open_count} open, ${d.closed_count} closed`;
+  const openCountEl = document.getElementById('open-count');
+  if (openCountEl) openCountEl.textContent = `${d.open_count} open, ${d.closed_count} closed`;
 
   // System health
   renderHealth(d.system_health || {});
@@ -1552,13 +1756,16 @@ function renderTradingGateBanner(tg) {
     title = 'REST UNAVAILABLE — NEW ENTRIES BLOCKED';
   }
   const detail = tg.detail || tg.reason || '';
+  const cooldownHint = (tg.cooldown_active && tg.cooldown_remaining_sec > 0)
+    ? ` (~${Math.ceil(tg.cooldown_remaining_sec)}s cooldown)`
+    : '';
   const resumeBtn = tg.resume_allowed
     ? `<button class="btn btn-sm btn-success ms-2" onclick="resumeNewEntries()">Resume New Entries</button>`
     : '';
   el.className = cls;
   el.style.borderRadius = '10px';
   el.innerHTML = `<i class="bi bi-shield-exclamation me-2"></i><strong>${title}</strong>`
-    + (detail ? ` &mdash; ${detail}` : '')
+    + (detail ? ` &mdash; ${detail}${cooldownHint}` : cooldownHint)
     + ` <span class="text-muted small">Stops, closes, and monitoring remain active.</span>`
     + `<button class="btn btn-sm btn-outline-light ms-2" onclick="recheckRest()">Re-check REST</button>`
     + resumeBtn;
@@ -1740,9 +1947,13 @@ function setPnlEl(id, value) {
 function renderStrategyPnlToday(d) {
   const meic = d.meic_pnl != null ? d.meic_pnl : (d.day_pnl || 0);
   const manual = d.manual_pnl || 0;
-  const combined = d.combined_pnl != null ? d.combined_pnl : (meic + manual);
+  const skyline = d.skyline_pnl || 0;
+  const permaBull = d.perma_bull_pnl || 0;
+  const combined = d.combined_pnl != null ? d.combined_pnl : (meic + manual + permaBull);
   setPnlEl('pnl-meic-today', meic);
   setPnlEl('pnl-manual-today', manual);
+  setPnlEl('pnl-skyline-today', skyline);
+  setPnlEl('pnl-perma-bull-today', permaBull);
   setPnlEl('pnl-combined-today', combined);
 }
 
@@ -2475,15 +2686,173 @@ async function unpauseSelected() {
 }
 
 // ── Manual Spread ─────────────────────────────────────────────────────────────
-function msScanPayload() {
+function msIsButterfly() {
+  const s = document.getElementById('ms-structure').value;
+  return s.endsWith('_bf');
+}
+
+function msOnStructureChange() {
+  const bf = msIsButterfly();
+  const struct = document.getElementById('ms-structure').value;
+  const widthInput = document.getElementById('ms-width');
+  const widthLabel = document.getElementById('ms-width-label');
+  const targetLabel = document.getElementById('ms-target-label');
+  const limitLabel = document.getElementById('ms-limit-label');
+  const targetInput = document.getElementById('ms-target');
+  document.querySelectorAll('.ms-vertical-only').forEach(el => el.classList.toggle('d-none', bf));
+  document.getElementById('ms-place-hint').classList.toggle('d-none', bf);
+  document.getElementById('ms-bf-hint').classList.toggle('d-none', !bf);
+  document.getElementById('ms-cand-leg1-h').textContent = bf ? 'Wing low' : 'Short';
+  document.getElementById('ms-cand-leg2-h').textContent = bf ? 'Wing high' : 'Long';
+  if (bf) {
+    widthLabel.textContent = 'Wing ±';
+    if (parseInt(widthInput.value, 10) > 10) widthInput.value = '5';
+    document.getElementById('ms-otm-min').value = '5';
+    document.getElementById('ms-otm-max').value = '25';
+    document.getElementById('ms-otm-hint').textContent =
+      'Call flies: body above SPX only. Put flies below. Search OTM ≤ Chain ± pts.';
+    const sell = struct.startsWith('sell_');
+    targetLabel.textContent = sell ? 'Target credit $' : 'Max debit $';
+    limitLabel.textContent = sell ? 'Limit credit' : 'Limit debit';
+    targetInput.value = sell ? '0.50' : '4.50';
+    document.getElementById('ms-limit').value = targetInput.value;
+  } else {
+    widthLabel.textContent = 'Width';
+    document.getElementById('ms-otm-min').value = '5';
+    document.getElementById('ms-otm-max').value = '250';
+    document.getElementById('ms-otm-hint').textContent =
+      'Search OTM range only — must be ≤ Chain ± pts. Widen chain band for 1+ DTE.';
+    targetLabel.textContent = 'Target credit $';
+    limitLabel.textContent = 'Limit credit';
+    if (struct === 'vertical_c') targetInput.value = '0.60';
+    else targetInput.value = '0.60';
+  }
+}
+
+function msChainPayload() {
+  const band = parseInt(document.getElementById('ms-chain-band').value, 10);
   return {
     underlying: document.getElementById('ms-underlying').value,
     expiry: document.getElementById('ms-expiry').value,
-    side: document.getElementById('ms-side').value,
+    chain_band: Number.isFinite(band) ? band : 300,
+  };
+}
+
+function msUpdateChainStatus(d) {
+  const el = document.getElementById('ms-chain-status');
+  if (!el) return;
+  if (!d || !d.loaded) {
+    el.textContent = 'Chain: not loaded — set underlying, expiry, Chain ± pts, then Load Chain';
+    el.className = 'small text-muted mt-2';
+    return;
+  }
+  const band = d.chain_band != null ? d.chain_band : d.otm_range;
+  const und = d.underlying || document.getElementById('ms-underlying').value;
+  const exp = d.expiry_display || document.getElementById('ms-expiry').value;
+  const anchor = d.anchor_strike != null ? d.anchor_strike : d.spx;
+  const age = d.age_sec != null ? `loaded ${d.age_sec}s ago` : 'loaded';
+  el.textContent =
+    `Chain: ready | ${und} ${exp} | 50Δ anchor ${anchor} | ±${band} pts | ${d.symbol_count} symbols | ${age}`;
+  el.className = 'small text-success mt-2';
+}
+
+async function msRefreshChainStatus() {
+  const expiry = document.getElementById('ms-expiry').value;
+  if (!expiry) return;
+  try {
+    const r = await fetch(`/api/manual_spread/chain_status?expiry=${encodeURIComponent(expiry)}`);
+    const d = await r.json();
+    if (d.status === 'ok') msUpdateChainStatus(d);
+  } catch (_) {}
+}
+
+async function msLoadChain() {
+  const btn = document.getElementById('ms-load-chain-btn');
+  const expiry = document.getElementById('ms-expiry').value;
+  if (!expiry) {
+    toast('Set expiry first', 'warning');
+    return;
+  }
+  btn.disabled = true;
+  document.getElementById('ms-chain-status').textContent = 'Loading chain via REST…';
+  try {
+    const r = await fetch('/api/manual_spread/load_chain', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(msChainPayload()),
+    });
+    const d = await r.json();
+    if (d.status !== 'ok') {
+      toast(d.error || 'Load chain failed', 'error');
+      msUpdateChainStatus({ loaded: false });
+      return;
+    }
+    msUpdateChainStatus({
+      loaded: true,
+      underlying: document.getElementById('ms-underlying').value,
+      expiry_display: document.getElementById('ms-expiry').value,
+      spx: d.anchor_strike || d.spx,
+      anchor_strike: d.anchor_strike || d.spx,
+      chain_band: d.chain_band,
+      symbol_count: d.symbol_count,
+      age_sec: 0,
+    });
+    const anchor = d.anchor_strike || d.spx;
+    const restNote = d.rest_spx_at_load && d.rest_spx_at_load !== anchor
+      ? ` (REST spot ${d.rest_spx_at_load})` : '';
+    toast(`Chain loaded — 50Δ anchor ${anchor}${restNote}, ${d.symbol_count} symbols, ${d.load_ms}ms`, 'success');
+  } catch (e) {
+    toast('Load chain error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function msClearChain() {
+  const expiry = document.getElementById('ms-expiry').value;
+  if (!expiry) {
+    toast('Set expiry first', 'warning');
+    return;
+  }
+  try {
+    const r = await fetch('/api/manual_spread/clear_chain', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ expiry }),
+    });
+    const d = await r.json();
+    if (d.status !== 'ok') {
+      toast(d.error || 'Clear failed', 'error');
+      return;
+    }
+    msUpdateChainStatus({ loaded: false });
+    toast('Chain cleared', 'success');
+  } catch (e) {
+    toast('Clear error: ' + e.message, 'error');
+  }
+}
+
+function msScanPayload() {
+  const struct = document.getElementById('ms-structure').value;
+  const bf = msIsButterfly();
+  const otmMin = parseInt(document.getElementById('ms-otm-min').value, 10);
+  const otmMax = parseInt(document.getElementById('ms-otm-max').value, 10);
+  const payload = {
+    underlying: document.getElementById('ms-underlying').value,
+    expiry: document.getElementById('ms-expiry').value,
     spread_width: parseInt(document.getElementById('ms-width').value, 10),
+    wing_half: parseInt(document.getElementById('ms-width').value, 10),
     target_credit: parseFloat(document.getElementById('ms-target').value),
     quantity: parseInt(document.getElementById('ms-qty').value, 10),
+    otm_min: Number.isFinite(otmMin) ? otmMin : 5,
+    otm_max: Number.isFinite(otmMax) ? otmMax : (bf ? 25 : 250),
   };
+  if (msIsButterfly()) {
+    payload.structure_type = struct;
+  } else {
+    payload.side = struct === 'vertical_c' ? 'C' : 'P';
+  }
+  return payload;
 }
 
 function msToggleChaseFields() {
@@ -2499,11 +2868,21 @@ function msToggleChaseFields() {
 
 function msSelectCandidate(c) {
   msSelected = c;
-  document.getElementById('ms-selected-label').textContent = `${c.short_strike} / ${c.long_strike} (${c.market_credit.toFixed(2)} mkt)`;
-  document.getElementById('ms-limit').value = c.market_credit.toFixed(2);
+  const bf = msIsButterfly();
+  const price = bf ? c.market_price : c.market_credit;
+  if (bf) {
+    document.getElementById('ms-selected-label').textContent =
+      `${c.strike_label} (${price.toFixed(2)} mkt)`;
+  } else {
+    document.getElementById('ms-selected-label').textContent =
+      `${c.short_strike} / ${c.long_strike} (${price.toFixed(2)} mkt)`;
+  }
+  document.getElementById('ms-limit').value = price.toFixed(2);
   document.getElementById('ms-place-qty').value = document.getElementById('ms-qty').value;
-  const limit = c.market_credit;
-  document.getElementById('ms-place-chase-floor').value = Math.max(0.05, limit - 0.20).toFixed(2);
+  const limit = price;
+  if (!bf) {
+    document.getElementById('ms-place-chase-floor').value = Math.max(0.05, limit - 0.20).toFixed(2);
+  }
   document.getElementById('ms-place-btn').disabled = !!c.overlap_warning;
   document.querySelectorAll('.ms-cand-cb').forEach(cb => {
     cb.checked = cb.dataset.rank === String(c.rank);
@@ -2522,34 +2901,80 @@ async function msScan() {
   const status = document.getElementById('ms-scan-status');
   btn.disabled = true;
   status.classList.remove('d-none');
-  status.textContent = 'Scanning… (TastyTrade API)';
+  status.textContent = 'Searching loaded chain…';
   msSelected = null;
   document.getElementById('ms-place-btn').disabled = true;
   document.getElementById('ms-selected-label').textContent = '—';
   try {
     const r = await fetch('/api/manual_spread/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(msScanPayload())});
     const d = await r.json();
-    if (d.status !== 'ok') { toast(d.error || 'Scan failed', 'error'); return; }
+    if (d.status !== 'ok') {
+      if (d.chain_required) msUpdateChainStatus({ loaded: false });
+      toast(d.error || 'Search failed', 'error');
+      return;
+    }
     const tbody = document.getElementById('ms-candidates');
     if (!d.candidates || d.candidates.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No candidates near target — try a different credit or width</td></tr>';
+      const diag = d.diagnostics || {};
+      let hint = 'No candidates near target';
+      if (d.scan_kind === 'vertical') {
+        if (diag.strikes_scanned === 0) {
+          hint = `No strikes in OTM range (SPX ${diag.spx || d.spx || '?'}) — widen OTM max`;
+        } else if (diag.skipped_no_quote > 0) {
+          hint = `${diag.strikes_scanned} spreads scanned, ${diag.skipped_no_quote} missing quotes — retry or check expiry`;
+        } else if (diag.skipped_below_min > 0) {
+          hint = `${diag.strikes_scanned} spreads scanned, none met min credit — try lower target or wider OTM`;
+        }
+      } else if (d.scan_kind === 'butterfly') {
+        const anch = diag.anchor_strike || diag.spx || '?';
+        if (diag.bodies_scanned === 0) {
+          hint = `No complete flies near 50Δ anchor ${anch} — try Clear + Load Chain (check quote coverage)`;
+        } else if (diag.skipped_incomplete_triplet > 0) {
+          hint = `${diag.skipped_incomplete_triplet} flies skipped (missing wing quote in chain) — reload chain`;
+        } else if (diag.skipped_no_quote > 0) {
+          hint = `${diag.bodies_scanned} bodies priced, ${diag.skipped_no_quote} missing mids — reload chain`;
+        } else if (diag.skipped_below_min > 0) {
+          hint = `${diag.bodies_scanned} bodies scanned, none met min $${document.getElementById('ms-target').value}`;
+        }
+      } else if (diag.bodies_scanned === 0) {
+        hint = `No strikes in OTM range (SPX ${diag.spx || d.spx || '?'}) — widen OTM max`;
+      } else if (diag.skipped_no_quote > 0) {
+        hint = `${diag.bodies_scanned} strikes scanned, ${diag.skipped_no_quote} missing quotes — retry or check expiry`;
+      } else if (diag.skipped_below_min > 0) {
+        hint = `${diag.bodies_scanned} strikes scanned, none met min $${document.getElementById('ms-target').value} — try lower target`;
+      }
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-3">${hint}</td></tr>`;
       msCandidates = [];
-      toast('No spreads found near $' + document.getElementById('ms-target').value + ' credit (API scan)', 'warning');
+      toast(hint, 'warning');
       return;
     }
     msCandidates = d.candidates;
-    tbody.innerHTML = d.candidates.map((c, i) => `
+    const bf = d.scan_kind === 'butterfly';
+    tbody.innerHTML = d.candidates.map((c, i) => {
+      const price = bf ? c.market_price : c.market_credit;
+      const strikes = bf ? c.strike_label : `${c.short_strike} / ${c.long_strike}`;
+      const leg1 = bf ? c.wing_low_mid.toFixed(2) : c.short_mid.toFixed(2);
+      const leg2 = bf ? c.wing_high_mid.toFixed(2) : c.long_mid.toFixed(2);
+      const warn = bf ? '' : (c.overlap_warning ? '<span class="ms-warn-label">flip conflict</span>' : '');
+      return `
       <tr class="ms-cand-row${c.overlap_warning ? ' ms-cand-warn' : ''}" data-rank="${c.rank}" onclick="msSelectByIndex(${i})">
         <td onclick="event.stopPropagation()"><input type="radio" name="ms-cand" class="form-check-input ms-cand-cb" data-rank="${c.rank}" onclick="msSelectByIndex(${i})"></td>
-        <td class="font-monospace">${c.short_strike} / ${c.long_strike}</td>
-        <td class="ms-mkt-credit">${c.market_credit.toFixed(2)}</td>
+        <td class="font-monospace">${strikes}</td>
+        <td class="ms-mkt-credit">${price.toFixed(2)}</td>
         <td class="ms-delta">${c.distance_from_target >= 0 ? '+' : ''}${c.distance_from_target.toFixed(2)}</td>
-        <td class="font-monospace">${c.short_mid.toFixed(2)}</td>
-        <td class="font-monospace">${c.long_mid.toFixed(2)}</td>
-        <td class="small">${c.overlap_warning ? '<span class="ms-warn-label">flip conflict</span>' : ''}</td>
-      </tr>`).join('');
+        <td class="font-monospace">${leg1}</td>
+        <td class="font-monospace">${leg2}</td>
+        <td class="small">${warn}</td>
+      </tr>`;
+    }).join('');
     msSelectCandidate(d.candidates[0]);
-    toast(`Scan done (${d.scan_ms}ms)`, 'success');
+    const diag = d.diagnostics || {};
+    toast(
+      bf
+        ? `Search done (${d.scan_ms}ms, anchor ${diag.anchor_strike || diag.spx}, ${diag.bodies_scanned} bodies)`
+        : `Search done (${d.scan_ms}ms, no REST)`,
+      'success',
+    );
   } catch(e) {
     toast('Scan error: ' + e.message, 'error');
   } finally {
@@ -2562,22 +2987,33 @@ function msPlacePlanFields() {
   const unfilled = document.getElementById('ms-place-unfilled').value || 'none';
   const chase = unfilled === 'chase_same_trade';
   const chaseMax = chase ? parseInt(document.getElementById('ms-place-chase-max').value, 10) || 0 : 0;
-  return {
-    stop_multiplier: parseFloat(document.getElementById('ms-place-stop').value) || 2,
+  const base = {
     on_unfilled: unfilled,
     fill_wait_sec: parseInt(document.getElementById('ms-place-fill-wait').value, 10) || 5,
+    max_attempts: chase ? 1 + chaseMax : 1,
+  };
+  if (msIsButterfly()) return base;
+  return {
+    ...base,
+    stop_multiplier: parseFloat(document.getElementById('ms-place-stop').value) || 2,
     chase_floor: chase ? parseFloat(document.getElementById('ms-place-chase-floor').value) || 0 : 0,
     chase_max_attempts: chaseMax,
-    max_attempts: chase ? 1 + chaseMax : 1,
   };
 }
 
 async function msPlace() {
   if (!msSelected) { toast('Select a candidate first', 'warning'); return; }
   const payload = {...msScanPayload(), ...msPlacePlanFields()};
-  payload.short_strike = msSelected.short_strike;
-  payload.long_strike = msSelected.long_strike;
-  payload.limit_credit = parseFloat(document.getElementById('ms-limit').value);
+  if (msIsButterfly()) {
+    payload.body_strike = msSelected.body_strike;
+    payload.wing_half = msSelected.wing_half;
+    payload.limit_price = parseFloat(document.getElementById('ms-limit').value);
+    payload.limit_credit = payload.limit_price;
+  } else {
+    payload.short_strike = msSelected.short_strike;
+    payload.long_strike = msSelected.long_strike;
+    payload.limit_credit = parseFloat(document.getElementById('ms-limit').value);
+  }
   payload.quantity = parseInt(document.getElementById('ms-place-qty').value, 10);
   const btn = document.getElementById('ms-place-btn');
   btn.disabled = true;
@@ -2808,7 +3244,7 @@ function getHistoryStrategyFilter() {
 function getHistoryMoneyFilter() {
   return document.getElementById('hist-money-filter')?.value
     || document.getElementById('hist-money-filter-cal')?.value
-    || 'live';
+    || 'all';
 }
 
 function syncHistoryStrategyFilters(value) {
@@ -2832,6 +3268,9 @@ function syncHistoryMoneyFilters(value) {
 
 function onHistoryStrategyChange(value) {
   syncHistoryStrategyFilters(value);
+  if (value === 'SKYLINE_SPX') {
+    syncHistoryMoneyFilters('paper');
+  }
   loadHistory();
 }
 
@@ -2848,6 +3287,7 @@ function historyQuerySuffix(stratFilter, moneyFilter) {
 }
 
 async function loadHistory() {
+  try {
   const stratFilter = getHistoryStrategyFilter();
   const moneyFilter = getHistoryMoneyFilter();
   syncHistoryStrategyFilters(stratFilter);
@@ -2906,11 +3346,17 @@ async function loadHistory() {
     }
   });
 
-  const dateFilter = document.getElementById('filter-date').value;
+  const dateFilterEl = document.getElementById('filter-date');
+  const dateFilter = dateFilterEl ? dateFilterEl.value : '';
   let url = '/api/history' + historyQuerySuffix(stratFilter, moneyFilter);
   if (dateFilter) url += (url.includes('?') ? '&' : '?') + `date=${dateFilter}`;
   const trades = await fetch(url).then(r=>r.json());
   const tbody = document.getElementById('history-tbody');
+  if (!tbody) return;
+  if (!Array.isArray(trades)) {
+    tbody.innerHTML = '<tr><td colspan="13" class="text-center text-danger py-3">History load failed</td></tr>';
+    return;
+  }
   if (trades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-3">No trades found</td></tr>';
     return;
@@ -2938,6 +3384,14 @@ async function loadHistory() {
     </tr>`;
   }).join('');
   loadCalendarData(stratFilter);
+  } catch (e) {
+    console.error('History load failed:', e);
+    const tbody = document.getElementById('history-tbody');
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="13" class="text-center text-danger py-3">History load failed — check dashboard log</td></tr>';
+    }
+    toast('History load failed: ' + (e.message || e), 'error');
+  }
 }
 
 async function deleteTrade(id) {
@@ -3600,12 +4054,34 @@ async function loadSkyline() {
       fetch('/api/skyline/today'),
       fetch('/api/strategy/SKYLINE_SPX/config'),
     ]);
+    if (!todayRes.ok) {
+      const err = await todayRes.json().catch(() => ({}));
+      throw new Error(err.error || `Skyline API ${todayRes.status}`);
+    }
     const data = await todayRes.json();
-    const cfg = await cfgRes.json();
+    const cfg = cfgRes.ok ? await cfgRes.json() : { effective: {}, overrides: {} };
     skylineFillOverrideForm(cfg);
     renderSkyline(data);
+    setSkylineLoading(false);
   } catch (e) {
     console.error('Skyline load failed:', e);
+    setSkylineLoading(false, String(e.message || e));
+    toast('Skyline load failed: ' + (e.message || e), 'error');
+  }
+}
+
+function setSkylineLoading(loading, errText) {
+  const statusEl = document.getElementById('skyline-status');
+  const cfgEl = document.getElementById('skyline-config-summary');
+  if (!statusEl) return;
+  if (loading) {
+    statusEl.textContent = 'Loading…';
+    if (cfgEl) cfgEl.textContent = 'Fetching Skyline data…';
+    return;
+  }
+  if (errText) {
+    statusEl.textContent = 'Load failed';
+    if (cfgEl) cfgEl.textContent = errText;
   }
 }
 
@@ -3618,6 +4094,13 @@ function renderSkyline(data) {
   const pnlEl = document.getElementById('skyline-pnl');
   const tbody = document.getElementById('skyline-structures');
   const histBody = document.getElementById('skyline-history');
+  if (!statusEl || !pnlEl || !tbody || !histBody) {
+    console.error('Skyline DOM nodes missing — hard refresh the dashboard');
+    return;
+  }
+  if (!skipEl) {
+    console.warn('skyline-skip-reason element missing');
+  }
   const navBadge = document.getElementById('skyline-nav-badge');
   const titleEl = document.getElementById('skyline-header-title');
   const pnlLabel = document.getElementById('skyline-pnl-label');
@@ -3626,7 +4109,11 @@ function renderSkyline(data) {
 
   if (navBadge) navBadge.textContent = paper ? 'PAPER' : 'LIVE';
   if (titleEl) titleEl.textContent = paper ? 'Skyline (Paper)' : 'Skyline (Live)';
-  if (pnlLabel) pnlLabel.textContent = paper ? 'Paper P/L (unrealized)' : 'P/L (unrealized)';
+  if (pnlLabel) {
+    pnlLabel.textContent = trade && trade.status === 'closed'
+      ? (paper ? 'Paper P/L (realized)' : 'P/L (realized)')
+      : (paper ? 'Paper P/L (unrealized)' : 'P/L (unrealized)');
+  }
 
   const disabledToday = session.overrides && session.overrides.enabled === false;
   if (pauseBtn) {
@@ -3643,19 +4130,27 @@ function renderSkyline(data) {
 
   if (session.skip_reason) {
     statusEl.textContent = 'Skipped today';
-    skipEl.textContent = session.skip_reason;
+    if (skipEl) skipEl.textContent = session.skip_reason;
   } else if (disabledToday) {
     statusEl.textContent = 'Paused today';
-    skipEl.textContent = 'Disabled via dashboard override';
+    if (skipEl) skipEl.textContent = 'Disabled via dashboard override';
   } else if (session.entered || (trade && trade.status)) {
     statusEl.textContent = trade ? trade.status.toUpperCase() : 'Entered';
-    skipEl.textContent = trade ? `ATM ${trade.atm} @ ${trade.entry_time_et || ''} ET` : '';
+    if (skipEl) skipEl.textContent = trade ? `ATM ${trade.atm} @ ${trade.entry_time_et || ''} ET` : '';
   } else {
-    statusEl.textContent = 'Waiting';
-    skipEl.textContent = '';
+    statusEl.textContent = isWeekendSessionDay(data.date) ? 'Weekend — no session' : 'Waiting (no trade today)';
+    if (skipEl) {
+      skipEl.textContent = isWeekendSessionDay(data.date)
+        ? 'Paper history below · next entry on next trading day'
+        : (data.date ? `Session ${data.date}` : '');
+    }
   }
 
-  const pnl = trade ? (trade.unrealized_pnl_dollars ?? (trade.unrealized_pnl_total != null ? trade.unrealized_pnl_total * 100 : 0)) : 0;
+  const pnl = trade ? (
+    trade.status === 'closed'
+      ? (trade.realized_pnl_dollars ?? (trade.realized_pnl_total != null ? trade.realized_pnl_total * 100 : 0))
+      : (trade.unrealized_pnl_dollars ?? (trade.unrealized_pnl_total != null ? trade.unrealized_pnl_total * 100 : 0))
+  ) : 0;
   pnlEl.textContent = fmtPnl(pnl);
   pnlEl.className = 'fs-4 fw-bold mt-1 ' + (pnl >= 0 ? 'text-success' : 'text-danger');
 
@@ -3669,7 +4164,7 @@ function renderSkyline(data) {
         <td>${skylineStrikesLabel(s.legs)}</td>
         <td>${s.status || '—'}</td>
         <td>${s.net_debit != null ? '$' + Number(s.net_debit).toFixed(2) : '—'}</td>
-        <td>${skylineDisplayPnl(s, 'unrealized_pnl', 'unrealized_pnl_dollars')}</td>
+        <td>${skylineDisplayPnl(s, s.status === 'closed' ? 'realized_pnl' : 'unrealized_pnl', s.status === 'closed' ? 'realized_pnl_dollars' : 'unrealized_pnl_dollars')}</td>
         <td>${s.status === 'open' || s.status === 'filled' ? `<button class="btn btn-sm btn-outline-warning" onclick="skylineClose('${s.name}')">Close</button>` : ''}</td>
       </tr>
     `).join('');
@@ -3689,6 +4184,12 @@ function renderSkyline(data) {
       </tr>
     `).join('');
   }
+}
+
+function isWeekendSessionDay(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.getDay() === 0 || d.getDay() === 6;
 }
 
 async function skylineTogglePause() {
@@ -3728,6 +4229,157 @@ async function skylineCloseAll() {
   });
   await r.json();
   loadSkyline();
+}
+
+async function loadPermaBull() {
+  try {
+    const [todayRes, cfgRes] = await Promise.all([
+      fetch('/api/perma_bull/today'),
+      fetch('/api/strategy/PERMA_BULL_PCS/config'),
+    ]);
+    if (!todayRes.ok) {
+      const err = await todayRes.json().catch(() => ({}));
+      throw new Error(err.error || `Perma Bull API ${todayRes.status}`);
+    }
+    const data = await todayRes.json();
+    const cfg = cfgRes.ok ? await cfgRes.json() : { effective: {}, overrides: {} };
+    renderPermaBull(data, cfg);
+    setPermaBullLoading(false);
+  } catch (e) {
+    console.error('Perma Bull load failed:', e);
+    setPermaBullLoading(false, String(e.message || e));
+    toast('Perma Bull load failed: ' + (e.message || e), 'error');
+  }
+}
+
+function setPermaBullLoading(loading, errText) {
+  const statusEl = document.getElementById('perma-bull-status');
+  const cfgEl = document.getElementById('perma-bull-config-summary');
+  if (!statusEl) return;
+  if (loading) {
+    statusEl.textContent = 'Loading…';
+    if (cfgEl) cfgEl.textContent = 'Fetching Perma Bull PCS data…';
+    return;
+  }
+  if (errText) {
+    statusEl.textContent = 'Load failed';
+    if (cfgEl) cfgEl.textContent = errText;
+  }
+}
+
+function renderPermaBull(data, cfg) {
+  const session = data.session || {};
+  const trade = data.trade;
+  const paper = !!data.paper;
+  const statusEl = document.getElementById('perma-bull-status');
+  const skipEl = document.getElementById('perma-bull-skip-reason');
+  const pnlEl = document.getElementById('perma-bull-pnl');
+  const tbody = document.getElementById('perma-bull-spread');
+  const histBody = document.getElementById('perma-bull-history');
+  if (!statusEl || !pnlEl || !tbody || !histBody) return;
+
+  const navBadge = document.getElementById('perma-bull-nav-badge');
+  const titleEl = document.getElementById('perma-bull-header-title');
+  const pnlLabel = document.getElementById('perma-bull-pnl-label');
+  const cfgEl = document.getElementById('perma-bull-config-summary');
+  const pauseBtn = document.getElementById('perma-bull-pause-btn');
+  const eff = (cfg && cfg.effective) || {};
+
+  if (navBadge) navBadge.textContent = paper ? 'PAPER' : 'LIVE';
+  if (titleEl) titleEl.textContent = paper ? 'Perma Bull PCS (Paper)' : 'Perma Bull PCS (Live)';
+  if (pnlLabel) {
+    const closed = trade && String(trade.status || '').toLowerCase() === 'closed';
+    pnlLabel.textContent = closed
+      ? (paper ? 'Paper P/L (realized)' : 'P/L (realized)')
+      : (paper ? 'Paper P/L (unrealized)' : 'P/L (unrealized)');
+  }
+
+  const disabledToday = session.overrides && session.overrides.enabled === false;
+  if (pauseBtn) {
+    pauseBtn.textContent = disabledToday ? 'Resume Today' : 'Pause Today';
+    pauseBtn.className = disabledToday
+      ? 'btn btn-sm btn-outline-success mt-2'
+      : 'btn btn-sm btn-outline-warning mt-2';
+  }
+  if (cfgEl) {
+    const ov = session.overrides || {};
+    const ovText = Object.keys(ov).length ? `Overrides: ${JSON.stringify(ov)}` : 'No overrides today';
+    const defaults = `5-wide PCS · target $${Number(eff.target_credit || 1).toFixed(2)} · ${eff.entry_time_et || '08:45'} ET · qty ${eff.quantity || 1} · profit target ${Number(eff.profit_target_debit || 0.15).toFixed(2)} debit`;
+    cfgEl.textContent = `${paper ? 'Paper account' : 'Live account'} · ${defaults} · ${ovText}`;
+  }
+
+  if (session.skip_reason) {
+    statusEl.textContent = 'Skipped today';
+    if (skipEl) skipEl.textContent = session.skip_reason;
+  } else if (disabledToday) {
+    statusEl.textContent = 'Paused today';
+    if (skipEl) skipEl.textContent = 'Disabled via dashboard — no entry at 8:45 AM';
+  } else if (session.entered || (trade && trade.status)) {
+    statusEl.textContent = trade ? String(trade.status || 'entered').toUpperCase() : 'Entered';
+    const shortK = (trade && trade.short_leg) ? trade.short_leg.strike : '';
+    const longK = (trade && trade.long_leg) ? trade.long_leg.strike : '';
+    if (skipEl) skipEl.textContent = trade ? `PCS ${shortK}/${longK}` : '';
+  } else {
+    statusEl.textContent = isWeekendSessionDay(data.date) ? 'Weekend — no session' : 'Waiting for 8:45 AM ET';
+    if (skipEl) {
+      skipEl.textContent = isWeekendSessionDay(data.date)
+        ? 'Next entry on next trading day'
+        : (data.date ? `Session ${data.date}` : '');
+    }
+  }
+
+  const pnl = trade ? (trade.live_pnl_dollars || 0) : 0;
+  pnlEl.textContent = fmtPnl(pnl);
+  pnlEl.className = 'fs-4 fw-bold mt-1 ' + (pnl >= 0 ? 'text-success' : 'text-danger');
+
+  if (!trade) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No spread today</td></tr>';
+  } else {
+    const entry = trade.entry || {};
+    const shortLeg = trade.short_leg || {};
+    const longLeg = trade.long_leg || {};
+    const credit = entry.net_credit != null ? entry.net_credit : entry.limit_credit;
+    tbody.innerHTML = `
+      <tr>
+        <td class="fw-semibold">PCS</td>
+        <td>${shortLeg.strike || '—'}/${longLeg.strike || '—'}</td>
+        <td>${(trade.status || '—').toUpperCase()}</td>
+        <td>${credit != null ? '$' + Number(credit).toFixed(2) : '—'}</td>
+        <td class="${pnlClass(pnl)}">${fmtPnl(pnl)}</td>
+      </tr>
+    `;
+  }
+
+  const history = data.history || [];
+  if (!history.length) {
+    histBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr>';
+  } else {
+    histBody.innerHTML = history.map(h => `
+      <tr>
+        <td>${h.date || '—'}</td>
+        <td>${(h.status || '—').toUpperCase()}</td>
+        <td>${h.short_strike != null ? h.short_strike + '/' + h.long_strike : '—'}</td>
+        <td>${h.net_credit != null ? '$' + Number(h.net_credit).toFixed(2) : '—'}</td>
+        <td class="${pnlClass(h.realized_pnl_dollars || 0)}">${fmtPnl(h.realized_pnl_dollars || 0)}</td>
+      </tr>
+    `).join('');
+  }
+}
+
+async function permaBullTogglePause() {
+  const cfg = await fetch('/api/strategy/PERMA_BULL_PCS/config').then(r => r.json());
+  const disabled = cfg.overrides && cfg.overrides.enabled === false;
+  const body = disabled ? {} : { enabled: false };
+  const method = disabled ? 'DELETE' : 'POST';
+  const url = disabled
+    ? '/api/strategy/PERMA_BULL_PCS/overrides/enabled'
+    : '/api/strategy/PERMA_BULL_PCS/overrides';
+  await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: method === 'POST' ? JSON.stringify(body) : undefined,
+  });
+  loadPermaBull();
 }
 
 // Initial render on page load — don't wait for SocketIO first push

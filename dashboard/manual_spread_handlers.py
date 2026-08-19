@@ -74,9 +74,84 @@ def build_manual_trades(
     for trade in ms_entry.load_dashboard_manual_trades():
         status = trade.get('status', 'unknown')
         entry = trade.get('entry', {})
+        is_butterfly = trade.get('structure_type') == 'butterfly'
         short_leg = trade.get('short_leg', {})
         long_leg = trade.get('long_leg', {})
         phases = trade.get('phases', {})
+
+        if is_butterfly:
+            short_sym = ''
+            long_sym = ''
+            limit_credit = float(
+                entry.get('limit_credit')
+                or entry.get('net_credit')
+                or entry.get('limit_debit')
+                or entry.get('net_debit')
+                or 0
+            )
+            quantity = int(trade.get('quantity') or 1)
+            filled = int(trade.get('filled_quantity') or 0)
+            short_fill = 0.0
+            long_fill = 0.0
+            short_close = None
+            long_close = None
+            cur_short = 0.0
+            cur_long = 0.0
+            cur_spread = 0.0
+            live_pnl = 0.0
+            pnl_class = 'text-muted'
+            pnl_frozen = False
+            exit_credit = None
+            exit_short = None
+            lot = trade.get('lot', '')
+            side = entry.get('side', '')
+            slot_key = f'{lot}_{side}' if lot and side else ''
+            strike_label = f"{trade.get('wing_low')}/{trade.get('body_strike')}/{trade.get('wing_high')}"
+            entry_label = ''
+            if status == 'pending_fill':
+                entry_label = f'lim {limit_credit:.2f} ({filled}/{quantity})'
+            elif filled > 0:
+                px = float(entry.get('net_credit') or entry.get('net_debit') or limit_credit)
+                entry_label = f'{px:.2f} BF'
+            rows.append({
+                'lot': lot,
+                'side': side,
+                'slot_key': slot_key,
+                'stop_multiplier': 0,
+                'short_strike': strike_label,
+                'long_strike': entry.get('structure_type', 'butterfly'),
+                'limit_credit': limit_credit,
+                'filled': filled,
+                'quantity': filled if filled else quantity,
+                'entry_credit': limit_credit if not filled else float(
+                    entry.get('net_credit') or entry.get('net_debit') or limit_credit
+                ),
+                'entry_label': entry_label,
+                'exit_label': '',
+                'live_pnl': live_pnl,
+                'pnl_class': pnl_class,
+                'pnl_frozen': pnl_frozen,
+                'slippage': None,
+                'slippage_label': '',
+                'cur_short': cur_short,
+                'cur_long': cur_long,
+                'cur_spread': cur_spread,
+                'phase': 'hold' if status == 'open' else '',
+                'stop_label': 'hold to expiry',
+                'stop_order_id': '',
+                'state': 'working' if status == 'pending_fill' else slot_state_fn(
+                    status, trade.get('close_mechanism'), strategy=entry.get('strategy'), trade=trade,
+                ),
+                'status': status,
+                'entry_quote_source_label': quote_source_label(trade),
+                'breach_readiness_label': '',
+                '_filename': trade.get('_filename', ''),
+                'entry_time': trade_entry_time_iso(trade),
+                'exit_time': trade_exit_time_iso(trade),
+            })
+            if status in ('open', 'closing', 'pending_fill'):
+                open_count += 1
+            continue
 
         short_sym = short_leg.get('symbol', '')
         long_sym = long_leg.get('symbol', '')
@@ -276,21 +351,80 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
 
         return jsonify({'status': 'ok', 'unpaused_slots': slots})
 
+    @app.route('/api/manual_spread/chain_status', methods=['GET'])
+    def manual_spread_chain_status():
+        from common.chain_snapshot import snapshot_status
+
+        expiry = request.args.get('expiry', '')
+        if not expiry:
+            return jsonify({'status': 'error', 'error': 'expiry required'}), 400
+        try:
+            expiry_yymmdd = ms_entry.parse_expiry(expiry)
+        except ValueError as exc:
+            return jsonify({'status': 'error', 'error': str(exc)}), 400
+        return jsonify({'status': 'ok', **snapshot_status(expiry_yymmdd)})
+
+    @app.route('/api/manual_spread/load_chain', methods=['POST'])
+    def manual_spread_load_chain():
+        data = request.get_json(force=True) or {}
+        expiry = data.get('expiry', '')
+        if not expiry:
+            return jsonify({'status': 'error', 'error': 'expiry required'}), 400
+        chain_band = int(data.get('chain_band', ms_config.DEFAULT_CHAIN_BAND))
+        try:
+            broker = get_shared_broker()
+            result = ms_entry.load_chain(broker, expiry=expiry, chain_band=chain_band)
+            return jsonify(result)
+        except Exception as exc:
+            log.exception('manual spread load_chain failed')
+            return jsonify({'status': 'error', 'error': str(exc)}), 500
+
+    @app.route('/api/manual_spread/clear_chain', methods=['POST'])
+    def manual_spread_clear_chain():
+        data = request.get_json(force=True) or {}
+        expiry = data.get('expiry', '')
+        if not expiry:
+            return jsonify({'status': 'error', 'error': 'expiry required'}), 400
+        try:
+            result = ms_entry.clear_chain(expiry)
+            return jsonify(result)
+        except Exception as exc:
+            log.exception('manual spread clear_chain failed')
+            return jsonify({'status': 'error', 'error': str(exc)}), 500
+
     @app.route('/api/manual_spread/scan', methods=['POST'])
     def manual_spread_scan():
         data = request.get_json(force=True) or {}
         try:
             broker = get_shared_broker()
+            structure_type = (data.get('structure_type') or '').strip().lower()
+            target = float(
+                data.get('target_credit')
+                or data.get('target_price')
+                or (
+                    ms_config.DEFAULT_BF_TARGET_SELL
+                    if structure_type.startswith('sell_')
+                    else ms_config.DEFAULT_BF_TARGET_BUY if structure_type.startswith('buy_') else ms_config.DEFAULT_TARGET_CREDIT
+                )
+            )
             result = ms_entry.scan_spreads(
                 broker,
                 side=data.get('side', 'P'),
                 expiry=data.get('expiry', ''),
                 spread_width=int(data.get('spread_width', ms_config.DEFAULT_SPREAD_WIDTH)),
-                target_credit=float(data.get('target_credit', ms_config.DEFAULT_TARGET_CREDIT)),
+                target_credit=target,
                 max_results=int(data.get('max_results', ms_config.SCAN_MAX_RESULTS)),
+                structure_type=structure_type,
+                wing_half=int(data.get('wing_half', ms_config.DEFAULT_BF_WING_HALF)),
+                otm_min=int(data['otm_min']) if data.get('otm_min') is not None else None,
+                otm_max=int(data['otm_max']) if data.get('otm_max') is not None else None,
             )
             return jsonify(result)
         except Exception as exc:
+            from common.chain_snapshot import ChainSnapshotNotLoaded
+
+            if isinstance(exc, ChainSnapshotNotLoaded):
+                return jsonify({'status': 'error', 'error': str(exc), 'chain_required': True}), 400
             log.exception('manual spread scan failed')
             return jsonify({'status': 'error', 'error': str(exc)}), 500
 
@@ -299,6 +433,34 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
         data = request.get_json(force=True) or {}
         try:
             from blocks.session.manual_helpers import dispatch_manual_place
+
+            structure_type = (data.get('structure_type') or '').strip().lower()
+            if structure_type:
+                body_strike = int(data['body_strike'])
+                wing_half = int(data.get('wing_half', ms_config.DEFAULT_BF_WING_HALF))
+                limit_price = float(data.get('limit_price') or data['limit_credit'])
+                quantity = int(data.get('quantity', ms_config.DEFAULT_QUANTITY))
+                expiry = data.get('expiry', '')
+                from manual_spread.butterfly import side_for_structure_type
+
+                result, code = dispatch_manual_place(
+                    os.path.abspath(os.path.join(trades_dir, '..')),
+                    launcher_active=launcher_active(),
+                    side=side_for_structure_type(structure_type),
+                    short_strike=body_strike,
+                    long_strike=wing_half,
+                    limit_credit=limit_price,
+                    quantity=quantity,
+                    expiry=expiry,
+                    structure_type=structure_type,
+                    wing_half=wing_half,
+                    **{k: data.get(k) for k in (
+                        'on_unfilled', 'fill_wait_sec', 'max_attempts',
+                    ) if k in data},
+                )
+                if code == 200:
+                    _push_update()
+                return jsonify(result), code
 
             side = data.get('side', 'P')
             short_strike = int(data['short_strike'])

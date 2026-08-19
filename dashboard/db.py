@@ -39,6 +39,7 @@ from common import trades_layout
 STRATEGY_MEIC = trades_layout.STRATEGY_MEIC
 STRATEGY_MANUAL = trades_layout.STRATEGY_MANUAL
 STRATEGY_SKYLINE = trades_layout.STRATEGY_SKYLINE
+STRATEGY_PERMA_BULL = trades_layout.STRATEGY_PERMA_BULL
 
 
 def _truthy_paper(value) -> bool:

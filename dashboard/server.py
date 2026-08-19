@@ -70,7 +70,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from db import (
     upsert_trade, get_trades, get_daily_summary, get_stats, get_stats_by_strategy,
     get_daily_breakdown, delete_trade, get_conn, STRATEGY_MEIC, STRATEGY_MANUAL,
-    STRATEGY_SKYLINE,
+    STRATEGY_SKYLINE, STRATEGY_PERMA_BULL,
 )
 from manual_spread_handlers import (
     build_manual_trades,
@@ -139,7 +139,15 @@ BREACH_MECHANISMS = frozenset({
 })
 KILL_MECHANISMS = frozenset({'manual_close', 'admin_killswitch'})
 
-app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
+            static_folder=os.path.join(os.path.dirname(__file__), 'static'))
+
+try:
+    from common.trading_gate import reconcile_gate_for_session
+
+    reconcile_gate_for_session(_central_now().strftime('%Y-%m-%d'))
+except Exception:
+    log.exception('Trading gate reconcile failed on dashboard startup')
 app.config['SECRET_KEY'] = 'meic-dashboard-secret'
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
@@ -596,6 +604,138 @@ def _patch_session_rows(slot_keys, action, **fields):
     return plan
 
 
+def _skyline_today_pnl() -> float:
+    """Today's Skyline paper P/L (realized if closed, else unrealized)."""
+    from common.session_cleanup import central_today
+    from strategies.skyline.settlement import attach_dollar_pnl_display
+
+    today = central_today().isoformat()
+    active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+    trade = None
+    for candidate in (
+        os.path.join(active, f'skyline_{today}.json'),
+        os.path.join(hist_dir, f'skyline_{today}.json'),
+    ):
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding='utf-8') as f:
+                trade = json.load(f)
+            break
+        except (OSError, json.JSONDecodeError):
+            trade = None
+    if not trade:
+        return 0.0
+    attach_dollar_pnl_display(trade)
+    if trade.get('status') == 'closed':
+        dollars = trade.get('realized_pnl_dollars')
+        if dollars is not None:
+            return float(dollars)
+        raw = trade.get('realized_pnl_total')
+        return float(raw) * 100 if raw is not None else 0.0
+    dollars = trade.get('unrealized_pnl_dollars')
+    if dollars is not None:
+        return float(dollars)
+    raw = trade.get('unrealized_pnl_total')
+    return float(raw) * 100 if raw is not None else 0.0
+
+
+def _perma_bull_trade_for_date(for_date: str | None = None) -> dict | None:
+    """Load today's (or given date) Perma Bull PCS handshake trade from disk."""
+    from common.session_cleanup import central_today
+
+    today = for_date or central_today().isoformat()
+    active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_PERMA_BULL, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_PERMA_BULL, ROOT)
+    lot_hint = f'perma-{today}'
+    for root_dir in (active, hist_dir):
+        if not os.path.isdir(root_dir):
+            continue
+        for path in sorted(glob.glob(os.path.join(root_dir, '*.json')), reverse=True):
+            base = os.path.basename(path)
+            if base.startswith(('session_', 'halted_', 'skyline_')):
+                continue
+            trade = read_json_safe(path)
+            if not trade or not isinstance(trade, dict):
+                continue
+            entry = trade.get('entry') or {}
+            lot = str(trade.get('lot') or entry.get('lot') or '')
+            entry_date = str(entry.get('timestamp') or '')[:10]
+            if lot == lot_hint or entry_date == today:
+                trade['_filepath'] = path
+                return trade
+    return None
+
+
+def _handshake_trade_live_pnl(trade: dict, spx_settle: float | None = None) -> float:
+    """P/L dollars for a vertical-spread handshake JSON."""
+    entry = trade.get('entry') or {}
+    short_leg = trade.get('short_leg') or {}
+    long_leg = trade.get('long_leg') or {}
+    status = str(trade.get('status') or '').lower()
+    quantity = int(trade.get('quantity') or trade.get('filled_quantity') or 0)
+    net_credit = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
+    short_fill = float(short_leg.get('fill_price') or 0)
+    long_fill = float(long_leg.get('fill_price') or 0)
+    short_sym = short_leg.get('symbol') or ''
+    long_sym = long_leg.get('symbol') or ''
+    short_close = trade.get('short_close_price')
+    long_close = trade.get('long_close_price')
+    cur_short = _live_price(short_sym) if short_sym else 0.0
+    cur_long = _live_price(long_sym) if long_sym else 0.0
+    live_pnl, _, _, _ = _trade_pnl(
+        net_credit,
+        quantity,
+        short_fill,
+        long_fill,
+        short_close,
+        long_close,
+        cur_short,
+        cur_long,
+        status,
+        trade=trade,
+        spx_close=spx_settle,
+    )
+    return float(live_pnl)
+
+
+def _perma_bull_today_pnl(spx_settle: float | None = None) -> float:
+    trade = _perma_bull_trade_for_date()
+    if not trade:
+        return 0.0
+    return _handshake_trade_live_pnl(trade, spx_settle=spx_settle)
+
+
+def _perma_bull_history_rows(limit: int = 30) -> list:
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_PERMA_BULL, ROOT)
+    rows = []
+    if not os.path.isdir(hist_dir):
+        return rows
+    for path in sorted(glob.glob(os.path.join(hist_dir, '*.json')), reverse=True):
+        base = os.path.basename(path)
+        if base.startswith(('session_', 'halted_')):
+            continue
+        trade = read_json_safe(path)
+        if not trade or trade.get('status') != 'closed':
+            continue
+        entry = trade.get('entry') or {}
+        short_leg = trade.get('short_leg') or {}
+        long_leg = trade.get('long_leg') or {}
+        pnl = _handshake_trade_live_pnl(trade)
+        rows.append({
+            'date': str(entry.get('timestamp') or '')[:10],
+            'status': trade.get('status'),
+            'short_strike': short_leg.get('strike'),
+            'long_strike': long_leg.get('strike'),
+            'net_credit': entry.get('net_credit'),
+            'realized_pnl_dollars': pnl,
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def build_summary():
     active_trades = _read_active_trades()
     bot_status = read_bot_status()
@@ -729,6 +869,8 @@ def build_summary():
     from common.trading_gate import summary_for_dashboard
 
     trading_gate = summary_for_dashboard()
+    skyline_pnl = _skyline_today_pnl()
+    perma_bull_pnl = _perma_bull_today_pnl(spx_settle=spx_settle)
     if session_plan:
         meic_unpaused = sum(1 for r in session_plan.rows if not r.paused and not r.skip)
         all_slot_keys = {r.slot_key for r in session_plan.rows}
@@ -743,7 +885,9 @@ def build_summary():
         'manual_slippage': manual_slippage,
         'manual_open':   manual_open,
         'meic_pnl':      round(day_pnl, 2),
-        'combined_pnl':  round(day_pnl + manual_pnl, 2),
+        'skyline_pnl':   round(skyline_pnl, 2),
+        'perma_bull_pnl': round(perma_bull_pnl, 2),
+        'combined_pnl':  round(day_pnl + manual_pnl + perma_bull_pnl, 2),
         'day_slippage':  round(day_slippage, 2),
         'meic_unpaused_slots': meic_unpaused,
         'meic_slots_total': len(all_slot_keys),
@@ -1436,12 +1580,15 @@ def api_skyline_today():
     """Read-only Skyline status for today's trade."""
     import glob
     from strategies.skyline.settlement import attach_dollar_pnl_display, update_unrealized_marks
+    from common.session_cleanup import central_today
 
     paper = _strategy_paper_flag(trades_layout.STRATEGY_SKYLINE)
-    today = date.today().isoformat()
+    today = central_today().isoformat()
     active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
     session_path = os.path.join(active, f'session_{today}.json')
     trade_path = os.path.join(active, f'skyline_{today}.json')
+    history_trade_path = os.path.join(hist_dir, f'skyline_{today}.json')
 
     session = {}
     if os.path.isfile(session_path):
@@ -1452,35 +1599,39 @@ def api_skyline_today():
             pass
 
     trade = None
-    if os.path.isfile(trade_path):
+    trade_source = None
+    for candidate_path in (trade_path, history_trade_path):
+        if not os.path.isfile(candidate_path):
+            continue
         try:
-            with open(trade_path, encoding='utf-8') as f:
+            with open(candidate_path, encoding='utf-8') as f:
                 trade = json.load(f)
-            if trade and trade.get('status') == 'open':
-                symbols = []
-                for struct in trade.get('structures') or []:
-                    for leg in struct.get('legs') or []:
-                        sym = leg.get('symbol')
-                        if sym:
-                            symbols.append(sym)
-                if symbols:
-                    try:
-                        from common.broker_factory import get_shared_broker_for_strategy
-                        broker = get_shared_broker_for_strategy(
-                            trades_layout.STRATEGY_SKYLINE, paper=paper,
-                        )
-                        mids = broker.fetch_option_mids_api(symbols)
-                        update_unrealized_marks(trade, mids)
-                        attach_dollar_pnl_display(trade)
-                    except Exception:
-                        pass
-            if trade:
-                attach_dollar_pnl_display(trade)
+            trade_source = candidate_path
+            break
         except (OSError, json.JSONDecodeError):
-            pass
+            trade = None
+
+    if trade:
+        if trade.get('status') == 'open' and trade_source == trade_path:
+            symbols = []
+            for struct in trade.get('structures') or []:
+                for leg in struct.get('legs') or []:
+                    sym = leg.get('symbol')
+                    if sym:
+                        symbols.append(sym)
+            if symbols:
+                try:
+                    from common.broker_factory import get_shared_broker_for_strategy
+                    broker = get_shared_broker_for_strategy(
+                        trades_layout.STRATEGY_SKYLINE, paper=paper,
+                    )
+                    mids = broker.fetch_option_mids_api(symbols)
+                    update_unrealized_marks(trade, mids)
+                except Exception:
+                    pass
+        attach_dollar_pnl_display(trade)
 
     history = []
-    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
     if os.path.isdir(hist_dir):
         for path in sorted(glob.glob(os.path.join(hist_dir, 'skyline_*.json')), reverse=True)[:30]:
             try:
@@ -1498,6 +1649,40 @@ def api_skyline_today():
         'session': session,
         'trade': trade,
         'history': history,
+    })
+
+
+@app.route('/api/perma_bull/today')
+def api_perma_bull_today():
+    """Read-only Perma Bull PCS status for today's trade."""
+    from common.session_cleanup import central_today
+    from common.expiry_settlement import get_spx_settlement_close
+
+    paper = _strategy_paper_flag(trades_layout.STRATEGY_PERMA_BULL)
+    today = central_today().isoformat()
+    active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_PERMA_BULL, ROOT)
+    session_path = os.path.join(active, f'session_{today}.json')
+
+    session = {}
+    if os.path.isfile(session_path):
+        try:
+            with open(session_path, encoding='utf-8') as f:
+                session = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    spx_settle = get_spx_settlement_close(central_today(), root=ROOT)
+    trade = _perma_bull_trade_for_date(today)
+    if trade:
+        trade['live_pnl_dollars'] = _handshake_trade_live_pnl(trade, spx_settle=spx_settle)
+
+    return jsonify({
+        'strategy': trades_layout.STRATEGY_PERMA_BULL,
+        'paper': paper,
+        'date': today,
+        'session': session,
+        'trade': trade,
+        'history': _perma_bull_history_rows(),
     })
 
 
