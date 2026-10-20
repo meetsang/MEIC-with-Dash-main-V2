@@ -28,12 +28,14 @@ def dispatch_manual_place(
     expiry: str = '',
     structure_type: str = '',
     wing_half: int = 0,
+    wait_for_launcher_sec: float = 0.0,
     **plan_fields,
 ) -> Tuple[Dict[str, Any], int]:
     """Append a manual session row and execute entry once.
 
-    When run.py is active, only append to CSV — EntryMonitorRunner places the order.
-    When dashboard runs alone, claim the row and run the worker inline.
+    When run.py is active, append to CSV and give the EntryMonitorRunner a window
+    to claim. If the monitor does not claim within wait_for_launcher_sec (or if launcher
+    is inactive), the inline worker claims the row and executes the entry.
     """
     from common.trading_gate import effective_new_risk_blocked, gate_enabled
 
@@ -70,25 +72,6 @@ def dispatch_manual_place(
         **plan_fields,
     )
 
-    if launcher_active:
-        log.info(
-            'Manual place queued for entry monitor: %s (%s)',
-            row.slot_key,
-            plan.path,
-        )
-        return {
-            'status': 'entering',
-            'lot': row.lot,
-            'slot_key': row.slot_key,
-            'session_path': plan.path,
-        }, 200
-
-    if not try_claim_manual_row(plan.path, row.slot_key, strategy=plan.strategy):
-        return {
-            'status': 'error',
-            'error': f'{row.slot_key} already claimed or placed',
-        }, 409
-
     holder: Dict[str, Any] = {'result': None}
 
     def _work() -> None:
@@ -101,6 +84,48 @@ def dispatch_manual_place(
         entry_result = run_manual_entry_row(fresh_row)
         apply_entry_result(plan.path, entry_result, strategy=plan.strategy)
         holder['result'] = entry_result.to_manual_api_dict()
+
+    if launcher_active:
+        log.info(
+            'Manual place queued for entry monitor: %s (%s)',
+            row.slot_key,
+            plan.path,
+        )
+        if wait_for_launcher_sec > 0:
+            def _watchdog() -> None:
+                import time
+                import os
+                time.sleep(wait_for_launcher_sec)
+                try:
+                    if not os.path.exists(plan.path):
+                        return
+                    p = SessionPlan.load(plan.path, strategy=plan.strategy)
+                    r = p.row_by_slot_key(row.slot_key)
+                    if r and r.state in ('entering', 'waiting_rest_probe') and not r.trade_path:
+                        log.warning(
+                            'Launcher did not claim %s within %.1fs — executing inline fail-safe',
+                            row.slot_key,
+                            wait_for_launcher_sec,
+                        )
+                        if try_claim_manual_row(plan.path, row.slot_key, strategy=plan.strategy):
+                            _work()
+                except Exception as exc:
+                    log.exception('Watchdog claim failed for %s: %s', row.slot_key, exc)
+
+            threading.Thread(target=_watchdog, name=f'watchdog-{row.slot_key}', daemon=True).start()
+
+        return {
+            'status': 'entering',
+            'lot': row.lot,
+            'slot_key': row.slot_key,
+            'session_path': plan.path,
+        }, 200
+
+    if not try_claim_manual_row(plan.path, row.slot_key, strategy=plan.strategy):
+        return {
+            'status': 'error',
+            'error': f'{row.slot_key} already claimed or placed',
+        }, 409
 
     t = threading.Thread(target=_work, name=f'manual-{row.slot_key}', daemon=True)
     t.start()
@@ -179,6 +204,7 @@ def append_manual_session_row(
         limit_credit=float(limit_credit),
         on_unfilled=normalized['on_unfilled'],
         expiry=expiry_str,
+        profit_target_pct=float(normalized.get('profit_target_pct', 0.50)),
     )
     plan.append_row(row)
     plan.save()

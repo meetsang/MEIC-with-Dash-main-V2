@@ -67,7 +67,9 @@ def sync_pending_fills(
             continue
         prev_status = state.get('status')
         prev_filled = int(state.get('filled_quantity') or 0)
-        changed, result = sync_open_order(state, broker, force=force)
+        from blocks.stop.broker import resolve_broker_for_trade
+        trade_broker = resolve_broker_for_trade(state, broker)
+        changed, result = sync_open_order(state, trade_broker, force=force)
         if not changed:
             continue
         state_mod.save_state(path, state)

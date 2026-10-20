@@ -64,24 +64,36 @@ def ensure_fill_sync(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def is_fill_sync_terminal(state: Dict[str, Any]) -> bool:
+    open_order = state.get('open_order') or {}
+    ostatus = str(open_order.get('status') or '').lower()
+    fs = open_order.get('fill_sync') or {}
+    phase = fs.get('phase', 'fast')
+
     if state.get('structure_type') == 'butterfly':
-        fs = (state.get('open_order') or {}).get('fill_sync') or {}
-        phase = fs.get('phase', 'fast')
         if phase in TERMINAL_PHASES:
-            if phase in ('cancelled', 'rejected', 'expired', 'terminal_error'):
+            if phase in ('cancelled', 'rejected', 'expired', 'terminal_error') or ostatus in ('cancelled', 'canceled', 'rejected', 'expired'):
                 return True
             filled = int(state.get('filled_quantity') or 0)
+            target = int(state.get('quantity') or 0)
+            if target and filled < target and not open_order.get('fully_filled') and ostatus != 'filled':
+                return False
             return filled > 0
         return False
-    fs = (state.get('open_order') or {}).get('fill_sync') or {}
-    phase = fs.get('phase', 'fast')
+
     if phase not in TERMINAL_PHASES:
         return False
-    if phase in ('cancelled', 'rejected', 'expired', 'terminal_error'):
+    if phase in ('cancelled', 'rejected', 'expired', 'terminal_error') or ostatus in ('cancelled', 'canceled', 'rejected', 'expired'):
         return True
     short_px = float(state_mod.section(state, 'short_leg').get('fill_price') or 0)
     long_px = float(state_mod.section(state, 'long_leg').get('fill_price') or 0)
-    return short_px > 0 and long_px > 0
+    if short_px <= 0 or long_px <= 0:
+        return False
+
+    target = int(state.get('quantity') or 0)
+    filled = int(state.get('filled_quantity') or 0)
+    if target and filled < target and not open_order.get('fully_filled') and ostatus != 'filled':
+        return False
+    return True
 
 
 def spread_width_points(state: Dict[str, Any]) -> float:

@@ -164,8 +164,8 @@ class MonitorRunner:
         if status != 'open':
             log.debug('Skip monitor for %s — status=%s', json_path, status)
             return
-        if target and filled < target:
-            log.debug('Skip monitor for %s — partial fill %s/%s', json_path, filled, target)
+        if filled <= 0:
+            log.debug('Skip monitor for %s — no fills yet %s/%s', json_path, filled, target)
             return
 
         fill_q = None
@@ -177,9 +177,12 @@ class MonitorRunner:
         except Exception:
             pass
 
+        from blocks.stop.broker import resolve_broker_for_trade
+        trade_broker = resolve_broker_for_trade(st, self.broker)
+
         monitor = StopMonitor(
             json_path,
-            self.broker,
+            trade_broker,
             self.prices,
             phases=self.phases,
             fill_queue=fill_q,

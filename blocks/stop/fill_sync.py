@@ -211,6 +211,13 @@ def sync_open_order(
 
 def stop_qty_for_state(state: Dict[str, Any]) -> int:
     """Contracts that should be covered by the exchange stop right now."""
+    if state.get('short_remaining_qty') is not None:
+        return int(state['short_remaining_qty'])
+    partial_fills = state.get('short_partial_fills') or []
+    if partial_fills:
+        closed = sum(int(p.get('qty') or 0) for p in partial_fills)
+        total = int(state.get('filled_quantity') or state.get('quantity') or 0)
+        return max(0, total - closed)
     return int(state.get('filled_quantity') or 0)
 
 
@@ -227,7 +234,7 @@ def stop_is_current(
         return False
     if active.get('status') in ('filled', 'cancelled', 'rejected', 'expired'):
         return False
-    return int(state.get('stop_quantity') or 0) >= stop_qty_for_state(state)
+    return int(state.get('stop_quantity') or 0) == stop_qty_for_state(state)
 
 
 def stop_order_fully_filled(state: Dict[str, Any], result: OrderResult) -> bool:

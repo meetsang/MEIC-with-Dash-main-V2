@@ -13,26 +13,47 @@ class PhaseProfitTarget(PhaseBase):
 
     def should_activate(self, monitor) -> bool:
         state = monitor.state
+        if state.get('is_scale_out_split') or (state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+            return False
         exit_cfg = state.get('exit_config') or {}
+        target_pct = exit_cfg.get('profit_target_pct')
+        if target_pct is None:
+            target_pct = state.get('profit_target_pct')
         return (
             state.get('status') == 'open'
-            and exit_cfg.get('profit_target_pct') is not None
+            and target_pct is not None
         )
 
     def _evaluate_active(self, monitor) -> str:
         return PhaseAction.EXIT_REQUIRED if self._target_hit(monitor) else PhaseAction.NONE
+
+    @staticmethod
+    def _leg_mid(prices, symbol: str) -> float | None:
+        if not symbol or prices is None:
+            return None
+        if hasattr(prices, 'get_option_mid'):
+            return prices.get_option_mid(symbol)
+        if hasattr(prices, 'get_market_mid'):
+            mid = prices.get_market_mid(symbol)
+            if mid is not None:
+                return mid
+        if hasattr(prices, 'get'):
+            return prices.get(symbol)
+        return None
 
     def _target_hit(self, monitor) -> bool:
         state = monitor.state
         exit_cfg = state.get('exit_config') or {}
         target_pct = exit_cfg.get('profit_target_pct')
         if target_pct is None:
+            target_pct = state.get('profit_target_pct')
+        if target_pct is None:
             return False
 
         short_leg = state.get('short_leg') or {}
         long_leg = state.get('long_leg') or {}
-        short_mid = monitor.prices.get_option_mid(short_leg.get('symbol', ''))
-        long_mid = monitor.prices.get_option_mid(long_leg.get('symbol', ''))
+        short_mid = self._leg_mid(monitor.prices, short_leg.get('symbol', ''))
+        long_mid = self._leg_mid(monitor.prices, long_leg.get('symbol', ''))
         if short_mid is None or long_mid is None:
             return False
 
@@ -41,7 +62,8 @@ class PhaseProfitTarget(PhaseBase):
 
         entry = state.get('entry') or {}
         entry_price = float(
-            entry.get('credit')
+            entry.get('net_credit')
+            or entry.get('credit')
             or entry.get('debit')
             or short_leg.get('fill_price')
             or 0

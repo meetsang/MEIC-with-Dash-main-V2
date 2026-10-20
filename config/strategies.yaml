@@ -6,6 +6,7 @@ strategies:
     instrument: SPX
     broker: tastytrade
     stop_profile: meic_credit_spread
+    paper: true
 
   - name: MANUAL_SPREAD
     enabled: true
@@ -14,6 +15,7 @@ strategies:
     broker: tastytrade
     stop_profile: meic_credit_spread
     scheduled: false
+    paper: false
 
   - name: SKYLINE_SPX
     enabled: true
@@ -40,10 +42,122 @@ strategies:
     broker: tastytrade
     stop_profile: perma_bull_pcs
     scheduled: false
-    paper: false
+    paper: true
     config_overrides:
       entry_time_et: '08:45'  # US/Central (MEIC session clock)
       spread_width: 5
       target_credit: 1.0
       quantity: 1
       profit_target_debit: 0.15
+
+  - name: MEAN_REVERSION_SPX
+    enabled: true
+    confirmed: true
+    module: strategies.mean_reversion.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: mean_reversion
+    scheduled: false
+    paper: true
+    config_overrides:
+      open_time_cst: '08:30'
+      cutoff_time_cst: '12:00'
+      market_close_cst: '14:55'
+      spread_width: 10
+      target_delta: 0.18
+      min_delta: 0.10
+      max_delta: 0.25
+      quantity: 1
+      profit_target_pct: 0.50
+      stop_loss_pct: 1.00
+      breakeven_trigger_pct: 0.25
+      breakeven_lock_pct: 0.10
+
+  - name: IRON_FLY_SPX
+    enabled: true
+    confirmed: true
+    module: strategies.iron_fly.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: iron_fly_break_even_cut
+    scheduled: false
+    paper: true
+    config_overrides:
+      mode: 'PAPER'
+      contracts: 1
+      max_open_risk: 15000.0
+      daily_loss_stop: 2500.0
+      restart_when_flat: false
+
+  - name: IRON_FLY_XSP
+    enabled: true
+    confirmed: true
+    module: strategies.iron_fly_xsp.strategy
+    instrument: XSP
+    broker: tastytrade
+    stop_profile: iron_fly_xsp_break_even_cut
+    scheduled: false
+    paper: true
+    config_overrides:
+      mode: 'PAPER'
+      contracts: 2
+      max_open_risk: 3000.0
+      daily_loss_stop: 500.0
+      restart_when_flat: false
+
+  - name: DRMA_HM_SPX
+    enabled: true
+    confirmed: true
+    module: strategies.drma_hm.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: drma_hm_strategy
+    scheduled: false
+    paper: true
+    config_overrides:
+      trade_mode: all_three          # 'all_three', 'directional_futures', 'directional_only', 'non_directional_only', 'both'
+      min_grade_to_signal: 'Grade A and A+'
+      # Sub-strategy Independent Paper/Live controls (default to strategy paper setting if omitted)
+      dir_paper: true                # Directional options (Debit Spreads): true=paper, false=live
+      non_dir_paper: true            # Non-directional options (Credit Spreads): true=paper, false=live
+      futures_paper: true            # Directional futures (ES Outright): true=paper, false=live
+      # Directional Futures parameters (Outright ES Futures)
+      futures_symbol: ES             # ES continuous / front month
+      futures_quantity: 1            # 1 contract
+      futures_min_grade: 'Grade A+ Only' # Futures entry: Grade A+ setups only (score 5)
+      futures_profit_target_pts: 5.0 # 5 pt profit target
+      futures_stop_loss_pts: 5.0     # 5 pt stop loss
+      futures_point_value: 50.0      # $50 per ES point ($250 per 5 pts)
+      futures_allow_short: true      # Buy ES on Bull, Short ES on Bear
+      # Non-directional parameters (Credit Spreads / Iron Condor)
+      non_dir_selection_mode: credit # 'credit' or 'delta'
+      non_dir_target_credit: 1.00    # e.g. $1.00 credit
+      non_dir_spread_width: 10
+      non_dir_profit_target_pct: 0.50 # 50% credit PT
+      non_dir_stop_loss_pct: 1.00    # 100% credit SL (2x credit)
+      # Directional parameters (Debit Spreads / Long Options)
+      dir_vehicle_type: debit_spread # 'debit_spread' or 'long_option'
+      dir_selection_mode: debit      # 'debit' or 'delta'
+      dir_target_debit: 2.50         # e.g. $2.50 debit
+      dir_spread_width: 10
+      dir_profit_target_pct: 0.50    # 50% debit PT
+      dir_stop_loss_pct: 0.50        # 50% debit SL
+      # Moving Average and Signal Filters
+      ma_type: EMA
+      ma_len: 21
+      min_slope_pts: 0.5
+      max_extension_pts: 18.0
+      orb_minutes: 30
+      wait_for_orb: true
+      filter_lunch_chop: false
+      enable_debounce: true
+      cooldown_bars: 5
+      max_daily_signals: 4
+      force_eod_exit: true
+      eod_exit_time_cst: '14:50'
+      exit_style: trend_runner
+      min_hold_bars: 3
+      # Data feed & Overrides (Overnight & Prior Day)
+      enable_yahoo_finance: true
+      quantity: 1
+

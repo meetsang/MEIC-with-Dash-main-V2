@@ -25,16 +25,12 @@ class TestSessionPlan(unittest.TestCase):
             self.assertEqual(plan.rows[1].slot_key, '11-00_C')
             self.assertEqual(bootstrap_meic_session_if_missing(tmp), None)
 
-    def test_bootstrap_pauses_early_morning_lots_by_default(self):
+    def test_bootstrap_unpauses_all_lots_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = bootstrap_meic_session_if_missing(tmp)
             self.assertIsNotNone(path)
             plan = SessionPlan.load(path)
-            for lot in ('10-45', '11-15'):
-                for side in ('P', 'C'):
-                    row = plan.row_by_slot_key(f'{lot}_{side}')
-                    self.assertTrue(row.paused, f'{lot}_{side} should be paused by default')
-            for lot in ('11-45', '12-15', '12-45', '01-30'):
+            for lot in ('10-30', '11-00', '12-00', '01-00', '01-15', '02-15'):
                 for side in ('P', 'C'):
                     row = plan.row_by_slot_key(f'{lot}_{side}')
                     self.assertFalse(row.paused, f'{lot}_{side} should be active by default')

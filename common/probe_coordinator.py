@@ -142,7 +142,20 @@ class ProbeCoordinator:
 
         Returns True if newly scheduled, False if already started/completed (no retry).
         """
-        key = self._tranche_key(strategy, slot_key)
+        return self.schedule_tranche_probe(strategy=strategy, tranche_id=slot_key, source='manual')
+
+    def schedule_tranche_probe(
+        self,
+        *,
+        strategy: str,
+        tranche_id: str,
+        source: str = 'pre_tranche',
+    ) -> bool:
+        """Schedule exactly one async probe for (session_date, strategy, tranche_id).
+
+        Returns True if newly scheduled, False if already started/completed (no retry).
+        """
+        key = self._tranche_key(strategy, tranche_id)
         with self._lock:
             if key in self._started:
                 return False
@@ -150,23 +163,23 @@ class ProbeCoordinator:
         from common.trading_gate import mark_probe_scheduled
 
         mark_probe_scheduled(
-            source='manual',
+            source=source,
             session_date_ct=self.session_date_ct,
             strategy=strategy,
-            tranche_id=slot_key,
+            tranche_id=tranche_id,
         )
         threading.Thread(
             target=self._execute_probe,
             kwargs={
                 'key': key,
-                'source': 'manual',
+                'source': source,
                 'strategy': strategy,
-                'tranche_id': slot_key,
+                'tranche_id': tranche_id,
             },
-            name=f'rest-probe-manual-{slot_key}',
+            name=f'rest-probe-{source}-{tranche_id}',
             daemon=True,
         ).start()
-        self.log.info('Scheduled manual REST probe slot=%s', slot_key)
+        self.log.info('Scheduled %s REST probe tranche=%s strategy=%s', source, tranche_id, strategy)
         return True
 
     def _run_loop(self) -> None:
@@ -250,29 +263,11 @@ class ProbeCoordinator:
             )
             if now > end_dt:
                 continue
-            with self._lock:
-                if key in self._started:
-                    continue
-                self._started.add(key)
-            from common.trading_gate import mark_probe_scheduled
-
-            mark_probe_scheduled(
-                source='pre_tranche',
-                session_date_ct=self.session_date_ct,
+            self.schedule_tranche_probe(
                 strategy=tw.strategy,
                 tranche_id=tw.tranche_id,
+                source='pre_tranche',
             )
-            threading.Thread(
-                target=self._execute_probe,
-                kwargs={
-                    'key': key,
-                    'source': 'pre_tranche',
-                    'strategy': tw.strategy,
-                    'tranche_id': tw.tranche_id,
-                },
-                name=f'rest-probe-{tw.tranche_id}',
-                daemon=True,
-            ).start()
 
     def _execute_probe(
         self,
@@ -465,12 +460,12 @@ def meic_tranches_from_slots(slots) -> List[TrancheWindow]:
     return out
 
 
-def meic_tranches_from_session_plan(plan) -> List[TrancheWindow]:
-    """Eligible tranches: lot with at least one pending, unpaused, unskipped side."""
+def meic_tranches_from_session_plan(plan, *, include_paused: bool = True) -> List[TrancheWindow]:
+    """Eligible tranches from session plan (all pending lots that are not skipped)."""
     from common import trades_layout
 
     by_lot: Dict[str, TrancheWindow] = {}
-    pending_lots: set[str] = set()
+    eligible_lots: set[str] = set()
     for row in plan.rows:
         lot = row.lot
         if lot not in by_lot:
@@ -480,6 +475,7 @@ def meic_tranches_from_session_plan(plan) -> List[TrancheWindow]:
                 window_start=row.window_start_time(),
                 window_end=row.window_end_time(),
             )
-        if row.state == 'pending' and not row.paused and not row.skip:
-            pending_lots.add(lot)
-    return [by_lot[lot] for lot in by_lot if lot in pending_lots]
+        if row.state == 'pending' and not row.skip:
+            if include_paused or not row.paused:
+                eligible_lots.add(lot)
+    return [by_lot[lot] for lot in by_lot if lot in eligible_lots]

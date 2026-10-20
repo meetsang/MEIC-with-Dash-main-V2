@@ -30,6 +30,13 @@ class TestRunOneDay(unittest.TestCase):
             args = parser.parse_args(['--one-day'])
             self.assertTrue(args.one_day)
 
+    def test_argparse_clone_relay_flags(self):
+        import inspect
+        src = inspect.getsource(launcher)
+        self.assertIn('--no-clone-relay', src)
+        self.assertIn('--ngrok-domain', src)
+        self.assertIn('clone_relay_enabled', src)
+
     def test_startup_probe_failure_still_starts_services(self):
         now = datetime(2026, 7, 10, 8, 35, 0)
         streamer = MagicMock(poll=MagicMock(return_value=None), terminate=MagicMock(), wait=MagicMock())

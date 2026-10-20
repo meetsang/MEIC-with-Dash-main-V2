@@ -80,8 +80,9 @@ class TestMeicPnlHelpers(unittest.TestCase):
         trade = _trade()
         for state in MEIC_GRID_PNL_STATES:
             self.assertTrue(_counts_toward_meic_day_pnl(row, trade, state))
-        for state in ('failed', 'pending', 'entering', 'expired'):
+        for state in ('failed', 'pending', 'entering'):
             self.assertFalse(_counts_toward_meic_day_pnl(row, trade, state))
+        self.assertIn('expired', MEIC_GRID_PNL_STATES)
 
 
 class TestBuildSummaryMeicPnl(unittest.TestCase):

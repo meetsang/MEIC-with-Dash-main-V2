@@ -39,29 +39,49 @@ def parse_canonical(symbol: str) -> Optional[Tuple[str, str, int]]:
 
 
 def to_schwab(symbol: str) -> str:
-    """Convert any supported symbol to Schwab format."""
+    """Convert any supported symbol to Schwab/OCC format."""
     parsed = parse_canonical(symbol)
-    if not parsed:
-        return symbol
-    expiry, opt_type, strike = parsed
-    return f'SPXW  {expiry}{opt_type}0{strike}000'
+    if parsed:
+        expiry, opt_type, strike = parsed
+        return f'SPXW  {expiry}{opt_type}0{strike}000'
+
+    try:
+        from clone_trades.models import OptionSpec
+        spec = OptionSpec.from_occ_or_streamer(symbol)
+        if spec:
+            return spec.occ_symbol
+    except Exception:
+        pass
+
+    return symbol
 
 
 def to_tastytrade(symbol: str) -> str:
     """Convert any supported symbol to TastyTrade streamer format."""
     parsed = parse_canonical(symbol)
-    if not parsed:
-        return symbol if symbol.startswith('.') else f'.{symbol}'
-    expiry, opt_type, strike = parsed
-    return f'.SPXW{expiry}{opt_type}{strike}'
+    if parsed:
+        expiry, opt_type, strike = parsed
+        return f'.SPXW{expiry}{opt_type}{strike}'
+
+    try:
+        from clone_trades.models import OptionSpec
+        spec = OptionSpec.from_occ_or_streamer(symbol)
+        if spec:
+            return spec.streamer_symbol
+    except Exception:
+        pass
+
+    return symbol if symbol.startswith('.') else f'.{symbol}'
 
 
-def build_schwab_symbol(expiry_yymmdd: str, opt_type: str, strike: int) -> str:
-    return f'SPXW  {expiry_yymmdd}{opt_type.upper()}0{strike}000'
+def build_schwab_symbol(expiry_yymmdd: str, opt_type: str, strike: int, ticker: str = 'SPXW') -> str:
+    clean_ticker = ticker.lstrip('.').strip()
+    return f'{clean_ticker:<6}{expiry_yymmdd}{opt_type.upper()}{int(strike) * 1000:08d}'
 
 
-def build_tastytrade_symbol(expiry_yymmdd: str, opt_type: str, strike: int) -> str:
-    return f'.SPXW{expiry_yymmdd}{opt_type.upper()}{strike}'
+def build_tastytrade_symbol(expiry_yymmdd: str, opt_type: str, strike: int, ticker: str = 'SPXW') -> str:
+    clean_ticker = ticker.lstrip('.').strip()
+    return f'.{clean_ticker}{expiry_yymmdd}{opt_type.upper()}{strike}'
 
 
 def strike_from_symbol(symbol: str) -> Optional[int]:
@@ -82,3 +102,30 @@ def mqtt_topic_symbol(symbol: str, broker: str = 'tastytrade') -> str:
     if broker == 'schwab':
         return to_schwab(symbol)
     return to_tastytrade(symbol)
+
+
+FUTURES_PRODUCT_CODES = {
+    'ES', 'MES', 'NQ', 'MNQ', 'YM', 'MYM', 'RTY', 'M2K',
+    'CL', 'QM', 'GC', 'MGC', 'ZB', 'ZN', 'ZF', 'ZT',
+}
+
+
+def is_futures_symbol(symbol: str) -> bool:
+    """True when the symbol represents a futures contract or product code."""
+    if not symbol:
+        return False
+    s = str(symbol).strip().upper()
+    if s.startswith('/'):
+        return True
+    return s in FUTURES_PRODUCT_CODES
+
+
+def to_futures_product_code(symbol: str) -> str:
+    """Extract standard futures root product code (e.g. '/ES' -> 'ES', '/ESZ6' -> 'ES')."""
+    if not symbol:
+        return 'ES'
+    s = str(symbol).strip().upper().lstrip('/')
+    for prod in sorted(FUTURES_PRODUCT_CODES, key=len, reverse=True):
+        if s.startswith(prod):
+            return prod
+    return s

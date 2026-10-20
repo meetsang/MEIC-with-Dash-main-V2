@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -50,6 +51,23 @@ class PermaBullPCSStrategy(BaseStrategy):
         )
 
         try:
+            today = util.central_date()
+            expiry_yymmdd = today.strftime('%y%m%d')
+            lot = f'perma-{today.isoformat()}'
+
+            from common.trades_layout import active_dir_for_strategy
+            active_dir = active_dir_for_strategy(self.config.name, root)
+            session_path = os.path.join(active_dir, f'session_{today.isoformat()}.json')
+            if os.path.isfile(session_path):
+                try:
+                    with open(session_path, encoding='utf-8') as f:
+                        session_state = json.load(f)
+                    if session_state.get('entered'):
+                        self.logger.info('PERMA_BULL_PCS already entered today — trade managed by stop_monitor')
+                        return
+                except Exception as exc:
+                    self.logger.warning('Failed reading Perma Bull session state: %s', exc)
+
             self._wait_for_entry_window(root)
             if not self._running:
                 return
@@ -62,10 +80,6 @@ class PermaBullPCSStrategy(BaseStrategy):
             if not allowed:
                 self._write_skip(root, reason)
                 return
-
-            today = util.central_date()
-            expiry_yymmdd = today.strftime('%y%m%d')
-            lot = f'perma-{today.isoformat()}'
 
             from blocks.entry.credit_spread import CreditSpreadEntry
 
@@ -92,9 +106,6 @@ class PermaBullPCSStrategy(BaseStrategy):
                 lot,
             )
 
-            from common.trades_layout import active_dir_for_strategy
-
-            active_dir = active_dir_for_strategy(self.config.name, root)
             trade_path = entry.write_handshake(
                 lot=lot,
                 side='P',

@@ -23,9 +23,14 @@ def schwab_symbols_from_state(state: dict) -> tuple[str, str]:
     )
 
 
-def register_spread_symbols(state: dict, lot: str, logger: Optional[logging.Logger] = None) -> bool:
+def register_spread_symbols(
+    state: dict,
+    lot: str,
+    logger: Optional[logging.Logger] = None,
+    log: Optional[logging.Logger] = None,
+) -> bool:
     """Add spread legs to streaming/optsymbols.json so publish_tastytrade picks them up."""
-    slog = logger or log
+    slog = logger or log or globals()['log']
     try:
         from meic0dte.app import utilities as util
 
@@ -38,18 +43,19 @@ def register_spread_symbols(state: dict, lot: str, logger: Optional[logging.Logg
 
 def register_option_symbols(
     symbols: Iterable[str],
-    lot: str,
+    lot: str = 'streamer',
     logger: Optional[logging.Logger] = None,
+    log: Optional[logging.Logger] = None,
 ) -> bool:
     """Register one or more option legs (Schwab or TastyTrade format) for MQTT streaming."""
-    slog = logger or log
+    slog = logger or log or globals()['log']
     schwab: List[str] = []
     seen: set[str] = set()
     for sym in symbols:
         text = str(sym).strip()
         if not text:
             continue
-        converted = to_schwab(text) if parse_canonical(text) else text
+        converted = to_schwab(text)
         if converted in seen:
             continue
         seen.add(converted)

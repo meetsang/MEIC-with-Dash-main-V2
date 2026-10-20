@@ -137,6 +137,33 @@ class TestCloseFills(unittest.TestCase):
         self.assertEqual(slippage_label(-12.5), '-$12.50')
         self.assertEqual(slippage_label(None), '')
 
+    def test_profit_target_slippage_is_none(self):
+        """Profit target is a winning target exit, not a stop-out — operator slippage is None."""
+        state = {
+            'status': 'closed',
+            'entry': {'net_credit': 0.90, 'two_x_net_credit': 3.6},
+            'short_leg': {'fill_price': 1.40},
+            'long_leg': {'fill_price': 0.50},
+            'short_close_price': 0.75,
+            'long_close_price': 0.25,
+            'close_mechanism': 'profit_target',
+            'filled_quantity': 2,
+            'close': {
+                'reason': 'profit_target',
+                'close_mechanism': 'profit_target',
+                'short_close_price': 0.75,
+                'long_close_price': 0.25,
+            },
+        }
+        self.assertIsNone(stop_out_slippage_per_spread(state))
+        self.assertIsNone(slippage_dollars(state))
+        self.assertIsNone(stop_slippage_short(state))
+        apply_close_slippage_fields(state)
+        self.assertNotIn('slippage', state)
+        self.assertNotIn('slippage', state['close'])
+        self.assertNotIn('stop_slippage', state)
+
 
 if __name__ == '__main__':
     unittest.main()
+

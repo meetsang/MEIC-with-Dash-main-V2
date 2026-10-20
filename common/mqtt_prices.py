@@ -379,12 +379,22 @@ class MqttPriceCache:
 
     def _lookup_keys(self, symbol: str) -> List[str]:
         """Symbol aliases for MQTT cache lookup (never fall back to SPX index)."""
-        return [
+        keys = [
             symbol,
             to_tastytrade(symbol),
             mqtt_topic_symbol(symbol, 'tastytrade'),
             mqtt_topic_symbol(symbol, 'schwab'),
         ]
+        clean = symbol.strip().upper()
+        if clean in ('ES', '/ES') or clean.startswith(('/ES', 'ES')):
+            keys.extend(['ES', '/ES', '/ES:XCME'])
+        elif clean in ('MES', '/MES') or clean.startswith(('/MES', 'MES')):
+            keys.extend(['MES', '/MES', '/MES:XCME'])
+        elif clean in ('NQ', '/NQ') or clean.startswith(('/NQ', 'NQ')):
+            keys.extend(['NQ', '/NQ', '/NQ:XCME'])
+        elif clean in ('MNQ', '/MNQ') or clean.startswith(('/MNQ', 'MNQ')):
+            keys.extend(['MNQ', '/MNQ', '/MNQ:XCME'])
+        return keys
 
     def get(self, symbol: str) -> Optional[float]:
         """Look up price by any symbol format (includes breach-test overrides)."""
@@ -400,6 +410,10 @@ class MqttPriceCache:
                     return self._prices[k]
         return None
 
+    def get_price(self, symbol: str) -> Optional[float]:
+        """Alias for get(symbol) to support broker cache conventions."""
+        return self.get(symbol)
+
     def get_market_mid(self, symbol: str) -> Optional[float]:
         """Live MQTT mid only — ignores breach-simulation overrides."""
         keys = self._lookup_keys(symbol)
@@ -410,6 +424,10 @@ class MqttPriceCache:
                 if k in self._prices:
                     return self._prices[k]
         return None
+
+    def get_option_mid(self, symbol: str) -> Optional[float]:
+        """Option mid price from market or cache."""
+        return self.get_market_mid(symbol) or self.get(symbol)
 
     def last_event_kind(self, symbol: str) -> Optional[str]:
         keys = self._lookup_keys(symbol)
@@ -542,6 +560,9 @@ def get_shared_cache() -> MqttPriceCache:
         if _shared_cache is None:
             _shared_cache = MqttPriceCache()
         return _shared_cache
+
+
+get_mqtt_price_cache = get_shared_cache
 
 
 def ensure_cache_started() -> MqttPriceCache:

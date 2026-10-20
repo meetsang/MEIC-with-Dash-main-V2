@@ -28,6 +28,7 @@ class StandaloneStrategyRunner:
         self._last_error: Optional[str] = None
         self._last_entry_attempt: Optional[str] = None
         self._running = False
+        self._completed = False
 
     @property
     def config(self):
@@ -68,6 +69,9 @@ class StandaloneStrategyRunner:
 
     def _assert_paper_safety(self) -> None:
         if not self.config.paper:
+            return
+        # If strategy has sub-strategies with independent execution modes, the strategy manages brokers per sub-strategy
+        if getattr(self.config, 'has_any_live_sub_strategy', False):
             return
         broker = self.strategy.broker
         if broker is None:
@@ -126,13 +130,96 @@ class StandaloneStrategyRunner:
                 if trade.get('status') == 'closed':
                     continue
                 PermaBullPCSStrategy.register_open_trade_streamer_legs(trade, self.log)
+            return
+
+        if self.config.name == 'MEAN_REVERSION_SPX':
+            today = date.today().isoformat()
+            path = os.path.join(
+                active_dir_for_strategy(self.config.name, self.root),
+                f'mean_reversion_{today}.json',
+            )
+            if not os.path.isfile(path):
+                return
+            try:
+                with open(path, encoding='utf-8') as f:
+                    trade = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                self.log.warning('Could not load open Mean Reversion trade for streamer register: %s', exc)
+                return
+            if trade.get('status') == 'closed':
+                return
+            from strategies.mean_reversion.strategy import MeanReversionStrategy
+
+            MeanReversionStrategy.register_open_trade_streamer_legs(trade, self.log)
+            return
+
+        if self.config.name == 'DRMA_HM_SPX':
+            today = date.today().isoformat()
+            active = active_dir_for_strategy(self.config.name, self.root)
+            if not os.path.isdir(active):
+                return
+            for fname in os.listdir(active):
+                if not (fname.startswith(f'drma_hm_{today}') and fname.endswith('.json')):
+                    continue
+                path = os.path.join(active, fname)
+                try:
+                    with open(path, encoding='utf-8') as f:
+                        trade = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if trade.get('status') == 'closed':
+                    continue
+                from strategies.drma_hm.strategy import DRMAHMStrategy
+                DRMAHMStrategy.register_open_trade_streamer_legs(trade, self.log)
+            return
+
+        if self.config.name == 'IRON_FLY_SPX':
+            today = date.today().isoformat()
+            path = os.path.join(
+                active_dir_for_strategy(self.config.name, self.root),
+                f'iron_fly_{today}.json',
+            )
+            if not os.path.isfile(path):
+                return
+            try:
+                with open(path, encoding='utf-8') as f:
+                    book_data = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                self.log.warning('Could not load open Iron Fly book for streamer register: %s', exc)
+                return
+            from strategies.iron_fly.strategy import IronFlyStrategy
+            IronFlyStrategy.register_open_trade_streamer_legs(book_data, self.log)
+            return
+
+        if self.config.name == 'IRON_FLY_XSP':
+            today = date.today().isoformat()
+            path = os.path.join(
+                active_dir_for_strategy(self.config.name, self.root),
+                f'iron_fly_xsp_{today}.json',
+            )
+            if not os.path.isfile(path):
+                return
+            try:
+                with open(path, encoding='utf-8') as f:
+                    book_data = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                self.log.warning('Could not load open XSP Iron Fly book for streamer register: %s', exc)
+                return
+            from strategies.iron_fly_xsp.strategy import IronFlyXspStrategy
+            IronFlyXspStrategy.register_open_trade_streamer_legs(book_data, self.log)
+            return
 
     def _resolve_broker(self) -> None:
-        if self.strategy.broker is not None:
-            return
+        curr_broker = self.strategy.broker
+        desired_paper = bool(self.config.paper)
+        if curr_broker is not None:
+            is_curr_paper = getattr(curr_broker, '_is_journal', False) or getattr(curr_broker, '_is_paper', False)
+            if is_curr_paper == desired_paper:
+                return
         broker = get_shared_broker_for_strategy(
             self.config.name,
-            paper=self.config.paper,
+            paper=desired_paper,
+            reset=True,
         )
         self.strategy.broker = broker
         self._assert_paper_safety()
@@ -162,6 +249,21 @@ class StandaloneStrategyRunner:
         if status.breached:
             guard.halt(status)
 
+    def _has_open_trades(self) -> bool:
+        active_dir = active_dir_for_strategy(self.config.name, self.root)
+        if not os.path.isdir(active_dir):
+            return False
+        for f in os.listdir(active_dir):
+            if f.endswith('.json') and not f.startswith(('session_', 'halted_')):
+                try:
+                    with open(os.path.join(active_dir, f), encoding='utf-8') as jf:
+                        t = json.load(jf)
+                        if t.get('status') == 'open':
+                            return True
+                except Exception:
+                    pass
+        return False
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
@@ -169,21 +271,31 @@ class StandaloneStrategyRunner:
         self._check_portfolio_guard()
 
         state = self._load_session_state()
-        if state.get('entered'):
+        has_open_trades = self._has_open_trades()
+
+        if state.get('entered') and self.config.name != 'DRMA_HM_SPX':
+            self._register_open_trade_streamer_legs()
+            if not has_open_trades:
+                self.log.info(
+                    '%s: session state shows entered=true and no open trades — skipping re-entry',
+                    self.config.name,
+                )
+                self._completed = True
+                return
             self.log.info(
-                '%s: session state shows entered=true — skipping re-entry',
+                '%s: session state shows entered=true with active open trades — resuming management',
                 self.config.name,
             )
-            self._register_open_trade_streamer_legs()
-            return
 
         allowed, reason = self._trading_allowed()
         if not allowed:
             self.log.info('%s: entry blocked (%s) — skipping', self.config.name, reason)
             self.save_session_state(entered=False, skip_reason=reason)
+            self._completed = True
             return
 
         self._stop_event.clear()
+        self._completed = False
         self._running = True
         self._thread = threading.Thread(
             target=self._run_wrapper,
@@ -198,11 +310,41 @@ class StandaloneStrategyRunner:
             self._resolve_broker()
             self._last_entry_attempt = time.strftime('%Y-%m-%dT%H:%M:%S')
             self.strategy.run()
+            self._completed = True
         except Exception as exc:
             self._last_error = str(exc)
             self.log.exception('Standalone strategy %s failed', self.config.name)
         finally:
             self._running = False
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def check_health(self) -> None:
+        """Watchdog: if thread died unexpectedly during trading hours without stop requested, restart it."""
+        if self._stop_event.is_set() or self.is_alive():
+            return
+
+        if self._completed:
+            return
+
+        state = self._load_session_state()
+        if self.config.name != 'DRMA_HM_SPX':
+            if state.get('entered') and not self._has_open_trades():
+                self._completed = True
+                return
+            if state.get('skip_reason'):
+                self._completed = True
+                return
+
+        allowed, _ = self._trading_allowed()
+        if allowed:
+            self.log.warning(
+                'Standalone strategy %s thread died unexpectedly (last_error=%s) — reviving...',
+                self.config.name,
+                self._last_error,
+            )
+            self.start()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -217,7 +359,8 @@ class StandaloneStrategyRunner:
         return {
             'name': eff.name,
             'paper': eff.paper,
-            'running': self._running,
+            'running': self._running or self.is_alive(),
+            'completed': self._completed,
             'entered': state.get('entered', False),
             'skip_reason': state.get('skip_reason'),
             'overrides': state.get('overrides', {}),

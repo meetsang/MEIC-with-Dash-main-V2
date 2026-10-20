@@ -35,13 +35,32 @@ class TestStandaloneRunner(unittest.TestCase):
         with patch.object(runner, '_register_open_trade_streamer_legs') as reg:
             runner.start()
             reg.assert_called_once()
-        self.assertFalse(runner._running)
+    def test_check_health_does_not_revive_completed(self):
+        active = os.path.join(self.tmp, 'trades', 'active', 'SKYLINE_SPX')
+        os.makedirs(active, exist_ok=True)
+        today = date.today().isoformat()
+        with open(os.path.join(active, f'session_{today}.json'), 'w', encoding='utf-8') as f:
+            json.dump({'entered': True, 'skip_reason': None, 'overrides': {}}, f)
 
-    def test_saves_session_state(self):
         runner = StandaloneStrategyRunner(self.strategy, root=self.tmp)
-        runner.save_session_state(entered=True, skip_reason=None)
-        state = runner._load_session_state()
-        self.assertTrue(state.get('entered'))
+        runner.start()
+        self.assertTrue(runner._completed)
+        with patch.object(runner, 'start') as mock_start:
+            runner.check_health()
+            mock_start.assert_not_called()
+
+    def test_skyline_run_idempotent_when_trade_exists(self):
+        active = os.path.join(self.tmp, 'trades', 'active', 'SKYLINE_SPX')
+        os.makedirs(active, exist_ok=True)
+        today = date.today().isoformat()
+        with open(os.path.join(active, f'skyline_{today}.json'), 'w', encoding='utf-8') as f:
+            json.dump({'status': 'open', 'structures': []}, f)
+
+        with patch.object(self.strategy, '_place_butterfly') as mock_place, \
+             patch.object(self.strategy, '_hold_until_market_close') as mock_hold:
+            self.strategy.run()
+            mock_place.assert_not_called()
+            mock_hold.assert_called_once()
 
 
 if __name__ == '__main__':

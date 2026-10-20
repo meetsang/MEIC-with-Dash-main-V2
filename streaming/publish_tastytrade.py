@@ -149,18 +149,24 @@ async def _stream_loop(session, slog):
 
     def _mqtt_publish_scalar(symbol: str, mid: float) -> None:
         nonlocal last_spx_price_ts
-        symbol = mqtt_topic_from_dxlink(symbol)
-        if symbol == 'SPX':
+        mqtt_sym = mqtt_topic_from_dxlink(symbol)
+        if mqtt_sym == 'SPX':
             last_spx_price_ts = dt.now(timezone.utc).astimezone().isoformat(timespec='seconds')
-        try:
-            publish.single(
-                TOPIC_PREFIX + symbol,
-                str(mid),
-                retain=True,
-                hostname=config.MQTT_BROKER_ADDR,
-            )
-        except Exception as exc:
-            slog.info('MQTT publish error %s: %s', symbol, exc)
+        targets = {symbol, mqtt_sym}
+        if mqtt_sym in ('ES', 'MES', 'NQ', 'MNQ'):
+            targets.add(f'/{mqtt_sym}')
+            targets.add(mqtt_sym)
+        for s in targets:
+            try:
+                publish.single(
+                    TOPIC_PREFIX + s,
+                    str(mid),
+                    retain=True,
+                    hostname=config.MQTT_BROKER_ADDR,
+                )
+            except Exception as exc:
+                slog.info('MQTT publish error %s: %s', s, exc)
+
 
     def _mqtt_publish_aux(topic: str, value: str, *, retain: bool = True) -> None:
         try:
@@ -229,7 +235,33 @@ async def _stream_loop(session, slog):
             _mqtt_publish_aux(meta_topic_for(sym), json.dumps(replay_meta))
             _mqtt_publish_scalar(sym, mid)
 
+    async def _resolve_futures_symbols() -> list[str]:
+        from tastytrade.instruments import Future
+        symbols = []
+        for code in ('ES', 'MES'):
+            try:
+                futs = await Future.get(session, product_codes=[code])
+                if not isinstance(futs, list):
+                    futs = [futs]
+                active = [f for f in futs if getattr(f, 'active', False)]
+                front = next((f for f in active if getattr(f, 'active_month', False)), None)
+                if not front and active:
+                    front = active[0]
+                if front:
+                    st = (getattr(front, 'streamer_symbol', '') or '').strip()
+                    if st:
+                        symbols.append(st)
+                        slog.info('Streamer subscribed to %s front contract: %s (%s)', code, st, front.symbol)
+            except Exception as e:
+                slog.warning('Could not resolve future %s streamer symbol: %s', code, e)
+        return symbols
+
+
     _publish_session()
+
+    fut_symbols = await _resolve_futures_symbols()
+    quote_set.update(fut_symbols)
+    trade_set.update(fut_symbols)
 
     async with DXLinkStreamer(session) as streamer:
         active_quotes = set(quote_set)
@@ -268,6 +300,14 @@ async def _stream_loop(session, slog):
                             event_kind='dxlink_trade',
                             source_event_epoch=_trade_source_epoch(trade),
                         )
+                    continue
+                if mqtt_sym in ('ES', 'MES', 'NQ', 'MNQ') and price > 0:
+                    _publish_genuine(
+                        raw_sym,
+                        price,
+                        event_kind='dxlink_trade',
+                        source_event_epoch=_trade_source_epoch(trade),
+                    )
                     continue
                 if mqtt_sym in WATCH_SYMBOLS and mqtt_sym != 'SPX':
                     size = int(trade.size or 0)
@@ -346,9 +386,19 @@ async def _stream_loop(session, slog):
 
 def main():
     slog = _get_logger()
-    session = create_tastytrade_session()
-    slog.info('TastyTrade streamer starting')
-    asyncio.run(_stream_loop(session, slog))
+    while True:
+        try:
+            # Streamer requires live market data session (TastyTrade DXLink), even in paper mode
+            session = create_tastytrade_session(paper=False)
+            asyncio.run(_stream_loop(session, slog))
+            slog.info('TastyTrade streamer stopped normally')
+            break
+        except (KeyboardInterrupt, SystemExit):
+            slog.info('TastyTrade streamer shutdown requested')
+            break
+        except Exception as exc:
+            slog.exception('Streamer loop encountered error, reconnecting in 3s: %s', exc)
+            time.sleep(3)
     slog.info('TastyTrade streamer stopped')
 
 

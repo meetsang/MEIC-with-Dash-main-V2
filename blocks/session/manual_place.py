@@ -19,8 +19,17 @@ def plan_fields_from_request(data: Dict[str, Any]) -> Dict[str, Any]:
     fill_wait = int(data.get('fill_wait_sec') or ms_config.OPEN_FILL_POLL_SEC)
     max_attempts = int(data.get('max_attempts') or (1 + chase_max if chase else 1))
 
+    raw_pt = data.get('profit_target_pct')
+    if raw_pt is None:
+        pt_pct = 0.50
+    else:
+        pt_pct = float(raw_pt)
+        if pt_pct > 1.0:
+            pt_pct = pt_pct / 100.0
+
     return {
         'stop_multiplier': float(data.get('stop_multiplier', 2)),
+        'profit_target_pct': pt_pct,
         'width': str(data.get('width') or ''),
         'credit_min': chase_floor,
         'credit_max': 0.0,
@@ -45,10 +54,21 @@ def apply_plan_metadata(state: Dict[str, Any], row: SessionRow) -> None:
     """Persist session plan choices on trade JSON (manual + MEIC)."""
     from manual_spread.butterfly import is_butterfly_side
 
+    pt_pct = getattr(row, 'profit_target_pct', 0.50)
+    if pt_pct is None:
+        pt_pct = 0.50
+    pt_pct = float(pt_pct)
+
+    state['profit_target_pct'] = pt_pct
+    if 'exit_config' not in state or not isinstance(state['exit_config'], dict):
+        state['exit_config'] = {}
+    state['exit_config']['profit_target_pct'] = pt_pct
+
     if is_butterfly_side(row.side):
         state['stop_profile'] = 'hold_to_expiry'
         state['plan'] = {
             'stop_profile': 'hold_to_expiry',
+            'profit_target_pct': pt_pct,
             'on_unfilled': row.on_unfilled or 'none',
             'fill_wait_sec': int(row.fill_wait_sec or ms_config.OPEN_FILL_POLL_SEC),
             'max_attempts': int(row.max_attempts or 1),
@@ -61,6 +81,7 @@ def apply_plan_metadata(state: Dict[str, Any], row: SessionRow) -> None:
     state['on_unfilled'] = row.on_unfilled or 'none'
     state['plan'] = {
         'stop_multiplier': float(row.stop_multiplier or 2),
+        'profit_target_pct': pt_pct,
         'on_unfilled': row.on_unfilled or 'none',
         'fill_wait_sec': int(row.fill_wait_sec or ms_config.OPEN_FILL_POLL_SEC),
         'chase_floor': float(row.credit_min or 0),

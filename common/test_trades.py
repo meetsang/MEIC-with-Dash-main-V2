@@ -49,7 +49,7 @@ def is_test_trade(trade: Dict[str, Any], path: str = '') -> bool:
     if is_test_trade_lot(str(lot) if lot is not None else ''):
         return True
     base = os.path.basename(path).lower()
-    if base in ('t.json', 'trade.json', 'ms1_p_test.json'):
+    if base in ('t.json', 'trade.json', 'ms1_p_test.json', 'closing_c.json', 'closing_p.json'):
         return True
     if '_test.json' in base or base.endswith('_test.json'):
         return True

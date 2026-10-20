@@ -16,6 +16,8 @@ trades/history/
 trades/session/
 trades/settlement/
 trades/closed/
+trades/clone_trades/
+trades/commands/
 trades/*.json
 manual_spread/trades/
 meic0dte/trades/

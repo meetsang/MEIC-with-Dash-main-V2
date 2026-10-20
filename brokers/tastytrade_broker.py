@@ -20,7 +20,7 @@ from common.broker_cooldown import set_cooldown, should_skip_priority
 from common.rest_limiter import get_rest_limiter
 from common.mqtt_prices import ensure_cache_started
 from common.option_ticks import round_spx_option_price
-from common.symbols import symbols_equivalent, to_schwab, to_tastytrade
+from common.symbols import is_futures_symbol, symbols_equivalent, to_futures_product_code, to_schwab, to_tastytrade
 from brokers.base import BrokerBase, ComboLeg, OrderResult
 
 log = logging.getLogger(__name__)
@@ -165,18 +165,23 @@ def _normalize_leg_action(action: Any) -> str:
     return text
 
 
-def _signed_order_price(action: str, amount: float) -> Decimal:
+def _signed_order_price(action: str, amount: float, is_futures: bool = False) -> Decimal:
     """
     TastyTrade SDK price sign: negative = debit, positive = credit.
 
     BUY_TO_* closes/opens for debit; SELL_TO_* for credit.
+    For futures (BUY/SELL), standard 2-decimal rounding applies (e.g. 0.25 ticks).
     """
-    magnitude = _round_option_price(abs(amount))
-    if action in ('BUY_TO_OPEN', 'BUY_TO_CLOSE'):
+    if is_futures or action in ('BUY', 'SELL'):
+        magnitude = Decimal(str(round(abs(amount), 2)))
+    else:
+        magnitude = _round_option_price(abs(amount))
+    if action in ('BUY_TO_OPEN', 'BUY_TO_CLOSE', 'BUY'):
         return -magnitude
-    if action in ('SELL_TO_OPEN', 'SELL_TO_CLOSE'):
+    if action in ('SELL_TO_OPEN', 'SELL_TO_CLOSE', 'SELL'):
         return magnitude
     raise ValueError(f'Unsupported order action: {action}')
+
 
 
 def _order_result_from_response(resp) -> OrderResult:
@@ -248,11 +253,11 @@ def _order_result_from_placed_order(order) -> OrderResult:
         fq = _leg_filled_qty(leg)
         action = _normalize_leg_action(getattr(leg, 'action', ''))
         leg_px = _leg_avg_fill_price(leg)
-        if action == 'SELL_TO_OPEN':
+        if action in ('SELL_TO_OPEN', 'SELL'):
             short_filled = fq
             if leg_px is not None:
                 short_fill = leg_px
-        elif action == 'BUY_TO_OPEN':
+        elif action in ('BUY_TO_OPEN', 'BUY'):
             long_filled = fq
             if leg_px is not None:
                 long_fill = leg_px
@@ -276,6 +281,13 @@ def _order_result_from_placed_order(order) -> OrderResult:
     elif sell_to_close_fill is not None and buy_to_close_fill is None and long_fill is None:
         single_leg_fill = sell_to_close_fill
         filled_qty = sell_to_close_filled or filled_qty
+    elif len(legs) == 1:
+        if long_fill is not None:
+            single_leg_fill = long_fill
+            filled_qty = long_filled or filled_qty
+        elif short_fill is not None:
+            single_leg_fill = short_fill
+            filled_qty = short_filled or filled_qty
 
     # Full spread close: BTC closes short, STC closes long.
     if buy_to_close_filled > 0 and sell_to_close_filled > 0:
@@ -348,6 +360,26 @@ def _order_result_from_placed_order(order) -> OrderResult:
     )
 
 
+def _order_result_from_placed_complex_order(complex_order) -> OrderResult:
+    """Build OrderResult from a tastytrade PlacedComplexOrder (e.g. OCO)."""
+    cid = str(getattr(complex_order, 'id', ''))
+    orders = getattr(complex_order, 'orders', []) or []
+    for o in orders:
+        st = str(getattr(o, 'status', '')).lower()
+        if st == 'filled':
+            res = _order_result_from_placed_order(o)
+            res.order_id = cid
+            res.raw = complex_order
+            return res
+    if any(str(getattr(o, 'status', '')).lower() in ('live', 'working', 'in_flight', 'in flight', 'received') for o in orders):
+        return OrderResult(True, cid, 'working', raw=complex_order)
+    if all(str(getattr(o, 'status', '')).lower() in ('cancelled', 'canceled', 'expired') for o in orders):
+        return OrderResult(True, cid, 'cancelled', raw=complex_order)
+    if any(str(getattr(o, 'status', '')).lower() == 'rejected' for o in orders):
+        return OrderResult(False, cid, 'rejected', raw=complex_order)
+    return OrderResult(True, cid, 'working', raw=complex_order)
+
+
 class TastyTradeBroker(BrokerBase):
     """Sync wrapper around async tastytrade SDK (dedicated background event loop)."""
 
@@ -355,6 +387,7 @@ class TastyTradeBroker(BrokerBase):
         self.session = session
         self._is_paper = hasattr(session, 'api_key')
         self._option_cache: Dict[str, Any] = {}
+        self._future_cache: Dict[str, Any] = {}
         self._loop = asyncio.new_event_loop()
         self._loop_ready = threading.Event()
         self._loop_thread = threading.Thread(
@@ -365,7 +398,7 @@ class TastyTradeBroker(BrokerBase):
         self._loop_thread.start()
         self._loop_ready.wait(timeout=30)
         if account is None:
-            self.account = self._run(self._bootstrap_account())
+            self.account = self._run(self._bootstrap_account(), priority='HIGH', op='bootstrap_account')
         else:
             self.account = account
         self._connected = True
@@ -499,20 +532,160 @@ class TastyTradeBroker(BrokerBase):
         if cached is not None:
             return cached
 
-        from tastytrade.instruments import get_option_chain
-        chain = await get_option_chain(self.session, 'SPX')
-        for _exp, options in chain.items():
-            for opt in options:
+        # Fast path: Try resolving OCC symbol via OptionSpec directly
+        try:
+            from clone_trades.models import OptionSpec
+            spec = OptionSpec.from_occ_or_streamer(streamer_symbol)
+            if spec:
+                from tastytrade.instruments import Option
+                opt = await Option.get(self.session, spec.occ_symbol)
+                if opt:
+                    ss = getattr(opt, 'streamer_symbol', '') or ''
+                    occ = getattr(opt, 'symbol', '') or ''
+                    if ss:
+                        self._option_cache[ss] = opt
+                    if occ:
+                        self._option_cache[occ] = opt
+                    self._option_cache[streamer_symbol] = opt
+                    return opt
+        except Exception:
+            pass
+
+        # Next try direct Option.get for raw ticker/symbol
+        try:
+            from tastytrade.instruments import Option
+            opt = await Option.get(self.session, streamer_symbol)
+            if opt:
                 ss = getattr(opt, 'streamer_symbol', '') or ''
                 occ = getattr(opt, 'symbol', '') or ''
                 if ss:
                     self._option_cache[ss] = opt
                 if occ:
                     self._option_cache[occ] = opt
+                self._option_cache[streamer_symbol] = opt
+                return opt
+        except Exception:
+            pass
+
+        # Try to infer underlying ticker from streamer or OCC symbol
+        underlying = 'SPX'
+        clean = streamer_symbol.lstrip('.').strip()
+        import re
+        m = re.match(r'^([A-Z]+)', clean)
+        if m:
+            underlying = m.group(1).strip()
+
+        from tastytrade.instruments import get_option_chain
+        try:
+            chain = await get_option_chain(self.session, underlying)
+            for _exp, options in chain.items():
+                for opt in options:
+                    ss = getattr(opt, 'streamer_symbol', '') or ''
+                    occ = getattr(opt, 'symbol', '') or ''
+                    if ss:
+                        self._option_cache[ss] = opt
+                    if occ:
+                        self._option_cache[occ] = opt
+        except Exception as exc:
+            log.warning('get_option_chain(%s) failed: %s', underlying, exc)
+
         result = self._option_cache.get(streamer_symbol)
+        if result is None and underlying != 'SPX':
+            try:
+                chain = await get_option_chain(self.session, 'SPX')
+                for _exp, options in chain.items():
+                    for opt in options:
+                        ss = getattr(opt, 'streamer_symbol', '') or ''
+                        occ = getattr(opt, 'symbol', '') or ''
+                        if ss:
+                            self._option_cache[ss] = opt
+                        if occ:
+                            self._option_cache[occ] = opt
+            except Exception:
+                pass
+            result = self._option_cache.get(streamer_symbol)
+
         if result is None:
             raise ValueError(f'Option not found in chain: {streamer_symbol}')
         return result
+
+    async def _get_future(self, symbol: str) -> Any:
+        """Resolve and cache Future contract from Tastytrade (by contract symbol or root code)."""
+        clean_sym = symbol.strip().upper()
+        if clean_sym in self._future_cache:
+            return self._future_cache[clean_sym]
+
+        from tastytrade.instruments import Future
+
+        if clean_sym.startswith('/') and any(c.isdigit() for c in clean_sym):
+            fut = await Future.get(self.session, symbols=[clean_sym])
+            if isinstance(fut, list) and fut:
+                fut = fut[0]
+            if fut:
+                self._future_cache[clean_sym] = fut
+                return fut
+
+        prod_code = to_futures_product_code(clean_sym)
+        futures = await Future.get(self.session, product_codes=[prod_code])
+        if not isinstance(futures, list):
+            futures = [futures]
+        active = [f for f in futures if getattr(f, 'active', False)]
+        if not active:
+            raise RuntimeError(f'No active {prod_code} futures from TastyTrade')
+        front = next((f for f in active if getattr(f, 'active_month', False)), None)
+        if front is None:
+            front = next((f for f in active if getattr(f, 'next_active_month', False)), None)
+        if front is None:
+            active.sort(key=lambda f: f.expiration_date)
+            front = active[0]
+
+        self._future_cache[clean_sym] = front
+        if not clean_sym.startswith('/'):
+            self._future_cache[f'/{clean_sym}'] = front
+        if getattr(front, 'symbol', None):
+            self._future_cache[front.symbol] = front
+        return front
+
+    def get_future_price(self, symbol: str = 'ES') -> Optional[float]:
+        """Fetch live price for futures contract (checking MQTT cache then Tastytrade market-data API)."""
+        clean_sym = symbol.strip().upper()
+        if not clean_sym.startswith('/'):
+            clean_sym = f'/{clean_sym}'
+
+        # Check MQTT price cache first
+        if self._prices is not None:
+            for s in (clean_sym, symbol.strip().upper(), f'{clean_sym}:XCME'):
+                p = self._prices.get_price(s)
+                if p is not None and p > 0:
+                    return round(float(p), 2)
+
+        # Query Tastytrade REST market-data by contract symbol
+        async def _fetch():
+            try:
+                fut = await self._get_future(symbol)
+                full_sym = getattr(fut, 'symbol', clean_sym)
+                resp = await self.session._client.get(f'/market-data/by-type?future={full_sym}')
+                if resp.status_code == 200:
+                    items = resp.json().get('data', {}).get('items', [])
+                    if items:
+                        item = items[0]
+                        mid = item.get('mid')
+                        if mid is not None and float(mid) > 0:
+                            return round(float(mid), 2)
+                        last = item.get('last')
+                        if last is not None and float(last) > 0:
+                            return round(float(last), 2)
+                        bid, ask = item.get('bid'), item.get('ask')
+                        if bid is not None and ask is not None and float(ask) > 0:
+                            return round((float(bid) + float(ask)) / 2.0, 2)
+            except Exception as e:
+                log.debug('Failed to fetch future quote for %s: %s', symbol, e)
+            return None
+
+        try:
+            return self._run(_fetch(), priority='HIGH', op='get_future_price')
+        except Exception:
+            return None
 
     def place_spread_order(
         self, short_symbol: str, long_symbol: str, qty: int, credit: float
@@ -714,6 +887,102 @@ class TastyTradeBroker(BrokerBase):
                 self.validate_session()
             return OrderResult(False, None, 'rejected', message=str(exc))
 
+    def place_spread_oco_order(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        qty: int,
+        *,
+        profit_debit: float,
+        stop_trigger_debit: float,
+        stop_limit_debit: float,
+    ) -> OrderResult:
+        pos_state = self.inspect_spread_position(
+            short_symbol, long_symbol, expected_qty=qty,
+        )
+        if pos_state != 'closable' and pos_state != 'unknown':
+            log.error(
+                'BROKER_PREFLIGHT_BLOCKED_SPREAD_OCO short=%s long=%s qty=%s reason=%s',
+                short_symbol,
+                long_symbol,
+                qty,
+                pos_state,
+            )
+            return OrderResult(
+                False,
+                None,
+                'rejected_preflight',
+                message=f'spread_not_closable_{pos_state}',
+                transmitted=False,
+            )
+
+        from tastytrade.order import (
+            ComplexOrderType,
+            NewComplexOrder,
+            NewOrder,
+            OrderAction,
+            OrderTimeInForce,
+            OrderType as OT,
+        )
+
+        short_tt = to_tastytrade(short_symbol)
+        long_tt = to_tastytrade(long_symbol)
+
+        async def _place():
+            short_opt = await self._get_option(short_tt)
+            long_opt = await self._get_option(long_tt)
+
+            legs = [
+                short_opt.build_leg(Decimal(qty), OrderAction.BUY_TO_CLOSE),
+                long_opt.build_leg(Decimal(qty), OrderAction.SELL_TO_CLOSE),
+            ]
+
+            profit_order = NewOrder(
+                time_in_force=OrderTimeInForce.DAY,
+                order_type=OT.LIMIT,
+                legs=legs,
+                price=-_round_option_price(profit_debit),
+            )
+            stop_order = NewOrder(
+                time_in_force=OrderTimeInForce.DAY,
+                order_type=OT.STOP_LIMIT,
+                legs=legs,
+                stop_trigger=_round_option_price(abs(stop_trigger_debit)),
+                price=-_round_option_price(abs(stop_limit_debit)),
+            )
+            complex_order = NewComplexOrder(
+                type=ComplexOrderType.OCO,
+                orders=[profit_order, stop_order],
+            )
+            return await self.account.place_complex_order(self.session, complex_order, dry_run=False)
+
+        try:
+            resp = _retry_on_transient(
+                lambda: self._run(_place(), priority='HIGH', op='place_spread_oco_order'),
+            )
+            errors = getattr(resp, 'errors', None) or []
+            if errors:
+                msg = '; '.join(getattr(e, 'message', str(e)) for e in errors)
+                return OrderResult(False, None, 'rejected', message=msg or 'Spread OCO order rejected')
+
+            complex_ord = getattr(resp, 'complex_order', None)
+            if not complex_ord or getattr(complex_ord, 'id', None) is None:
+                return OrderResult(
+                    False, None, 'rejected',
+                    message='No complex order id returned',
+                    raw=resp,
+                )
+            return OrderResult(
+                True,
+                str(complex_ord.id),
+                'working',
+                raw=resp,
+            )
+        except Exception as exc:
+            if '401' in str(exc) or 'unauthorized' in str(exc).lower():
+                self.validate_session()
+            return OrderResult(False, None, 'rejected', message=str(exc))
+
     def place_stop_order(
         self, symbol: str, qty: int, stop_price: float, limit_price: float
     ) -> OrderResult:
@@ -722,6 +991,77 @@ class TastyTradeBroker(BrokerBase):
             order_kind='STOP_LIMIT',
             stop_price=stop_price, limit_price=limit_price,
         )
+
+    def place_oco_order(
+        self,
+        symbol: str,
+        qty: int,
+        *,
+        profit_price: float,
+        stop_price: float,
+        limit_price: float,
+    ) -> OrderResult:
+        from tastytrade.order import (
+            ComplexOrderType,
+            NewComplexOrder,
+            NewOrder,
+            OrderAction,
+            OrderTimeInForce,
+            OrderType as OT,
+        )
+
+        tt_sym = to_tastytrade(symbol)
+        action_enum = OrderAction.BUY_TO_CLOSE
+
+        async def _place():
+            opt = await self._get_option(tt_sym)
+            leg = opt.build_leg(Decimal(qty), action_enum)
+
+            profit_order = NewOrder(
+                time_in_force=OrderTimeInForce.DAY,
+                order_type=OT.LIMIT,
+                legs=[leg],
+                price=_signed_order_price('BUY_TO_CLOSE', profit_price),
+            )
+            stop_order = NewOrder(
+                time_in_force=OrderTimeInForce.DAY,
+                order_type=OT.STOP_LIMIT,
+                legs=[leg],
+                stop_trigger=_round_option_price(abs(stop_price)),
+                price=_signed_order_price('BUY_TO_CLOSE', limit_price),
+            )
+            complex_order = NewComplexOrder(
+                type=ComplexOrderType.OCO,
+                orders=[profit_order, stop_order],
+            )
+            return await self.account.place_complex_order(self.session, complex_order, dry_run=False)
+
+        try:
+            resp = _retry_on_transient(
+                lambda: self._run(_place(), priority='HIGH', op='place_oco_order'),
+            )
+            errors = getattr(resp, 'errors', None) or []
+            if errors:
+                msg = '; '.join(getattr(e, 'message', str(e)) for e in errors)
+                return OrderResult(False, None, 'rejected', message=msg or 'OCO order rejected')
+
+            complex_ord = getattr(resp, 'complex_order', None)
+            if not complex_ord or getattr(complex_ord, 'id', None) is None:
+                return OrderResult(
+                    False, None, 'rejected',
+                    message='No complex order id returned',
+                    raw=resp,
+                )
+            return OrderResult(
+                True,
+                str(complex_ord.id),
+                'working',
+                raw=resp,
+            )
+        except Exception as exc:
+            if '401' in str(exc) or 'unauthorized' in str(exc).lower():
+                self.validate_session()
+            return OrderResult(False, None, 'rejected', message=str(exc))
 
     def place_limit_order(
         self, action: str, symbol: str, qty: int, price: float
@@ -748,13 +1088,22 @@ class TastyTradeBroker(BrokerBase):
             OrderType as OT,
         )
 
-        tt_sym = to_tastytrade(symbol)
-        action_enum = getattr(OrderAction, action)
+        is_fut = is_futures_symbol(symbol)
+        action_str = str(action).upper()
+        if is_fut:
+            action_enum = OrderAction.BUY if 'BUY' in action_str else OrderAction.SELL
+        else:
+            action_enum = getattr(OrderAction, action)
+
+        tt_sym = to_tastytrade(symbol) if not is_fut else symbol
 
         async def _place():
-            opt = await self._get_option(tt_sym)
+            if is_fut:
+                instrument = await self._get_future(symbol)
+            else:
+                instrument = await self._get_option(tt_sym)
 
-            leg = opt.build_leg(Decimal(qty), action_enum)
+            leg = instrument.build_leg(Decimal(qty), action_enum)
             if market:
                 order = NewOrder(
                     time_in_force=OrderTimeInForce.DAY,
@@ -762,19 +1111,20 @@ class TastyTradeBroker(BrokerBase):
                     legs=[leg],
                 )
             elif order_kind == 'STOP_LIMIT':
+                stop_val = Decimal(str(round(abs(stop_price), 2))) if is_fut else _round_option_price(abs(stop_price))
                 order = NewOrder(
                     time_in_force=OrderTimeInForce.DAY,
                     order_type=OT.STOP_LIMIT,
                     legs=[leg],
-                    stop_trigger=_round_option_price(abs(stop_price)),
-                    price=_signed_order_price(action, limit_price),
+                    stop_trigger=stop_val,
+                    price=_signed_order_price(action, limit_price, is_futures=is_fut),
                 )
             else:
                 order = NewOrder(
                     time_in_force=OrderTimeInForce.DAY,
                     order_type=OT.LIMIT,
                     legs=[leg],
-                    price=_signed_order_price(action, limit_price),
+                    price=_signed_order_price(action, limit_price, is_futures=is_fut),
                 )
             return await self.account.place_order(self.session, order, dry_run=False)
 
@@ -796,6 +1146,9 @@ class TastyTradeBroker(BrokerBase):
             return OrderResult(False, None, 'rejected', message=str(exc))
 
     def replace_order(self, order_id: str, new_spec: Dict) -> OrderResult:
+        if str(order_id).startswith('journal-'):
+            from common.broker_factory import get_shared_broker
+            return get_shared_broker(paper=True).replace_order(order_id, new_spec)
         order_type = new_spec.get('orderType', 'LIMIT')
         symbol = new_spec.get('symbol', '')
         qty = int(new_spec.get('quantity', 1))
@@ -818,10 +1171,22 @@ class TastyTradeBroker(BrokerBase):
         return self.place_limit_order('BUY_TO_CLOSE', symbol, qty, price)
 
     def cancel_order(self, order_id: str) -> OrderResult:
+        if str(order_id).startswith('journal-'):
+            from common.broker_factory import get_shared_broker
+            return get_shared_broker(paper=True).cancel_order(order_id)
+        async def _delete():
+            try:
+                await self.account.delete_order(self.session, int(order_id))
+            except Exception as exc:
+                try:
+                    await self.account.delete_complex_order(self.session, int(order_id))
+                except Exception:
+                    raise exc
+
         try:
             _retry_on_transient(
                 lambda: self._run(
-                    self.account.delete_order(self.session, int(order_id)),
+                    _delete(),
                     priority='HIGH',
                     op='cancel_order',
                 )
@@ -844,21 +1209,56 @@ class TastyTradeBroker(BrokerBase):
         op: str = 'get_order',
         live_orders: Optional[list] = None,
     ) -> OrderResult:
-        """Resolve order status from an optional live-orders snapshot, else cache, else get_order.
+        """Resolve order status from an optional live-orders snapshot, else cache, else get_order / get_complex_order.
 
         When ``live_orders`` is provided (batched peaceful reconcile), search that
         list first and only call direct ``get_order`` if the id is absent.
         """
+        if str(order_id).startswith('journal-'):
+            from common.broker_factory import get_shared_broker
+            return get_shared_broker(paper=True).get_order_status(order_id, priority=priority, op=op)
         try:
             orders = live_orders if live_orders is not None else self.get_live_orders_cached()
             for o in orders or []:
                 if str(getattr(o, 'id', None)) == str(order_id):
                     return _order_result_from_placed_order(o)
+
+            complex_matches = [
+                o for o in (orders or [])
+                if str(getattr(o, 'complex_order_id', None)) == str(order_id)
+            ]
+            if complex_matches:
+                for o in complex_matches:
+                    st = str(getattr(o, 'status', '')).lower()
+                    if st == 'filled':
+                        res = _order_result_from_placed_order(o)
+                        res.order_id = str(order_id)
+                        res.raw = complex_matches
+                        return res
+                if any(str(getattr(o, 'status', '')).lower() in ('live', 'working', 'in_flight', 'in flight', 'received', 'contingent', 'open') for o in complex_matches):
+                    return OrderResult(True, str(order_id), 'working', raw=complex_matches)
+                if all(str(getattr(o, 'status', '')).lower() in ('cancelled', 'canceled', 'expired') for o in complex_matches):
+                    return OrderResult(True, str(order_id), 'cancelled', raw=complex_matches)
+                if any(str(getattr(o, 'status', '')).lower() == 'rejected' for o in complex_matches):
+                    return OrderResult(False, str(order_id), 'rejected', raw=complex_matches)
+                return OrderResult(True, str(order_id), 'working', raw=complex_matches)
+
+            async def _fetch():
+                try:
+                    return await self.account.get_order(self.session, int(order_id))
+                except Exception as e:
+                    try:
+                        return await self.account.get_complex_order(self.session, int(order_id))
+                    except Exception:
+                        raise e
+
             order = self._run(
-                self.account.get_order(self.session, int(order_id)),
+                _fetch(),
                 priority=priority,
                 op=op,
             )
+            if hasattr(order, 'orders'):  # PlacedComplexOrder
+                return _order_result_from_placed_complex_order(order)
             return _order_result_from_placed_order(order)
         except BrokerCooldownActive:
             raise
@@ -1053,6 +1453,25 @@ class TastyTradeBroker(BrokerBase):
             return 'flat'
         return 'mismatch'
 
+    def get_single_leg_position_qty(self, symbol: str) -> int:
+        """Return net signed quantity held for symbol (short < 0, long > 0, 0 if flat)."""
+        try:
+            positions = self._run(
+                self.account.get_positions(self.session),
+                priority='NORMAL',
+                op='get_positions',
+            )
+        except Exception as exc:
+            log.warning('get_single_leg_position_qty unavailable: %s', exc)
+            return 0
+
+        tt_sym = to_tastytrade(symbol)
+        for pos in positions or []:
+            sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
+            if symbols_equivalent(str(sym), tt_sym):
+                return _signed_position_qty(pos)
+        return 0
+
     @staticmethod
     def _mid_from_market_data(md) -> Optional[float]:
         for attr in ('mid', 'mark', 'last'):
@@ -1065,7 +1484,7 @@ class TastyTradeBroker(BrokerBase):
         ask = getattr(md, 'ask', None)
         if bid is not None and ask is not None:
             b, a = float(bid), float(ask)
-            if b > 0 and a > 0:
+            if b >= 0 and a > 0:
                 return (b + a) / 2.0
         return None
 

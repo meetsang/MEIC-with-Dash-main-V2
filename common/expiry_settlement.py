@@ -680,10 +680,18 @@ def trade_to_history_row(
     assume_otm_expiry: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Map trade JSON to dashboard/db upsert payload."""
-    from common.history_adapter import is_skyline_trade, skyline_trade_to_history_row
+    from common.history_adapter import (
+        is_skyline_trade, skyline_trade_to_history_row,
+        is_drma_hm_trade, drma_hm_trade_to_history_row,
+        is_iron_fly_trade, iron_fly_trade_to_history_row,
+    )
 
     if is_skyline_trade(trade):
         return skyline_trade_to_history_row(trade)
+    if is_drma_hm_trade(trade):
+        return drma_hm_trade_to_history_row(trade)
+    if is_iron_fly_trade(trade):
+        return iron_fly_trade_to_history_row(trade)
 
     entry = trade.get('entry') or {}
     short_leg = trade.get('short_leg') or {}
@@ -725,10 +733,17 @@ def trade_to_history_row(
     from common import trades_layout
 
     strategy = trades_layout.STRATEGY_MEIC
-    if entry_strategy in (trades_layout.STRATEGY_MEIC, trades_layout.STRATEGY_MANUAL):
+    if entry_strategy in (
+        trades_layout.STRATEGY_MEIC,
+        trades_layout.STRATEGY_MANUAL,
+        trades_layout.STRATEGY_PERMA_BULL,
+        trades_layout.STRATEGY_MEAN_REVERSION,
+    ):
         strategy = entry_strategy
     elif (lot or '').strip().lower().startswith('ms'):
         strategy = trades_layout.STRATEGY_MANUAL
+    elif (lot or '').strip().lower().startswith('perma'):
+        strategy = trades_layout.STRATEGY_PERMA_BULL
 
     return {
         'date_opened': date_opened,

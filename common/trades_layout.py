@@ -11,6 +11,13 @@ STRATEGY_MEIC = 'MEIC_IC'
 STRATEGY_MANUAL = 'MANUAL_SPREAD'
 STRATEGY_SKYLINE = 'SKYLINE_SPX'
 STRATEGY_PERMA_BULL = 'PERMA_BULL_PCS'
+STRATEGY_MEAN_REVERSION = 'MEAN_REVERSION_SPX'
+STRATEGY_IRON_FLY = 'IRON_FLY_SPX'
+STRATEGY_IRON_FLY_XSP = 'IRON_FLY_XSP'
+STRATEGY_DRMA_HM = 'DRMA_HM_SPX'
+STRATEGY_DRMA_HM_DIR = 'DRMA_HM_DIR'
+STRATEGY_DRMA_HM_NONDIR = 'DRMA_HM_NONDIR'
+STRATEGY_DRMA_HM_FUT = 'DRMA_HM_FUT'
 
 MEIC_ACTIVE = 'trades/active/MEIC_IC'
 MEIC_HISTORY = 'trades/history/MEIC_IC'
@@ -20,6 +27,14 @@ SKYLINE_ACTIVE = 'trades/active/SKYLINE_SPX'
 SKYLINE_HISTORY = 'trades/history/SKYLINE_SPX'
 PERMA_BULL_ACTIVE = 'trades/active/PERMA_BULL_PCS'
 PERMA_BULL_HISTORY = 'trades/history/PERMA_BULL_PCS'
+MEAN_REVERSION_ACTIVE = 'trades/active/MEAN_REVERSION_SPX'
+MEAN_REVERSION_HISTORY = 'trades/history/MEAN_REVERSION_SPX'
+IRON_FLY_ACTIVE = 'trades/active/IRON_FLY_SPX'
+IRON_FLY_HISTORY = 'trades/history/IRON_FLY_SPX'
+IRON_FLY_XSP_ACTIVE = 'trades/active/IRON_FLY_XSP'
+IRON_FLY_XSP_HISTORY = 'trades/history/IRON_FLY_XSP'
+DRMA_HM_ACTIVE = 'trades/active/DRMA_HM_SPX'
+DRMA_HM_HISTORY = 'trades/history/DRMA_HM_SPX'
 
 # Test fixtures — never scanned for dashboard History / PnL totals.
 TEST_ROOT = 'trades/test'
@@ -74,7 +89,16 @@ def ops_path(name: str, root: Optional[str] = None) -> str:
 
 
 def registered_strategies() -> List[str]:
-    return [STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE, STRATEGY_PERMA_BULL]
+    return [
+        STRATEGY_MEIC,
+        STRATEGY_MANUAL,
+        STRATEGY_SKYLINE,
+        STRATEGY_PERMA_BULL,
+        STRATEGY_MEAN_REVERSION,
+        STRATEGY_IRON_FLY,
+        STRATEGY_IRON_FLY_XSP,
+        STRATEGY_DRMA_HM,
+    ]
 
 
 def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
@@ -88,6 +112,14 @@ def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
         os.path.join(base, SKYLINE_HISTORY),
         os.path.join(base, PERMA_BULL_ACTIVE),
         os.path.join(base, PERMA_BULL_HISTORY),
+        os.path.join(base, MEAN_REVERSION_ACTIVE),
+        os.path.join(base, MEAN_REVERSION_HISTORY),
+        os.path.join(base, IRON_FLY_ACTIVE),
+        os.path.join(base, IRON_FLY_HISTORY),
+        os.path.join(base, IRON_FLY_XSP_ACTIVE),
+        os.path.join(base, IRON_FLY_XSP_HISTORY),
+        os.path.join(base, DRMA_HM_ACTIVE),
+        os.path.join(base, DRMA_HM_HISTORY),
         os.path.join(base, TEST_MEIC_ACTIVE),
         os.path.join(base, TEST_MEIC_HISTORY),
         os.path.join(base, TEST_MANUAL_ACTIVE),

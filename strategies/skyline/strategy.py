@@ -79,6 +79,35 @@ class SkylineStrategy(BaseStrategy):
         )
 
         try:
+            today = datetime.now(_ET).date()
+            today_str = today.isoformat()
+            trade_path = os.path.join(self._active_dir(root), f'skyline_{today_str}.json')
+            session_path = os.path.join(self._active_dir(root), f'session_{today_str}.json')
+
+            already_entered = False
+            if os.path.isfile(session_path):
+                try:
+                    with open(session_path, encoding='utf-8') as f:
+                        s = json.load(f)
+                        if s.get('entered'):
+                            already_entered = True
+                except Exception:
+                    pass
+            if os.path.isfile(trade_path):
+                already_entered = True
+
+            if already_entered:
+                self.logger.info('Skyline trade for %s already entered — skipping duplicate entry', today_str)
+                if os.path.isfile(trade_path):
+                    try:
+                        with open(trade_path, encoding='utf-8') as f:
+                            trade = json.load(f)
+                        self._register_streamer_legs(trade)
+                        self._status.update({'entered': True, 'atm': trade.get('atm'), 'structures': len(trade.get('structures') or [])})
+                    except Exception:
+                        pass
+                return
+
             self._wait_for_entry_window()
             if not self._running:
                 return
@@ -107,7 +136,6 @@ class SkylineStrategy(BaseStrategy):
                 return
 
             atm = round_atm(spot, self.config.atm_rounding)
-            today = datetime.now(_ET).date()
             expiry_yymmdd = today.strftime('%y%m%d')
 
             structures = []

@@ -136,7 +136,7 @@ class TestRestResilienceReleaseCandidate:
                  patch.object(StopMonitor, '_streamer_prices_stale', return_value=False):
                 mon = StopMonitor(path, broker, cache)
                 mon._ensure_stop_for_filled_qty_unblocked()
-        assert any(p[0] == 'stop' for p in broker.placed)
+        assert any(p[0] in ('stop', 'oco') for p in broker.placed)
 
     def test_fill_grace_and_confirmed_breach(self):
         broker = MockBroker()

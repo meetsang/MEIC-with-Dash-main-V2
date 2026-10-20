@@ -169,13 +169,25 @@ def scan_spreads(
     wing_half: int = ms_config.DEFAULT_BF_WING_HALF,
     otm_min: int | None = None,
     otm_max: int | None = None,
+    chain_band: int | None = None,
+    paper: bool | None = None,
 ) -> Dict[str, Any]:
     expiry_yymmdd = parse_expiry(expiry)
     t0 = time.time()
 
+    if paper is None:
+        from common.broker_factory import is_strategy_paper
+        paper = is_strategy_paper(ms_config.STRATEGY)
+
+    from common.chain_snapshot import get_snapshot
+
+    snap = get_snapshot(expiry_yymmdd)
+    downloaded_band = snap.otm_range if snap else (chain_band or ms_config.DEFAULT_CHAIN_BAND)
+    effective_otm_max = int(otm_max if otm_max is not None else downloaded_band)
+
     if _is_butterfly_structure(structure_type):
         bf_otm_min = int(otm_min if otm_min is not None else ms_config.BF_OTM_MIN)
-        bf_otm_max = int(otm_max if otm_max is not None else ms_config.BF_OTM_MAX)
+        bf_otm_max = effective_otm_max
         candidates, diag = _scan_butterflies(
             broker,
             structure_type=structure_type,
@@ -187,8 +199,6 @@ def scan_spreads(
             otm_max=bf_otm_max,
             use_loaded_chain_only=True,
         )
-        from common.chain_snapshot import get_snapshot
-
         snap = get_snapshot(expiry_yymmdd)
         spx_rounded = (snap.anchor_strike or snap.spx_price) if snap else None
         meta = STRUCTURE_TYPES[structure_type.lower()]
@@ -212,13 +222,9 @@ def scan_spreads(
         raise ValueError('side must be P or C')
     expiry_yymmdd = parse_expiry(expiry)
     lot = 'manual-scan'
-    t0 = time.time()
     entry = _manual_entry(broker)
     vert_otm_min = int(otm_min if otm_min is not None else ms_config.DEFAULT_VERTICAL_OTM_MIN)
-    # Respect operator OTM range from the dashboard — do not auto-expand to 300 like MEIC entry.
-    vert_otm_max = int(
-        otm_max if otm_max is not None else ms_config.DEFAULT_VERTICAL_OTM_MAX
-    )
+    vert_otm_max = effective_otm_max
     candidates = entry.scan_for_target(
         side,
         expiry_yymmdd,
@@ -229,9 +235,8 @@ def scan_spreads(
         otm_min=vert_otm_min,
         otm_max=vert_otm_max,
         use_loaded_chain_only=True,
+        paper=paper,
     )
-    from common.chain_snapshot import get_snapshot
-
     snap = get_snapshot(expiry_yymmdd)
     spx_rounded = snap.spx_price if snap else None
     return {
@@ -260,12 +265,16 @@ def _resolve_strikes_for_overlap(
     long_strike: int,
     *,
     exclude_path: str | None = None,
+    paper: bool | None = None,
 ) -> tuple[int, int, str, str, int]:
     """Shift strikes if needed; returns (short_strike, long_strike, symbols..., shift_count)."""
+    if paper is None:
+        from common.broker_factory import is_strategy_paper
+        paper = is_strategy_paper(ms_config.STRATEGY)
     short_symbol = build_tastytrade_symbol(expiry_yymmdd, side, int(short_strike))
     long_symbol = build_tastytrade_symbol(expiry_yymmdd, side, int(long_strike))
     conflict = leg_overlap_conflict(
-        short_symbol, long_symbol, side, exclude_path=exclude_path,
+        short_symbol, long_symbol, side, exclude_path=exclude_path, paper=paper,
     )
     if not conflict:
         return int(short_strike), int(long_strike), short_symbol, long_symbol, 0
@@ -276,6 +285,7 @@ def _resolve_strikes_for_overlap(
         int(short_strike),
         int(long_strike),
         exclude_path=exclude_path,
+        paper=paper,
     )
     if resolved is None:
         raise ValueError(conflict)
@@ -601,6 +611,22 @@ def _iter_manual_history_paths() -> List[str]:
             if sub.endswith('.json'):
                 paths.append(os.path.join(path, sub))
     return paths
+
+
+def find_trade_by_filename(filename: str) -> Optional[Dict[str, Any]]:
+    """Look up a trade dict by filename from active dir or history."""
+    filename = os.path.basename(filename)
+    active_path = _trade_path(filename)
+    if os.path.isfile(active_path):
+        st = _load_trade_file(active_path, filename)
+        if st:
+            return st
+    for p in _iter_manual_history_paths():
+        if os.path.basename(p) == filename:
+            st = _load_trade_file(p, filename)
+            if st:
+                return st
+    return None
 
 
 def load_active_trades() -> List[Dict[str, Any]]:

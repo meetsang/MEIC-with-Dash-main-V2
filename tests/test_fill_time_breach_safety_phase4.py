@@ -564,7 +564,7 @@ def test_exchange_stop_placed_immediately_during_fill_grace():
              patch.object(StopMonitor, '_streamer_prices_stale', return_value=False):
             mon = StopMonitor(path, broker, cache)
             mon._ensure_stop_for_filled_qty_unblocked()
-    stops = [p for p in broker.placed if p[0] == 'stop']
+    stops = [p for p in broker.placed if p[0] in ('stop', 'oco')]
     assert len(stops) == 1
 
 

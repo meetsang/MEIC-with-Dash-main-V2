@@ -486,7 +486,7 @@ def main(
             log.info('Started standalone strategy runner: %s (paper=%s)', cfg.name, cfg.paper)
 
     strategies = load_enabled_strategies() if should_trade else []
-    scheduled = [s for s in strategies if s.schedule()]
+    scheduled = [s for s in strategies if getattr(s, 'schedule', lambda: [])()]
     log.info(
         'Loaded %d enabled strategies (%d scheduled): %s',
         len(strategies),
@@ -593,6 +593,11 @@ def main(
 
             _check_running_services_health(stop_mon_running=stop_mon is not None)
 
+            if should_trade:
+                for s_runner in standalone_runners:
+                    if hasattr(s_runner, 'check_health'):
+                        s_runner.check_health()
+
             if entry_coord is not None and coordinator_enabled():
                 entry_coord.check_stall()
             elif entry_runner is not None:
@@ -632,7 +637,13 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MEIC Autotrader Launcher')
-    parser.add_argument('--paper', action='store_true', help='Enable paper trading mode')
+    parser.add_argument('--paper', action='store_true', default=None, help='Enable paper trading mode (default)')
+    parser.add_argument(
+        '--real', '--live',
+        dest='real',
+        action='store_true',
+        help='Convert to real/live trading mode (submits live broker orders)',
+    )
     parser.add_argument(
         '--integration-session',
         action='store_true',
@@ -650,13 +661,38 @@ if __name__ == "__main__":
     parser.add_argument('--once', action='store_true', help='Exit after tranche-now or first scheduled tranche')
     parser.add_argument('--no-stop-monitor', action='store_true', help='Do not start stop_monitor subprocess')
     parser.add_argument('--one-day', action='store_true', help='Run one trading day then exit (Task Scheduler mode)')
+    parser.add_argument('--no-clone-relay', action='store_true', help='Do not start the clone trades relay / ngrok tunnel')
+    parser.add_argument('--ngrok-domain', default=None, help='Static ngrok domain for clone trades relay')
     parser.add_argument('--lot', default=None, help='Tranche lot label (sets MEIC_LOT for app_main)')
     args = parser.parse_args()
     one_day = args.one_day or os.environ.get('RUN_ONE_DAY_DEFAULT', 'false').lower() in ('1', 'true', 'yes')
-    if args.paper:
+
+    if args.real:
+        os.environ['PAPER_MODE'] = 'false'
+        tt_config.PAPER_MODE = False
+        args.paper = False
+        log.info('Running in REAL/LIVE mode (--real flag specified)')
+    elif args.paper:
         os.environ['PAPER_MODE'] = 'true'
-        # Reload tt_config paper flag
         tt_config.PAPER_MODE = True
+        args.paper = True
+        log.info('Running in PAPER mode (--paper flag specified)')
+    else:
+        # Check if MEIC or system is configured for live trading
+        from common.broker_factory import is_strategy_paper
+        meic_is_paper = is_strategy_paper('MEIC_IC')
+        env_paper = os.environ.get('PAPER_MODE', '').strip().lower()
+        if not meic_is_paper or env_paper in ('0', 'false', 'no'):
+            os.environ['PAPER_MODE'] = 'false'
+            tt_config.PAPER_MODE = False
+            args.paper = False
+            log.info('Running in REAL/LIVE mode (MEIC paper=false or PAPER_MODE=false)')
+        else:
+            # Default to paper trading
+            os.environ['PAPER_MODE'] = 'true'
+            tt_config.PAPER_MODE = True
+            args.paper = True
+            log.info('Running in PAPER mode by default (use --real to convert to live trading)')
 
     integration = args.integration_tranche
     if integration:
@@ -684,6 +720,32 @@ if __name__ == "__main__":
         stderr=subprocess.STDOUT,
     )
     log.info("Dashboard started (PID %s) at http://localhost:5002 log=%s", dash.pid, dash_log)
+
+    # Start clone trades secure relay (port 5005) + ngrok if enabled
+    relay_proc = None
+    relay_log_fh = None
+    clone_relay_enabled = not args.no_clone_relay and os.environ.get('CLONE_RELAY_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+    if clone_relay_enabled:
+        try:
+            relay_log = os.path.join(ROOT, 'logs', f'clone_relay_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
+            relay_log_fh = open(relay_log, 'w', encoding='utf-8')
+            relay_cmd = [sys.executable, os.path.join(ROOT, 'clone_trades', 'relay.py'), '--ngrok']
+            ngrok_domain = args.ngrok_domain or os.environ.get('NGROK_DOMAIN', '').strip()
+            if ngrok_domain:
+                relay_cmd.extend(['--domain', ngrok_domain])
+            authtoken = os.environ.get('NGROK_AUTHTOKEN', '').strip()
+            if authtoken:
+                relay_cmd.extend(['--authtoken', authtoken])
+            relay_proc = subprocess.Popen(
+                relay_cmd,
+                cwd=ROOT,
+                stdout=relay_log_fh,
+                stderr=subprocess.STDOUT,
+            )
+            log.info("Clone trades secure relay started (PID %s) on port 5005 with ngrok log=%s", relay_proc.pid, relay_log)
+        except Exception as exc:
+            log.warning("Could not start clone trades relay: %s", exc)
+
     time.sleep(1.5)
     try:
         from common.trading_gate import reconcile_gate_for_session
@@ -800,6 +862,21 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log.info("Launcher interrupted by user.")
     finally:
+        if relay_proc is not None:
+            try:
+                relay_proc.terminate()
+                relay_proc.wait(timeout=3)
+            except Exception:
+                try:
+                    relay_proc.kill()
+                except Exception:
+                    pass
+            log.info("Clone trades relay stopped.")
+        if relay_log_fh is not None:
+            try:
+                relay_log_fh.close()
+            except Exception:
+                pass
         dash.terminate()
         dash.wait()
         log.info("Dashboard stopped.")

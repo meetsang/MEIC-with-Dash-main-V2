@@ -63,6 +63,12 @@ def merge_policy(memory: Dict[str, Any], disk: Dict[str, Any]) -> Dict[str, Any]
         'stop_multiplier',
         'on_unfilled',
         'plan',
+        'filled_quantity',
+        'quantity',
+        'initial_quantity',
+        'stop_quantity',
+        'scale_outs',
+        'open_order',
     ):
         if key in disk:
             merged[key] = disk[key]
@@ -120,8 +126,32 @@ def merge_disk_state(slot: TradeSlot) -> None:
 
 
 def save_slot(slot: TradeSlot) -> None:
+    status = str(slot.state.get('status') or '').strip().lower()
+    is_closed = (
+        status in ('closed', 'cancelled', 'canceled', 'expired', 'settled', 'rejected', 'killed')
+        or slot.state.get('close') is not None
+        or str(slot.state.get('exit_last_step') or '').strip().lower() in ('spread_close_filled', 'finalized_closed')
+    )
+    if is_closed:
+        dest_root = state_mod.closed_dir_for_state(slot.state)
+        basename = os.path.basename(slot.path)
+        closed_path = os.path.join(dest_root, basename)
+        state_mod.save_state(closed_path, slot.state)
+        if os.path.exists(slot.path) and os.path.normpath(slot.path) != os.path.normpath(closed_path):
+            try:
+                os.unlink(slot.path)
+            except OSError:
+                pass
+        slot.path = closed_path
+        slot.disk_mtime = _path_mtime(closed_path)
+        slot.dirty = False
+        if slot.legacy_monitor is not None:
+            slot.legacy_monitor.state = slot.state
+        return
+
     state_mod.save_state(slot.path, slot.state)
     slot.disk_mtime = _path_mtime(slot.path)
     slot.dirty = False
     if slot.legacy_monitor is not None:
         slot.legacy_monitor.state = slot.state
+

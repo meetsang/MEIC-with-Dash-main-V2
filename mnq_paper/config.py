@@ -38,19 +38,20 @@ def _bool(name: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    product_code: str
-    rest_symbol: str
-    stop_points: float
-    target_points: float
-    qty: int
-    tick: float
-    point_value: float
-    webhook_secret: str
-    host: str
-    port: int
-    ngrok_enabled: bool
-    ngrok_authtoken: str
-    data_dir: Path
+    product_code: str = 'MNQ'
+    rest_symbol: str = '/MNQU6'
+    stop_points: float = 40.0
+    target_points: float = 25.0
+    qty: int = 1
+    tick: float = 0.25
+    point_value: float = 2.0
+    webhook_secret: str = ''
+    host: str = '0.0.0.0'
+    port: int = 8788
+    ngrok_enabled: bool = False
+    ngrok_authtoken: str = ''
+    allowed_strategy: str = 'apexnq'
+    data_dir: Path = DATA_DIR
 
     @property
     def journal_path(self) -> Path:
@@ -88,8 +89,8 @@ def load_settings() -> Settings:
     return Settings(
         product_code=product,
         rest_symbol=rest_symbol,
-        stop_points=_float('MNQ_STOP_POINTS', 20.0),
-        target_points=_float('MNQ_TARGET_POINTS', 40.0),
+        stop_points=_float('MNQ_STOP_POINTS', 40.0),
+        target_points=_float('MNQ_TARGET_POINTS', 25.0),
         qty=_int('MNQ_QTY', 1),
         tick=_float('MNQ_TICK', 0.25),
         point_value=_float('MNQ_POINT_VALUE', 2.0),
@@ -98,5 +99,6 @@ def load_settings() -> Settings:
         port=_int('MNQ_PORT', 8788),
         ngrok_enabled=_bool('MNQ_NGROK', True),
         ngrok_authtoken=os.getenv('NGROK_AUTHTOKEN', '').strip(),
+        allowed_strategy=os.getenv('MNQ_STRATEGY', 'apexnq').strip(),
         data_dir=DATA_DIR,
     )

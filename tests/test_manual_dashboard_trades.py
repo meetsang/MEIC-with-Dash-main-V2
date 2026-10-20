@@ -24,6 +24,20 @@ class TestManualDashboardTrades(unittest.TestCase):
             'killed',
         )
 
+    def test_profit_target_shows_profit_target_state(self):
+        self.assertEqual(
+            _slot_state_from_trade('closed', 'profit_target', strategy=STRATEGY_MANUAL),
+            'profit_target',
+        )
+        self.assertEqual(
+            _slot_state_from_trade('closed', 'profit_target_hit', strategy=STRATEGY_MANUAL),
+            'profit_target',
+        )
+        self.assertEqual(
+            _slot_state_from_trade('closed', 'profit_target_oco', strategy='MEIC_IC'),
+            'profit_target',
+        )
+
     def test_load_dashboard_includes_todays_closed_from_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             active = os.path.join(tmp, 'active')

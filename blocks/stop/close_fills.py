@@ -42,6 +42,13 @@ OPERATOR_SLIPPAGE_MECHANISMS = frozenset({
     'stop_filled',
 })
 
+PROFIT_TARGET_MECHANISMS = frozenset({
+    'profit_target',
+    'profit_target_hit',
+    'profit_target_oco',
+    'profit_target_resting',
+})
+
 # Operator kill paths — null long_close_price defaults to 0.0 (V2.9), not open-fill inference.
 MANUAL_KILL_MECHANISMS = frozenset({
     'manual_close',
@@ -78,6 +85,8 @@ def designated_stop_price(state: Dict[str, Any]) -> Optional[float]:
 
 def _is_software_breach_close(state: Dict[str, Any]) -> bool:
     mechanism = str(state.get('close_mechanism') or '').lower()
+    if mechanism in PROFIT_TARGET_MECHANISMS or 'profit_target' in mechanism:
+        return False
     if mechanism in SOFTWARE_BREACH_MECHANISMS:
         return True
     return 'breach' in mechanism and mechanism not in ('exchange_stop',)
@@ -93,12 +102,19 @@ def _is_stop_out_close(state: Dict[str, Any]) -> bool:
 
 
 def _qualifies_for_operator_slippage(state: Dict[str, Any]) -> bool:
-    """True only for exchange stop / software breach exits — not dashboard kill/close."""
+    """True only for exchange stop / software breach exits — not dashboard kill/close or profit targets."""
     mechanism = str(state.get('close_mechanism') or '').lower()
-    if mechanism in OPERATOR_SLIPPAGE_MECHANISMS:
-        return True
     close = state.get('close') or {}
     reason = str(close.get('reason') or '').lower()
+    if (
+        mechanism in PROFIT_TARGET_MECHANISMS
+        or 'profit_target' in mechanism
+        or reason in PROFIT_TARGET_MECHANISMS
+        or 'profit_target' in reason
+    ):
+        return False
+    if mechanism in OPERATOR_SLIPPAGE_MECHANISMS:
+        return True
     return reason in OPERATOR_SLIPPAGE_MECHANISMS
 
 
@@ -133,6 +149,8 @@ def stop_slippage_short(state: Dict[str, Any]) -> Optional[float]:
 
     Software breach: fixed policy uplift vs designated (not fill vs broker limit).
     """
+    if not _qualifies_for_operator_slippage(state):
+        return None
     designated = designated_stop_price(state)
     if designated is None:
         return None

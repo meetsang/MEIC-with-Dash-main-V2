@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from mnq_paper.config import Settings
 from mnq_paper.journal import Journal
@@ -25,11 +25,12 @@ class EngineError(Exception):
 
 def parse_side(raw: str) -> Side:
     text = (raw or '').strip().lower()
-    if text in ('buy', 'long', 'bull', 'b'):
+    if text in ('buy', 'long', 'bull', 'bullish', 'b'):
         return 'long'
-    if text in ('sell', 'short', 'bear', 's'):
+    if text in ('sell', 'short', 'bear', 'bearish', 's'):
         return 'short'
-    raise EngineError(f'Unknown side {raw!r} — use buy/sell or long/short')
+    raise EngineError(f'Unknown side {raw!r} — use buy/sell or bullish/bearish')
+
 
 
 def bracket_levels(side: Side, entry: float, stop_points: float, target_points: float, tick: float) -> tuple[float, float]:
@@ -102,6 +103,8 @@ class PaperEngine:
         target_points: Optional[float] = None,
         note: str = '',
         entry_source: str = 'rest',
+        signal_received_at: Optional[str] = None,
+        signal: Optional[dict[str, Any]] = None,
     ) -> OpenTrade:
         side = parse_side(side_raw)
         with self._lock:
@@ -123,6 +126,7 @@ class PaperEngine:
             target_pts = float(self.settings.target_points if target_points is None else target_points)
             entry = round_tick(float(price), self.settings.tick)
             stop, target = bracket_levels(side, entry, stop_pts, target_pts, self.settings.tick)
+            received_at = signal_received_at or utc_now_iso()
             trade = OpenTrade(
                 id=uuid.uuid4().hex[:12],
                 symbol=self.settings.rest_symbol,
@@ -134,8 +138,10 @@ class PaperEngine:
                 target=target,
                 stop_points=stop_pts,
                 target_points=target_pts,
+                signal_received_at=received_at,
                 opened_at=utc_now_iso(),
                 entry_source=entry_source,
+                signal=dict(signal or {}),
                 note=note or '',
             )
             self.open = trade
@@ -231,10 +237,12 @@ class PaperEngine:
             reason=reason,  # type: ignore[arg-type]
             pnl_points=pts,
             pnl_usd=round(pts * trade.qty * self.settings.point_value, 2),
+            signal_received_at=trade.signal_received_at,
             opened_at=trade.opened_at,
             closed_at=utc_now_iso(),
             entry_source=trade.entry_source,
             exit_source=source,
+            signal=dict(trade.signal),
             note=trade.note,
         )
         self.open = None

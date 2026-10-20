@@ -132,6 +132,58 @@ class TestTastytradeLegActions(unittest.TestCase):
         self.assertEqual(debit_close.price_effect, PriceEffect.DEBIT)
         self.assertEqual(credit_wrong.price_effect, PriceEffect.CREDIT)
 
+    def test_futures_single_leg_actions_and_fills(self):
+        from brokers.tastytrade_broker import _signed_order_price
+
+        # Verify normalization of single word Buy / Sell
+        self.assertEqual(_normalize_leg_action('Buy'), 'BUY')
+        self.assertEqual(_normalize_leg_action('Sell'), 'SELL')
+
+        # Verify signed order price
+        self.assertEqual(float(_signed_order_price('BUY', 5800.25)), -5800.25)
+        self.assertEqual(float(_signed_order_price('SELL', 5800.25)), 5800.25)
+
+        # Single-leg futures Buy order filled
+        buy_order = SimpleNamespace(
+            id=999001,
+            status='Filled',
+            size='1',
+            price='-5800.25',
+            legs=[
+                SimpleNamespace(
+                    action='Buy',
+                    quantity=1,
+                    remaining_quantity='0',
+                    fills=[SimpleNamespace(fill_price='5800.25', quantity='1')],
+                ),
+            ],
+        )
+        res_buy = _order_result_from_placed_order(buy_order)
+        self.assertEqual(res_buy.status, 'filled')
+        self.assertEqual(res_buy.filled_price, 5800.25)
+        self.assertEqual(res_buy.filled_quantity, 1)
+
+        # Single-leg futures Sell order filled
+        sell_order = SimpleNamespace(
+            id=999002,
+            status='Filled',
+            size='2',
+            price='5805.50',
+            legs=[
+                SimpleNamespace(
+                    action='Sell',
+                    quantity=2,
+                    remaining_quantity='0',
+                    fills=[SimpleNamespace(fill_price='5805.50', quantity='2')],
+                ),
+            ],
+        )
+        res_sell = _order_result_from_placed_order(sell_order)
+        self.assertEqual(res_sell.status, 'filled')
+        self.assertEqual(res_sell.filled_price, 5805.50)
+        self.assertEqual(res_sell.filled_quantity, 2)
+
 
 if __name__ == '__main__':
     unittest.main()
+

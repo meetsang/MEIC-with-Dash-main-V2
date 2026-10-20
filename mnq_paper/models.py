@@ -66,8 +66,10 @@ class OpenTrade:
     target: float
     stop_points: float
     target_points: float
+    signal_received_at: str
     opened_at: str
     entry_source: str
+    signal: dict[str, Any] = field(default_factory=dict)
     note: str = ''
     paper: bool = True
 
@@ -87,8 +89,12 @@ class OpenTrade:
             target=float(data['target']),
             stop_points=float(data.get('stop_points') or 0),
             target_points=float(data.get('target_points') or 0),
+            signal_received_at=str(
+                data.get('signal_received_at') or data.get('opened_at') or utc_now_iso()
+            ),
             opened_at=str(data.get('opened_at') or utc_now_iso()),
             entry_source=str(data.get('entry_source') or 'rest'),
+            signal=dict(data.get('signal') or {}),
             note=str(data.get('note') or ''),
             paper=bool(data.get('paper', True)),
         )
@@ -109,10 +115,12 @@ class ClosedTrade:
     reason: ExitReason
     pnl_points: float
     pnl_usd: float
+    signal_received_at: str
     opened_at: str
     closed_at: str
     entry_source: str
     exit_source: str
+    signal: dict[str, Any] = field(default_factory=dict)
     note: str = ''
     paper: bool = True
     success: bool = field(init=False)
@@ -124,3 +132,32 @@ class ClosedTrade:
         data = asdict(self)
         data['success'] = self.success
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ClosedTrade:
+        return cls(
+            id=str(data['id']),
+            symbol=str(data['symbol']),
+            streamer_symbol=str(data.get('streamer_symbol') or data['symbol']),
+            side=data['side'],
+            qty=int(data.get('qty') or 1),
+            entry=float(data['entry']),
+            stop=float(data['stop']),
+            target=float(data['target']),
+            exit=float(data['exit']),
+            outcome=data['outcome'],
+            reason=data['reason'],
+            pnl_points=float(data.get('pnl_points') or 0),
+            pnl_usd=float(data.get('pnl_usd') or 0),
+            signal_received_at=str(
+                data.get('signal_received_at') or data.get('opened_at') or utc_now_iso()
+            ),
+            opened_at=str(data.get('opened_at') or utc_now_iso()),
+            closed_at=str(data.get('closed_at') or utc_now_iso()),
+            entry_source=str(data.get('entry_source') or 'rest'),
+            exit_source=str(data.get('exit_source') or 'streamer'),
+            signal=dict(data.get('signal') or {}),
+            note=str(data.get('note') or ''),
+            paper=bool(data.get('paper', True)),
+        )
+

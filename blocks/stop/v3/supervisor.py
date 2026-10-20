@@ -179,8 +179,7 @@ class StopSupervisor:
         if status not in ('open', 'closing'):
             return False
         filled = int(st.get('filled_quantity') or 0)
-        target = int(st.get('quantity') or 0)
-        if status == 'open' and target and filled < target:
+        if status == 'open' and filled <= 0:
             return False
         return True
 
@@ -268,9 +267,11 @@ class StopSupervisor:
                     fill_q = self.alert_listener.register(str(oid))
                 except Exception:
                     pass
+            from blocks.stop.broker import resolve_broker_for_trade
+            trade_broker = resolve_broker_for_trade(slot, self.broker)
             mon = StopMonitor(
                 slot.path,
-                self.broker,
+                trade_broker,
                 self.prices,
                 phases=None,
                 fill_queue=fill_q,
@@ -295,8 +296,10 @@ class StopSupervisor:
 
         def _job() -> None:
             try:
+                from blocks.stop.broker import resolve_broker_for_trade
+                trade_broker = resolve_broker_for_trade(slot, self.broker)
                 ManualKillHandler(
-                    slot, self.broker, self.prices, self.lane, self.alert_listener,
+                    slot, trade_broker, self.prices, self.lane, self.alert_listener,
                 ).run(reason=reason)
             finally:
                 slot.exit_job_id = None
@@ -318,8 +321,10 @@ class StopSupervisor:
 
         def _job() -> None:
             try:
+                from blocks.stop.broker import resolve_broker_for_trade
+                trade_broker = resolve_broker_for_trade(slot, self.broker)
                 ExchangeStopFilledHandler(
-                    slot, self.broker, self.prices, self.lane, self.alert_listener,
+                    slot, trade_broker, self.prices, self.lane, self.alert_listener,
                 ).run(stop=stop, broker_result=broker_result)
             finally:
                 slot.exit_job_id = None
@@ -337,9 +342,11 @@ class StopSupervisor:
 
         def _job() -> None:
             try:
+                from blocks.stop.broker import resolve_broker_for_trade
+                trade_broker = resolve_broker_for_trade(slot, self.broker)
                 SoftwareBreachHandler(
                     slot,
-                    self.broker,
+                    trade_broker,
                     self.prices,
                     self.lane,
                     phase,
@@ -358,8 +365,10 @@ class StopSupervisor:
 
         def _job() -> None:
             try:
+                from blocks.stop.broker import resolve_broker_for_trade
+                trade_broker = resolve_broker_for_trade(slot, self.broker)
                 LongChaseHandler(
-                    slot, self.broker, self.prices, self.lane, self.alert_listener,
+                    slot, trade_broker, self.prices, self.lane, self.alert_listener,
                 ).run()
             finally:
                 slot.exit_job_id = None
@@ -385,17 +394,26 @@ class StopSupervisor:
                 continue
             status = str(event.get('status', 'filled')).lower()
             active['status'] = status
-            if status != 'filled':
-                continue
-            result = self.broker.get_order_status(
+            from blocks.stop.broker import resolve_broker_for_trade
+            trade_broker = resolve_broker_for_trade(slot, self.broker)
+            result = trade_broker.get_order_status(
                 order_id,
                 priority=PRIORITY_HIGH,
                 op=OPERATION_ALERT_CONFIRM,
             )
+            if not result.success:
+                continue
             if stop_order_fully_filled(slot.state, result):
                 self._enqueue_exchange_stop_filled(
                     slot, stop=active, broker_result=result,
                 )
+                handled = True
+            elif status in ('partial', 'partially filled', 'partially_filled') or (
+                result.filled_quantity is not None and result.filled_quantity > 0
+            ):
+                mon.handle_partial_stop_fill(active, broker_result=result)
+                slot.state = mon.state
+                save_slot(slot)
                 handled = True
         slot.state = mon.state
         return handled
@@ -649,6 +667,13 @@ class StopSupervisor:
             )
             slot.last_broker_sync = now
 
+        if _requires_exchange_stop(slot.state) and not self._stop_is_current_for_slot(slot):
+            mon._ensure_stop_for_filled_qty()
+            slot.state = mon.state
+            self._lifecycle_section(slot)['breach_arm_status'] = 'waiting_stop'
+            save_slot(slot)
+            return
+
         if mqtt_cache_stale:
             self._lifecycle_section(slot)['breach_arm_status'] = 'stale_mqtt'
             save_slot(slot)
@@ -656,13 +681,6 @@ class StopSupervisor:
 
         if streamer_stale:
             self._lifecycle_section(slot)['breach_arm_status'] = 'stale'
-            save_slot(slot)
-            return
-
-        if _requires_exchange_stop(slot.state) and not self._stop_is_current_for_slot(slot):
-            mon._ensure_stop_for_filled_qty()
-            slot.state = mon.state
-            self._lifecycle_section(slot)['breach_arm_status'] = 'waiting_stop'
             save_slot(slot)
             return
 
@@ -712,6 +730,10 @@ class StopSupervisor:
             save_slot(slot)
             return
 
+        retry_at = slot.state.get('long_close_next_retry_at')
+        if retry_at and time.time() < float(retry_at):
+            return
+
         close_started = slot.state.get('short_closed_at')
         if close_started is None:
             return
@@ -729,7 +751,9 @@ class StopSupervisor:
         if check_exit_stall(slot):
             log.critical('Exit stalled on %s — operator review', slot.path)
             if not self.exit_pool.has_job(slot.path):
-                reconcile_stalled_exit(slot, self.broker)
+                from blocks.stop.broker import resolve_broker_for_trade
+                trade_broker = resolve_broker_for_trade(slot, self.broker)
+                reconcile_stalled_exit(slot, trade_broker)
             save_slot(slot)
 
         if killswitch_active and slot.status == 'open' and not slot.close_only_mode:
@@ -830,7 +854,10 @@ class StopSupervisor:
         self._batch_peaceful_reconcile(slots)
 
         for slot in slots:
-            self._scan_slot(slot, killswitch_active=killswitch)
+            try:
+                self._scan_slot(slot, killswitch_active=killswitch)
+            except Exception:
+                log.exception('Failed to scan slot %s', slot.path)
 
         self._maybe_capture_mqtt_settlement()
         self._write_heartbeat(len(slots))

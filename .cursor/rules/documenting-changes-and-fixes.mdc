@@ -1,0 +1,41 @@
+---
+description: Mandatory process for documenting all code changes, bug fixes, and designs in changes/ folder
+alwaysApply: true
+---
+
+# Mandatory Process for Changes & Fixes Documentation
+
+For **any** change made to the MEIC-with-Dash-main-V2 codebase (bug fixes, feature enhancements, safeguards, refactoring, or strategy adjustments), every AI agent and developer **MUST** follow this structured 3-step documentation protocol:
+
+---
+
+## Step 1: Create a Dated Design / Implementation Document in `changes/fixes/` or `changes/design/`
+
+Create a new markdown file named:
+- Bug fixes / Incident resolutions: `changes/fixes/YYYY-MM-DD_<DESCRIPTIVE_TITLE>.md`
+- Architectural changes / new features: `changes/design/YYYY-MM-DD_<DESCRIPTIVE_TITLE>.md`
+
+### Document Structure:
+1. **Header Metadata**: Date, category, affected components, and status.
+2. **Problem Statement & Root Cause**: Clear description of what failed, why it failed, and evidence/logs.
+3. **Technical Architecture / Design**: Mermaid flowcharts/diagrams or state machine transitions.
+4. **Detailed Implementation**: File-by-file breakdown with explanation of logic and safeguards.
+5. **Automated Verification & Test Results**: Exact pytest commands and pass/fail summary.
+
+---
+
+## Step 2: Update the Living Changelog
+
+Add a new dated entry at the **top** of `changes/CHANGES_SINCE_2026-07-06.md` using the standard changelog template:
+- `## YYYY-MM-DD — Title`
+- **Status**, **Tests**, and direct Markdown link to the doc in `changes/fixes/` or `changes/design/`.
+- **What changed**: Bulleted summary of files and behaviors modified.
+- **Findings / Learnings**: Key takeaways.
+- **Validation**: Checklist of test suites run and verified.
+
+---
+
+## Step 3: Git Repo Readiness
+
+- Ensure all modified source files, new unit tests, and documentation files are cleanly organized and tracked by Git (`git status`).
+- Do NOT leave rogue scratch or temporary files in the repository root.

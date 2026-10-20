@@ -68,6 +68,14 @@ def _trades_dir() -> str:
 
 def _trades_root_for_path(json_path: str) -> str:
     """Parent of active/ for the trade file (trades/ in V2 layout)."""
+    norm = os.path.abspath(json_path)
+    parts = norm.split(os.sep)
+    if 'trades' in parts:
+        idx = parts.index('trades')
+        return os.sep.join(parts[:idx + 1])
+    parent = os.path.dirname(norm)
+    if os.path.isdir(os.path.join(parent, 'trades')):
+        return os.path.join(parent, 'trades')
     return _trades_dir()
 SLOW_INTERVAL = 10      # seconds — broker REST backup poll (stop fill detection)
 LONG_CLOSE_DELAY_SEC = 30  # seconds — delay before starting long close chase
@@ -396,6 +404,24 @@ class StopMonitor:
             )
             return
 
+        active = self.state.get('active_stop') or {}
+        strategy_name = self.state.get('strategy') or ''
+        is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
+        if is_meic and active.get('order_id') and str(active.get('status', '')).lower() in ('working', 'live', 'open'):
+            from common.meic_settings import is_15c_oco_enabled
+            trades_root = _trades_root_for_path(self.json_path)
+            desired_oco = is_15c_oco_enabled(root=trades_root)
+            current_is_oco = (active.get('type') == 'OCO')
+            if current_is_oco != desired_oco:
+                log.info(
+                    'Stop type mismatch for %s (current: %s, desired OCO: %s) — replacing stop',
+                    self.json_path,
+                    active.get('type'),
+                    desired_oco,
+                )
+                self._reconcile_active_stop_type(desired_oco)
+                return
+
         if stop_is_current(self.state):
             return
 
@@ -418,12 +444,76 @@ class StopMonitor:
             self.setup_initial_stop()
             return
 
-        if active.get('order_id') and int(self.state.get('stop_quantity') or 0) < filled:
+        if active.get('order_id') and int(self.state.get('stop_quantity') or 0) != filled:
             self._resize_stop(filled)
             return
 
         if not active.get('order_id'):
             self.setup_initial_stop()
+
+    def _reconcile_active_stop_type(self, desired_oco: bool) -> None:
+        active = self.state.get('active_stop') or {}
+        old_oid = active.get('order_id')
+        if not old_oid:
+            return
+        short = self.state.get('short_leg') or {}
+        short_sym = short.get('symbol')
+        if not short_sym:
+            return
+        stop_price = float(active.get('stop_price') or 0.0)
+        limit_price = float(active.get('limit_price') or 0.0)
+        qty = int(active.get('quantity') or self.state.get('stop_quantity') or 1)
+        phase = active.get('phase', 1)
+        if stop_price <= 0:
+            return
+
+        self.broker.cancel_order(str(old_oid))
+        if desired_oco:
+            res = self.broker.place_oco_order(
+                short_sym,
+                qty,
+                profit_price=0.15,
+                stop_price=stop_price,
+                limit_price=limit_price,
+            )
+            new_type = 'OCO'
+            pt_price = 0.15
+        else:
+            res = self.broker.place_stop_order(
+                short_sym,
+                qty,
+                stop_price=stop_price,
+                limit_price=limit_price,
+            )
+            new_type = 'STOP_LIMIT'
+            pt_price = None
+
+        if res.success:
+            new_oid = str(res.order_id)
+            self.state['active_stop'] = {
+                'order_id': new_oid,
+                'type': new_type,
+                'stop_price': stop_price,
+                'limit_price': limit_price,
+                'profit_price': pt_price,
+                'phase': phase,
+                'status': 'working',
+                'placed_at': state_mod.now_iso(),
+                'quantity': qty,
+            }
+            state_mod.append_stop_history(
+                self.state,
+                action='replaced',
+                order_id=new_oid,
+                price=stop_price,
+                phase=phase,
+                reason='switch_oco_flag_enabled' if desired_oco else 'switch_oco_flag_disabled',
+            )
+            state_mod.save_state(self.json_path, self.state)
+            self._reregister_alert(old_oid, new_oid)
+            log.info('Replaced stop on %s with %s (#%s)', self.json_path, new_type, new_oid)
+        else:
+            log.error('Failed to place replacement order for %s: %s', self.json_path, res.message)
 
     def _resize_stop(self, new_qty: int) -> None:
         active = self.state.get('active_stop') or {}
@@ -571,6 +661,24 @@ class StopMonitor:
         except Exception:
             cmd = {}
 
+        if 'profit_target_pct' in cmd:
+            pt = float(cmd['profit_target_pct'])
+            self.state['profit_target_pct'] = pt
+            if 'exit_config' not in self.state or not isinstance(self.state['exit_config'], dict):
+                self.state['exit_config'] = {}
+            self.state['exit_config']['profit_target_pct'] = pt
+            if isinstance(self.state.get('plan'), dict):
+                self.state['plan']['profit_target_pct'] = pt
+
+        if 'stop_multiplier' not in cmd:
+            state_mod.save_state(self.json_path, self.state)
+            try:
+                os.unlink(cmd_path)
+            except Exception:
+                pass
+            log.info('Profit target update applied pt=%s for %s', self.state.get('profit_target_pct'), self.json_path)
+            return True
+
         mult = float(cmd.get('stop_multiplier', 2))
         self.state['stop_multiplier'] = mult
         if isinstance(self.state.get('plan'), dict):
@@ -675,10 +783,53 @@ class StopMonitor:
 
         return False
 
+    def _check_scale_out_command(self) -> bool:
+        """Check for dashboard scale-out command file. Returns True if an action was taken."""
+        if self.state.get('status') != 'open':
+            return False
+
+        trades_root = _trades_root_for_path(self.json_path)
+        filename = os.path.basename(self.json_path)
+        cmd_path = os.path.join(trades_root, 'commands', f'{filename}.scale_out.json')
+        done_path = os.path.join(trades_root, 'commands', f'{filename}.scale_out.done.json')
+
+        if not os.path.exists(cmd_path):
+            return False
+
+        log.info('Dashboard scale-out command detected for %s', filename)
+        cmd = {}
+        try:
+            with open(cmd_path, 'r', encoding='utf-8') as f:
+                cmd = json.load(f)
+        except Exception as exc:
+            log.error('Failed to read scale_out command for %s: %s', filename, exc)
+            return False
+
+        close_qty = int(cmd.get('close_qty', 1))
+        target_debit = cmd.get('target_debit')
+        stop_loss = cmd.get('stop_loss') or cmd.get('stop_debit')
+
+        from common.scale_out import execute_scale_out_in_monitor
+        res = execute_scale_out_in_monitor(self, close_qty, target_debit, stop_loss=stop_loss)
+
+        try:
+            with open(done_path, 'w', encoding='utf-8') as f:
+                json.dump(res, f, indent=2)
+        except Exception as exc:
+            log.warning('Failed to write scale_out done sentinel for %s: %s', filename, exc)
+
+        try:
+            os.unlink(cmd_path)
+        except Exception:
+            pass
+
+        return True
+
     def _poll_once(self) -> None:
         """Fast path: breach detection + long close chase. Runs every ~3s."""
+        self._maybe_merge_disk_stop_state()
+
         if self._broker_actions_frozen():
-            self._maybe_merge_disk_stop_state()
             state_mod.save_state(self.json_path, self.state)
             return
 
@@ -688,6 +839,9 @@ class StopMonitor:
 
         # Check dashboard kill switch or per-trade close commands first
         if not self._skip_dashboard_commands and self._check_dashboard_commands():
+            return
+
+        if not self._skip_dashboard_commands and self._check_scale_out_command():
             return
 
         if self._check_stop_update_command():
@@ -761,6 +915,7 @@ class StopMonitor:
 
             if not should_skip_priority(PRIORITY_LOW):
                 snapshot = getattr(self, '_peaceful_live_orders', None)
+                self._maybe_merge_disk_stop_state()
                 self._reconcile_active_stop_with_broker(live_orders=snapshot)
                 self._sync_working_stop_order()
                 # Consume one-shot snapshot so we don't reuse a stale list forever
@@ -956,6 +1111,84 @@ class StopMonitor:
             limit_price = round_spx_option_price(stop_price + app_config.LIMIT_OFFSET)
         return self._place_short_stop(stop_price, limit_price, phase=phase, reason=reason)
 
+    def _adopt_working_closing_order_from_broker(
+        self,
+        short_sym: str,
+        expected_qty: Optional[int] = None,
+    ) -> bool:
+        """If broker rejects placing a stop because a closing order is already working, adopt it."""
+        try:
+            found = None
+            if hasattr(self.broker, 'find_working_close_order'):
+                found = self.broker.find_working_close_order(short_sym)
+
+            if not found or not getattr(found, 'order_id', None):
+                if hasattr(self.broker, 'get_live_orders_cached'):
+                    self.broker.get_live_orders_cached(ttl_sec=0)
+                    if hasattr(self.broker, 'find_working_close_order'):
+                        found = self.broker.find_working_close_order(short_sym)
+
+            if found and getattr(found, 'order_id', None):
+                adopted_oid = str(found.order_id)
+                raw_order = getattr(found, 'raw', None)
+                order_qty = getattr(found, 'order_quantity', None)
+                if not order_qty and raw_order:
+                    order_qty = getattr(raw_order, 'size', None)
+                if not order_qty:
+                    order_qty = expected_qty or stop_qty_for_state(self.state)
+
+                stop_price = None
+                limit_price = getattr(found, 'order_limit_price', None)
+                profit_price = None
+                if raw_order:
+                    stop_price = getattr(raw_order, 'stop_trigger', None)
+                    if stop_price is not None:
+                        stop_price = float(stop_price)
+                    if limit_price is None and getattr(raw_order, 'price', None) is not None:
+                        limit_price = float(raw_order.price)
+
+                order_type = 'STOP_LIMIT' if stop_price is not None else 'LIMIT'
+                if raw_order and (getattr(raw_order, 'complex_order_id', None) or getattr(raw_order, 'order_type', '') == 'OCO'):
+                    order_type = 'OCO'
+
+                self.state['active_stop'] = {
+                    'order_id': adopted_oid,
+                    'type': order_type,
+                    'stop_price': stop_price or self.state.get('designated_stop_price'),
+                    'limit_price': limit_price,
+                    'profit_price': profit_price,
+                    'phase': 1,
+                    'status': 'working',
+                    'placed_at': state_mod.now_iso(),
+                    'quantity': int(order_qty),
+                }
+                self.state['stop_quantity'] = int(order_qty)
+                if order_qty and int(order_qty) != int(self.state.get('quantity') or 0):
+                    self.state['quantity'] = int(order_qty)
+                    self.state['filled_quantity'] = int(order_qty)
+
+                state_mod.append_stop_history(
+                    self.state,
+                    action='adopted_from_broker',
+                    order_id=adopted_oid,
+                    price=stop_price or limit_price,
+                    phase=1,
+                    reason='adopted_existing_working_closing_order',
+                    spx_price_at_event=self.prices.get_spx() if hasattr(self.prices, 'get_spx') else None,
+                )
+                self._reregister_alert(None, adopted_oid)
+                state_mod.save_state(self.json_path, self.state)
+                log.info(
+                    'Adopted working closing order %s (qty=%s) from broker for %s',
+                    adopted_oid,
+                    order_qty,
+                    self.json_path,
+                )
+                return True
+        except Exception as exc:
+            log.warning('Failed to adopt working closing order for %s: %s', short_sym, exc)
+        return False
+
     def _place_short_stop(
         self,
         stop_price: float,
@@ -967,15 +1200,76 @@ class StopMonitor:
         if self._broker_actions_frozen():
             return False
         short = self.state['short_leg']
-        qty = qty if qty is not None else stop_qty_for_state(self.state)
+        short_sym = short.get('symbol')
+        if not short_sym:
+            return False
+        try:
+            held_qty = self.broker.get_single_leg_position_qty(short_sym)
+            if held_qty >= 0:
+                log.warning(
+                    'Cannot place short stop/OCO: position for %s is already flat/long (qty=%d) — auto-finalizing short leg',
+                    short_sym,
+                    held_qty,
+                )
+                if not self.state.get('short_closed_at'):
+                    self.state['short_closed_at'] = time.time()
+                if not self.state.get('close_mechanism'):
+                    self.state['close_mechanism'] = 'broker_position_flat'
+                self.state['status'] = 'closing'
+                self.state['active_stop'] = None
+                self.state['stop_quantity'] = 0
+                state_mod.save_state(self.json_path, self.state)
+                return False
+        except Exception as exc:
+            log.warning('Broker position verification check failed in _place_short_stop: %s', exc)
+            held_qty = None
+
+        desired_qty = qty if qty is not None else stop_qty_for_state(self.state)
+        qty = min(desired_qty, abs(held_qty)) if held_qty is not None else desired_qty
         if qty <= 0:
             return False
         stop_price = round_spx_option_price(stop_price)
         limit_price = round_spx_option_price(limit_price)
 
-        result = self.broker.place_stop_order(
-            short['symbol'], qty, stop_price, limit_price
-        )
+        strategy_name = self.state.get('strategy') or ''
+        is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
+        if is_meic:
+            from common.meic_settings import is_15c_oco_enabled
+            trades_root = _trades_root_for_path(self.json_path)
+            use_oco = is_15c_oco_enabled(root=trades_root)
+            pt_price = 0.15 if use_oco else None
+        else:
+            use_oco = (
+                getattr(self.stop_profile, 'use_oco_short_stop', False)
+                and getattr(self.stop_profile, 'profit_target_short', None) is not None
+            )
+            pt_price = float(self.stop_profile.profit_target_short) if use_oco else None
+
+        if use_oco:
+            try:
+                result = self.broker.place_oco_order(
+                    short['symbol'],
+                    qty,
+                    profit_price=pt_price,
+                    stop_price=stop_price,
+                    limit_price=limit_price,
+                )
+                if not isinstance(result, OrderResult) and hasattr(self.broker, 'place_stop_order'):
+                    stop_res = self.broker.place_stop_order(
+                        short['symbol'], qty, stop_price, limit_price
+                    )
+                    if isinstance(stop_res, OrderResult):
+                        result = stop_res
+            except (NotImplementedError, AttributeError):
+                use_oco = False
+                result = self.broker.place_stop_order(
+                    short['symbol'], qty, stop_price, limit_price
+                )
+        else:
+            result = self.broker.place_stop_order(
+                short['symbol'], qty, stop_price, limit_price
+            )
+
         if not result.success:
             log.error(
                 'Stop order failed for %s qty=%s: %s',
@@ -983,6 +1277,10 @@ class StopMonitor:
                 qty,
                 result.message,
             )
+            msg = str(result.message or '').lower()
+            if 'already have a closing order' in msg or 'cannot_close_against_more_than_existing_position' in msg:
+                if self._adopt_working_closing_order_from_broker(short['symbol'], expected_qty=qty):
+                    return True
             if is_instruments_stopped_trading_error(result.message):
                 self._mark_instruments_stopped_trading(result.message)
             else:
@@ -990,11 +1288,13 @@ class StopMonitor:
             return False
 
         spx = self.prices.get_spx()
+        oid = str(result.order_id) if getattr(result, 'order_id', None) is not None else None
         self.state['active_stop'] = {
-            'order_id': result.order_id,
-            'type': 'STOP_LIMIT',
+            'order_id': oid,
+            'type': 'OCO' if use_oco else 'STOP_LIMIT',
             'stop_price': stop_price,
             'limit_price': limit_price,
+            'profit_price': pt_price,
             'phase': phase,
             'status': 'working',
             'placed_at': state_mod.now_iso(),
@@ -1005,14 +1305,152 @@ class StopMonitor:
         state_mod.append_stop_history(
             self.state,
             action='placed',
-            order_id=result.order_id,
+            order_id=oid,
             price=stop_price,
             phase=phase,
             reason=reason,
             spx_price_at_event=spx,
         )
         state_mod.save_state(self.json_path, self.state)
-        log.info('Placed stop %s @ %s (%s)', result.order_id, stop_price, reason)
+        log.info('Placed stop %s @ %s (%s)', oid, stop_price, reason)
+        return True
+
+    def adjust_stop_to_breakeven(self, reason: str = 'companion_breached') -> bool:
+        """Tighten working stop/OCO to breakeven (1x / short fill price) when companion IC breaches."""
+        if self._broker_actions_frozen():
+            return False
+        if self.state.get('status') != 'open':
+            return False
+        if self.state.get('phases', {}).get('breakeven_tightened'):
+            return False
+
+        short = self.state.get('short_leg') or {}
+        short_sym = short.get('symbol')
+        if not short_sym:
+            return False
+        try:
+            held_qty = self.broker.get_single_leg_position_qty(short_sym)
+            if held_qty >= 0:
+                log.warning(
+                    'Cannot adjust breakeven stop: position for %s is already flat/long (qty=%d) — auto-finalizing short leg',
+                    short_sym,
+                    held_qty,
+                )
+                if not self.state.get('short_closed_at'):
+                    self.state['short_closed_at'] = time.time()
+                if not self.state.get('close_mechanism'):
+                    self.state['close_mechanism'] = 'broker_position_flat'
+                self.state['status'] = 'closing'
+                self.state['active_stop'] = None
+                self.state['stop_quantity'] = 0
+                state_mod.save_state(self.json_path, self.state)
+                return False
+        except Exception as exc:
+            log.warning('Broker position verification check failed in adjust_stop_to_breakeven: %s', exc)
+            held_qty = None
+
+        if reason == 'companion_breached':
+            trades_root = _trades_root_for_path(self.json_path)
+            from common.meic_settings import is_companion_tightening_enabled
+            if not is_companion_tightening_enabled(root=trades_root):
+                log.info('Companion breach tightening disabled in settings; skipping breakeven adjustment for %s', self.json_path)
+                return False
+
+        short_fill = float(short.get('fill_price') or 0)
+        if short_fill <= 0:
+            return False
+
+        be_stop, be_limit = exchange_stop_limit_prices(short_fill, multiplier=1.0)
+        active = self.state.get('active_stop') or {}
+        old_oid = active.get('order_id')
+        desired_qty = stop_qty_for_state(self.state)
+        qty = min(desired_qty, abs(held_qty)) if held_qty is not None else desired_qty
+        if qty <= 0:
+            return False
+
+        strategy_name = self.state.get('strategy') or ''
+        is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
+        if is_meic:
+            from common.meic_settings import is_15c_oco_enabled
+            trades_root = _trades_root_for_path(self.json_path)
+            use_oco = is_15c_oco_enabled(root=trades_root)
+            pt_price = 0.15 if use_oco else None
+        else:
+            use_oco = (
+                getattr(self.stop_profile, 'use_oco_short_stop', False)
+                and getattr(self.stop_profile, 'profit_target_short', None) is not None
+            )
+            pt_price = float(self.stop_profile.profit_target_short) if use_oco else None
+
+        if old_oid:
+            self.broker.cancel_order(str(old_oid))
+
+        if use_oco:
+            try:
+                result = self.broker.place_oco_order(
+                    short['symbol'],
+                    qty,
+                    profit_price=pt_price,
+                    stop_price=be_stop,
+                    limit_price=be_limit,
+                )
+                if not isinstance(result, OrderResult) and hasattr(self.broker, 'place_stop_order'):
+                    stop_res = self.broker.place_stop_order(
+                        short['symbol'], qty, be_stop, be_limit
+                    )
+                    if isinstance(stop_res, OrderResult):
+                        result = stop_res
+            except (NotImplementedError, AttributeError):
+                use_oco = False
+                result = self.broker.place_stop_order(
+                    short['symbol'], qty, be_stop, be_limit
+                )
+        else:
+            result = self.broker.place_stop_order(
+                short['symbol'], qty, be_stop, be_limit
+            )
+
+        if not result.success:
+            log.error('Failed to place breakeven stop for %s: %s', short.get('symbol'), result.message)
+            return False
+
+        spx = self.prices.get_spx()
+        oid = str(result.order_id) if getattr(result, 'order_id', None) is not None else None
+        self.state['active_stop'] = {
+            'order_id': oid,
+            'type': 'OCO' if use_oco else 'STOP_LIMIT',
+            'stop_price': be_stop,
+            'limit_price': be_limit,
+            'profit_price': pt_price,
+            'phase': active.get('phase', 1),
+            'status': 'working',
+            'placed_at': state_mod.now_iso(),
+            'quantity': qty,
+        }
+        self.state['stop_quantity'] = qty
+        self.state['designated_stop_price'] = be_stop
+        self.state['stop_multiplier'] = 1.0
+        self.state.setdefault('phases', {})['breakeven_tightened'] = True
+        self.state['phases']['breakeven_tightened_at'] = state_mod.now_iso()
+
+        state_mod.append_stop_history(
+            self.state,
+            action='tightened_breakeven',
+            order_id=oid,
+            price=be_stop,
+            phase=active.get('phase', 1),
+            reason=reason,
+            spx_price_at_event=spx,
+        )
+        state_mod.save_state(self.json_path, self.state)
+        log.info(
+            'Adjusted stop to breakeven for %s: stop=%.2f limit=%.2f order=%s (%s)',
+            self.json_path,
+            be_stop,
+            be_limit,
+            oid,
+            reason,
+        )
         return True
 
     def upgrade_to_spread_stop(self) -> None:
@@ -1060,18 +1498,47 @@ class StopMonitor:
         state_mod.save_state(self.json_path, self.state)
 
     def _sync_working_stop_order(self) -> None:
-        """Poll broker for STOP_LIMIT / LIMIT fill (exchange stop or breach close)."""
+        """Poll broker for STOP_LIMIT / LIMIT / OCO fill (exchange stop, PT, or breach close)."""
         active = self.state.get('active_stop') or {}
-        if not active.get('order_id'):
-            return
-        if active.get('type') not in ('STOP_LIMIT', 'LIMIT'):
-            return
-        if str(active.get('status', '')).lower() in ('filled', 'cancelled', 'rejected'):
-            return
-        self._sync_active_close_order(
-            priority=PRIORITY_LOW,
-            op=OPERATION_WORKING_STOP_RECONCILE,
-        )
+        if active.get('order_id') and active.get('type') in ('STOP_LIMIT', 'LIMIT', 'OCO') and str(active.get('status', '')).lower() not in ('filled', 'cancelled', 'rejected'):
+            self._sync_active_close_order(
+                priority=PRIORITY_LOW,
+                op=OPERATION_WORKING_STOP_RECONCILE,
+            )
+        self._sync_working_scale_out_orders()
+
+    def _sync_working_scale_out_orders(self, live_orders=None) -> None:
+        """Poll broker for status of working scale-out orders (including OCO)."""
+        scale_outs = self.state.get('scale_outs') or []
+        changed = False
+        net_credit = float(self.state.get('entry', {}).get('net_credit', 0) or 0)
+        for s in scale_outs:
+            st = str(s.get('status') or '').lower()
+            oid = str(s.get('order_id') or '')
+            if oid and st in ('working', 'live', 'contingent', 'received', 'open'):
+                res = self.broker.get_order_status(
+                    oid,
+                    priority=PRIORITY_LOW,
+                    op='scale_out_status',
+                    live_orders=live_orders,
+                )
+                if not res.success:
+                    continue
+                new_st = str(res.status).lower()
+                if new_st == 'filled':
+                    s['status'] = 'filled'
+                    fill_p = float(res.filled_price) if res.filled_price is not None else float(s.get('debit_limit') or 0)
+                    s['close_price'] = fill_p
+                    qty = int(s.get('quantity') or 1)
+                    s['pnl'] = round((net_credit - fill_p) * 100 * qty, 2)
+                    changed = True
+                    log.info('Scale-out order %s filled @ %.2f (P&L $%.2f)', oid, fill_p, s['pnl'])
+                elif new_st in ('cancelled', 'canceled', 'rejected'):
+                    s['status'] = 'cancelled'
+                    changed = True
+                    log.info('Scale-out order %s marked terminal (%s) at broker', oid, new_st)
+        if changed:
+            state_mod.save_state(self.json_path, self.state)
 
     def _reconcile_active_stop_with_broker(self, live_orders=None) -> None:
         """Refresh this JSON's own active_stop at broker — never adopt by short symbol.
@@ -1081,6 +1548,8 @@ class StopMonitor:
         """
         if self.state.get('status') != 'open':
             return
+
+        self._sync_working_scale_out_orders(live_orders=live_orders)
 
         active = self.state.get('active_stop') or {}
         oid = str(active.get('order_id') or '')
@@ -1097,16 +1566,44 @@ class StopMonitor:
             return
 
         st = str(result.status).lower()
-        if st in ('working', 'live', 'contingent', 'received', 'open', 'partially filled'):
-            active['status'] = 'working'
-            state_mod.save_state(self.json_path, self.state)
-            return
-
         if stop_order_fully_filled(self.state, result):
             self.handle_stop_order_update(active, broker_result=result)
             return
 
+        is_partial = (
+            st in ('partial', 'partially filled', 'partially_filled')
+            or (
+                result.filled_quantity is not None
+                and result.filled_quantity > 0
+                and not stop_order_fully_filled(self.state, result)
+            )
+        )
+        if is_partial:
+            self.handle_partial_stop_fill(active, broker_result=result)
+            return
+
+        if st in ('working', 'live', 'contingent', 'received', 'open'):
+            active['status'] = 'working'
+            state_mod.save_state(self.json_path, self.state)
+            return
+
         if st in ('cancelled', 'canceled', 'rejected', 'expired', 'unknown'):
+            if result.filled_quantity and int(result.filled_quantity) > 0:
+                self.handle_partial_stop_fill(active, broker_result=result)
+                return
+            # First check if disk state has already moved on to a new working stop (e.g. from scale_out)
+            self._maybe_merge_disk_stop_state()
+            current_active = self.state.get('active_stop') or {}
+            current_oid = str(current_active.get('order_id') or '')
+            if current_oid and current_oid != oid and str(current_active.get('status', '')).lower() in (
+                'working', 'live', 'contingent', 'received', 'open',
+            ):
+                log.info(
+                    'Stop %s was cancelled, but trade state already has new stop %s — skipping clear',
+                    oid, current_oid,
+                )
+                return
+
             state_mod.append_stop_history(
                 self.state,
                 action='cancelled',
@@ -1127,6 +1624,28 @@ class StopMonitor:
             disk = state_mod.load_state(self.json_path)
         except Exception:
             return
+
+        if disk.get('status') == 'closed' and self.state.get('status') != 'closed':
+            self.state['status'] = 'closed'
+            self.state['close_mechanism'] = disk.get('close_mechanism', 'manual_close')
+            self.state['active_stop'] = None
+            self.state['stop_quantity'] = 0
+            log.info('Adopted closed status from disk for %s', self.json_path)
+            return
+
+        disk_filled = disk.get('filled_quantity')
+        if disk_filled is not None and disk_filled != self.state.get('filled_quantity'):
+            self.state['filled_quantity'] = int(disk_filled)
+            if disk.get('quantity') is not None:
+                self.state['quantity'] = int(disk['quantity'])
+            if disk.get('open_order'):
+                self.state['open_order'] = disk['open_order']
+            log.info('Adopted disk fill count for %s → %s filled', self.json_path, disk_filled)
+
+        if disk.get('scale_outs') is not None:
+            self.state['scale_outs'] = disk['scale_outs']
+        if disk.get('initial_quantity') is not None:
+            self.state['initial_quantity'] = disk['initial_quantity']
 
         disk_stop = disk.get('active_stop') or {}
         if not disk_stop.get('order_id'):
@@ -1181,6 +1700,8 @@ class StopMonitor:
         active['status'] = result.status
         if stop_order_fully_filled(self.state, result):
             self.handle_stop_order_update(active, broker_result=result)
+        elif result.filled_quantity and int(result.filled_quantity) > 0:
+            self.handle_partial_stop_fill(active, broker_result=result)
         state_mod.save_state(self.json_path, self.state)
 
     def breach_short_limit_target(self, short_symbol: str) -> Optional[float]:
@@ -1267,21 +1788,62 @@ class StopMonitor:
             )
             return
 
+        status_after = self.broker.get_order_status(
+            str(oid),
+            priority=PRIORITY_HIGH,
+            op=OPERATION_STOP_CANCEL,
+        )
+        if status_after.success and status_after.filled_quantity:
+            partial_qty = int(status_after.filled_quantity)
+            if partial_qty > 0:
+                partial_px = float(status_after.filled_price or active.get('stop_price') or 0.0)
+                partial_fills = self.state.setdefault('short_partial_fills', [])
+                if not any(str(p.get('order_id')) == str(oid) for p in partial_fills):
+                    partial_fills.append({
+                        'order_id': str(oid),
+                        'qty': partial_qty,
+                        'price': partial_px,
+                        'timestamp': state_mod.now_iso(),
+                    })
+
+        is_pt = 'profit_target' in reason
+        cancel_reason = f'pt_cancel:{reason}' if is_pt else f'breach_cancel:{reason}'
         state_mod.append_stop_history(
             self.state,
             action='cancelled',
             order_id=oid,
             price=active.get('stop_price') or active.get('limit_price'),
             phase=phase,
-            reason=f'breach_cancel:{reason}',
+            reason=cancel_reason,
             spx_price_at_event=self.prices.get_spx(),
         )
 
         short_sym = self.state['short_leg']['symbol']
         qty = stop_qty_for_state(self.state)
+        try:
+            held = self.broker.get_option_position_quantity(short_sym)
+            if held is not None:
+                remaining_short = abs(held) if held < 0 else 0
+                qty = min(qty, remaining_short)
+        except Exception as exc:
+            log.warning('Could not get broker held position in replace_with_limit_close: %s', exc)
+
+        if qty <= 0:
+            log.info('Position for %s is already flat at broker — finalizing short leg', short_sym)
+            self.state['short_close_price'] = self._calculate_blended_short_close_price()
+            self.state['short_closed_at'] = time.time()
+            self.state['status'] = 'closing'
+            self.state['short_remaining_qty'] = 0
+            self.state['active_stop'] = None
+            self.state['stop_quantity'] = 0
+            state_mod.save_state(self.json_path, self.state)
+            return
+
         short_p = self.prices.get_market_mid(short_sym)
         if short_p is None:
             short_p = self.prices.get(short_sym)
+        if short_p is None and active.get('stop_price'):
+            short_p = float(active['stop_price'])
         if short_p is None:
             log.error('Breach limit close: no MQTT price for %s — stop cancelled, no limit placed', short_sym)
             return
@@ -1303,10 +1865,15 @@ class StopMonitor:
             'placed_at': state_mod.now_iso(),
             'quantity': qty,
         }
+        self.state['short_remaining_qty'] = qty
         self.state['stop_quantity'] = qty
-        self.state['phases']['breach_limit_placed_at'] = state_mod.now_iso()
-        if not self.state.get('close_mechanism'):
-            self.state['close_mechanism'] = 'software_breach'
+        if is_pt:
+            self.state['phases']['pt_limit_placed_at'] = state_mod.now_iso()
+            self.state['close_mechanism'] = 'profit_target'
+        else:
+            self.state['phases']['breach_limit_placed_at'] = state_mod.now_iso()
+            if not self.state.get('close_mechanism'):
+                self.state['close_mechanism'] = 'software_breach'
         long_sym = self.state['long_leg']['symbol']
         self.prices.clear_override(short_sym)
         self.prices.clear_override(long_sym)
@@ -1378,6 +1945,186 @@ class StopMonitor:
                 self.long_close_delay_sec,
             )
 
+    def _calculate_blended_short_close_price(
+        self,
+        final_fill_price: Optional[float] = None,
+        final_qty: Optional[int] = None,
+    ) -> Optional[float]:
+        partial_fills = self.state.get('short_partial_fills') or []
+        if not partial_fills:
+            return final_fill_price
+
+        total_qty = 0
+        total_cost = 0.0
+        for f in partial_fills:
+            q = int(f.get('qty') or 0)
+            p = float(f.get('price') or 0.0)
+            total_qty += q
+            total_cost += q * p
+
+        if final_fill_price is not None and final_qty is not None and final_qty > 0:
+            total_qty += final_qty
+            total_cost += final_qty * float(final_fill_price)
+
+        if total_qty > 0:
+            return round(total_cost / total_qty, 4)
+        return final_fill_price
+
+    def handle_partial_stop_fill(
+        self,
+        active: Dict[str, Any],
+        *,
+        broker_result: OrderResult,
+    ) -> None:
+        if self._broker_actions_blocked():
+            return
+        if self.state.get('status') in ('closing', 'closed'):
+            return
+        if self.state.get('short_closed_at'):
+            return
+
+        oid = str(active.get('order_id') or (self.state.get('active_stop') or {}).get('order_id') or '')
+        if not oid:
+            return
+
+        partial_qty = int(broker_result.filled_quantity or 0)
+        partial_price = float(broker_result.filled_price or broker_result.short_fill_price or active.get('stop_price') or 0.0)
+        log.warning(
+            'Partial stop fill detected for %s on order %s (%d/%s filled @ %s). Cancelling stop to exit remaining quantity at market mid.',
+            self.json_path,
+            oid,
+            partial_qty,
+            broker_result.order_quantity or self.state.get('stop_quantity'),
+            partial_price,
+        )
+
+        outcome = self._cancel_stop_and_confirm(oid, timeout=3.0)
+
+        latest = self.broker.get_order_status(
+            oid,
+            priority=PRIORITY_HIGH,
+            op=OPERATION_STOP_CANCEL,
+        )
+        if latest.success:
+            if latest.filled_quantity is not None and latest.filled_quantity > partial_qty:
+                partial_qty = int(latest.filled_quantity)
+            if latest.filled_price is not None:
+                partial_price = float(latest.filled_price)
+
+        short_sym = self.state['short_leg']['symbol']
+        held_qty = None
+        try:
+            held_qty = self.broker.get_option_position_quantity(short_sym)
+        except Exception as exc:
+            log.warning('Could not get broker held position quantity for %s: %s', short_sym, exc)
+
+        if held_qty is not None:
+            remaining_qty = abs(held_qty) if held_qty < 0 else 0
+        else:
+            total_entry = int(self.state.get('filled_quantity') or self.state.get('quantity') or 0)
+            already_closed = sum(int(p.get('qty') or 0) for p in self.state.get('short_partial_fills', []))
+            remaining_qty = max(0, total_entry - already_closed - partial_qty)
+
+        # Record this partial fill in state
+        partial_fills = self.state.setdefault('short_partial_fills', [])
+        already_recorded = any(str(p.get('order_id')) == str(oid) for p in partial_fills)
+        if not already_recorded and partial_qty > 0:
+            partial_fills.append({
+                'order_id': str(oid),
+                'qty': partial_qty,
+                'price': partial_price,
+                'timestamp': state_mod.now_iso(),
+            })
+
+        state_mod.append_stop_history(
+            self.state,
+            action='partial_fill_cancelled',
+            order_id=oid,
+            price=partial_price,
+            phase=active.get('phase', 1),
+            reason=f'partial_fill:{partial_qty}_filled_rem_{remaining_qty}',
+            spx_price_at_event=self.prices.get_spx(),
+        )
+
+        if remaining_qty <= 0:
+            fill_px = self._calculate_blended_short_close_price(partial_price, final_qty=partial_qty)
+            self.state['short_close_price'] = fill_px
+            self.state['short_closed_at'] = time.time()
+            self.state['status'] = 'closing'
+            self.state['short_remaining_qty'] = 0
+            self.state['active_stop'] = None
+            self.state['stop_quantity'] = 0
+            if not self.state.get('close_mechanism'):
+                self.state['close_mechanism'] = 'exchange_stop'
+            state_mod.save_state(self.json_path, self.state)
+            log.info(
+                'All short contracts closed via stop (%s) — status=closing, long close in %ss',
+                self.json_path,
+                self.long_close_delay_sec,
+            )
+            return
+
+        self.state['short_remaining_qty'] = remaining_qty
+        self.state['stop_quantity'] = remaining_qty
+
+        short_p = self.prices.get_market_mid(short_sym)
+        if short_p is None:
+            short_p = self.prices.get(short_sym)
+        if short_p is None and active.get('stop_price'):
+            short_p = float(active['stop_price'])
+        if short_p is None:
+            log.error('Partial stop fill: missing MQTT price for %s to place market mid limit close', short_sym)
+            self.state['active_stop'] = None
+            state_mod.save_state(self.json_path, self.state)
+            return
+
+        limit_price = round_spx_option_price(short_p)
+        result = self.broker.place_limit_order(
+            'BUY_TO_CLOSE',
+            short_sym,
+            remaining_qty,
+            limit_price,
+        )
+        if not result.success:
+            log.error('Partial stop fill: limit close failed: %s', result.message)
+            self.state['active_stop'] = None
+            state_mod.save_state(self.json_path, self.state)
+            return
+
+        new_oid = str(result.order_id)
+        self.state['active_stop'] = {
+            'order_id': new_oid,
+            'type': 'LIMIT',
+            'stop_price': None,
+            'limit_price': limit_price,
+            'phase': 1,
+            'status': 'working',
+            'placed_at': state_mod.now_iso(),
+            'quantity': remaining_qty,
+            'reason': 'partial_stop_fill_market_mid_limit',
+        }
+        self.state['close_mechanism'] = 'partial_stop_fill_exit'
+        self._reregister_alert(oid, new_oid)
+        state_mod.append_stop_history(
+            self.state,
+            action='replaced_limit',
+            order_id=new_oid,
+            price=limit_price,
+            phase=1,
+            reason=f'partial_stop_fill_mid_limit_qty_{remaining_qty}',
+            spx_price_at_event=self.prices.get_spx(),
+        )
+        state_mod.save_state(self.json_path, self.state)
+        log.info(
+            'Partial stop fill: placed limit close %s @ %s for remaining %d contracts on %s',
+            new_oid,
+            limit_price,
+            remaining_qty,
+            short_sym,
+        )
+        if str(result.status).lower() == 'filled':
+            self._sync_active_close_order()
+
     def handle_stop_order_update(
         self,
         stop: Dict[str, Any],
@@ -1401,6 +2148,10 @@ class StopMonitor:
                 op=OPERATION_SPREAD_CLOSE_STATUS,
             )
         if not stop_order_fully_filled(self.state, result):
+            if result.filled_quantity and int(result.filled_quantity) > 0:
+                active = self.state.get('active_stop') or stop
+                self.handle_partial_stop_fill(active, broker_result=result)
+                return
             active = self.state.get('active_stop') or {}
             if active.get('order_id') == oid and result.success:
                 active['status'] = result.status
@@ -1417,22 +2168,8 @@ class StopMonitor:
         if active.get('order_id') == stop.get('order_id') or active.get('order_id') == oid:
             active['status'] = 'filled'
 
-        spx = self.prices.get_spx()
-        state_mod.append_stop_history(
-            self.state,
-            action='filled',
-            order_id=stop.get('order_id'),
-            price=stop.get('stop_price'),
-            phase=stop.get('phase', 1),
-            reason='stop_filled',
-            spx_price_at_event=spx,
-            status='filled',
-        )
-        active = self.state.get('active_stop') or {}
-        if active.get('limit_price') is not None:
-            self.state['short_close_limit_price'] = float(active['limit_price'])
-        elif active.get('stop_price') is not None:
-            self.state['short_close_limit_price'] = float(active['stop_price'])
+        is_oco = active.get('type') == 'OCO'
+        pt_price = float(active.get('profit_price') or 0.15) if is_oco else None
 
         fill_px = None
         if broker_result and broker_result.success and broker_result.filled_price is not None:
@@ -1445,14 +2182,52 @@ class StopMonitor:
             )
             if status_result.success and status_result.filled_price is not None:
                 fill_px = float(status_result.filled_price)
+
+        is_pt_fill = False
+        if is_oco and pt_price is not None and fill_px is not None:
+            if fill_px <= pt_price + 0.05:
+                is_pt_fill = True
+
+        is_pt_limit = (
+            self.state.get('close_mechanism') == 'profit_target'
+            or 'profit_target' in str(active.get('reason') or '')
+        )
+        if is_pt_fill or is_pt_limit:
+            reason = 'profit_target_oco' if is_pt_fill else 'profit_target'
+            close_mech = 'profit_target_oco' if is_pt_fill else 'profit_target'
+        else:
+            reason = 'stop_filled'
+            close_mech = 'exchange_stop'
+
+        spx = self.prices.get_spx()
+        state_mod.append_stop_history(
+            self.state,
+            action='filled',
+            order_id=stop.get('order_id'),
+            price=fill_px if fill_px is not None else stop.get('stop_price'),
+            phase=stop.get('phase', 1),
+            reason=reason,
+            spx_price_at_event=spx,
+            status='filled',
+        )
+        if active.get('limit_price') is not None:
+            self.state['short_close_limit_price'] = float(active['limit_price'])
+        elif active.get('stop_price') is not None:
+            self.state['short_close_limit_price'] = float(active['stop_price'])
+
+        if fill_px is not None:
+            fill_px = self._calculate_blended_short_close_price(
+                fill_px, final_qty=int(active.get('quantity') or self.state.get('stop_quantity') or 1)
+            )
         self.state['short_close_price'] = (
             fill_px
             if fill_px is not None
             else active.get('limit_price') or stop.get('stop_price') or stop.get('limit_price')
         )
         if not self.state.get('close_mechanism'):
-            self.state['close_mechanism'] = 'exchange_stop'
+            self.state['close_mechanism'] = close_mech
         self.state['status'] = 'closing'
+        self.state['short_remaining_qty'] = 0
         fill_ts = time.time()
         if broker_result is not None and broker_result.filled_at is not None:
             fill_ts = float(broker_result.filled_at)
@@ -1464,7 +2239,8 @@ class StopMonitor:
         self.state['short_closed_at'] = fill_ts
         state_mod.save_state(self.json_path, self.state)
         log.info(
-            'Short leg closed — status=closing, long close in %ss',
+            'Short leg closed (%s) — status=closing, long close in %ss',
+            close_mech,
             self.long_close_delay_sec,
         )
 
@@ -1491,7 +2267,10 @@ class StopMonitor:
         quote = self._resolve_long_close_quote()
         if quote.mid is None:
             return None
-        mid_limit = round_spx_option_price(quote.mid)
+        if quote.mid < 0.10:
+            mid_limit = LEGACY_LONG_CLOSE_FLOOR
+        else:
+            mid_limit = round_spx_option_price(quote.mid)
         if existing_limit is None:
             return mid_limit
         existing = round_spx_option_price(float(existing_limit))
@@ -1507,7 +2286,7 @@ class StopMonitor:
         if quote.mid is None:
             self._mark_long_close_blocked(quote.source)
             return False
-        if limit_price <= LEGACY_LONG_CLOSE_FLOOR and quote.mid > LEGACY_LONG_CLOSE_FLOOR:
+        if limit_price <= LEGACY_LONG_CLOSE_FLOOR and quote.mid >= 0.15:
             self._mark_long_close_blocked('blocked_no_quote')
             log.critical(
                 'Refusing long close at floor %.2f — live quote %.2f (source=%s)',
@@ -1517,7 +2296,22 @@ class StopMonitor:
             )
             return False
         long_sym = self.state['long_leg']['symbol']
-        qty = stop_qty_for_state(self.state)
+        try:
+            held_qty = self.broker.get_single_leg_position_qty(long_sym)
+            if held_qty <= 0:
+                log.warning(
+                    'Cannot place long close: position for %s is already flat/short (qty=%d) — auto-finalizing close',
+                    long_sym,
+                    held_qty,
+                )
+                self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+                return False
+        except Exception as exc:
+            log.warning('Broker position verification check failed in _place_long_close_limit: %s', exc)
+            held_qty = None
+
+        desired_qty = stop_qty_for_state(self.state)
+        qty = min(desired_qty, held_qty) if held_qty is not None and held_qty > 0 else desired_qty
         limit_price = round_spx_option_price(limit_price)
         result = self.broker.place_limit_order('SELL_TO_CLOSE', long_sym, qty, limit_price)
         if result.success:
@@ -1525,6 +2319,9 @@ class StopMonitor:
             self.state['long_close_limit_price'] = limit_price
             self.state['long_close_attempts'] = self.state.get('long_close_attempts', 0) + 1
             self.state['long_close_source'] = source or quote.source
+            self.state.pop('long_close_fail_count', None)
+            self.state.pop('long_close_last_error', None)
+            self.state.pop('long_close_next_retry_at', None)
             log.info(
                 'Long close placed: %s qty=%s limit=%s (order %s, attempt %d, source=%s)',
                 long_sym,
@@ -1535,7 +2332,18 @@ class StopMonitor:
                 self.state.get('long_close_source', source or '?'),
             )
             return True
-        log.error('Long close re-place failed: %s', result.message)
+        fail_count = int(self.state.get('long_close_fail_count') or 0) + 1
+        self.state['long_close_fail_count'] = fail_count
+        self.state['long_close_last_error'] = str(result.message)
+        self.state['long_close_failed_at'] = state_mod.now_iso()
+        backoff_sec = min(60.0, 5.0 * (2 ** min(fail_count - 1, 4)))
+        self.state['long_close_next_retry_at'] = time.time() + backoff_sec
+        log.error(
+            'Long close placement failed (fail_count=%d, backoff=%.1fs): %s',
+            fail_count,
+            backoff_sec,
+            result.message,
+        )
         return False
 
     def _close_long_leg(self, quantity: Optional[int] = None) -> None:
@@ -1573,15 +2381,42 @@ class StopMonitor:
 
     def _chase_long_close(self) -> None:
         """Check long close order and reprice if needed."""
-        quote = self._resolve_long_close_quote()
+        retry_at = self.state.get('long_close_next_retry_at')
+        if retry_at and time.time() < float(retry_at):
+            return
+
         oid = self.state.get('long_close_order_id')
+        fail_count = int(self.state.get('long_close_fail_count') or 0)
+
+        # If repeated order placement failures occur with no working order, check broker position
+        if not oid and fail_count >= 3:
+            long_sym = self.state['long_leg']['symbol']
+            try:
+                held_qty = self.broker.get_single_leg_position_qty(long_sym)
+                if held_qty <= 0:
+                    log.warning(
+                        'Long leg %s is flat (qty=%d) at broker after %d placement failures — auto-finalizing close',
+                        long_sym,
+                        held_qty,
+                        fail_count,
+                    )
+                    self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+                    return
+            except Exception as exc:
+                log.warning('Broker position verification check failed: %s', exc)
+
+        quote = self._resolve_long_close_quote()
         existing_limit = self.state.get('long_close_limit_price')
 
         if not oid:
             if quote.mid is None:
                 self._mark_long_close_blocked(quote.source)
                 return
-            self._place_long_close_at_mid()
+            attempts = self.state.get('long_close_attempts', 0)
+            if attempts >= 10 and self.state.get('long_close_source') in ('mqtt', 'broker_rest'):
+                self._place_long_close_market()
+            else:
+                self._place_long_close_at_mid()
             return
 
         result = self.broker.get_order_status(
@@ -1600,22 +2435,33 @@ class StopMonitor:
             return
 
         if status in ('cancelled', 'canceled', 'rejected', 'expired'):
+            self.state.pop('long_close_order_id', None)
             if quote.mid is None:
                 self._mark_long_close_blocked(quote.source)
                 return
-            self._place_long_close_at_mid(existing_limit=existing_limit)
+            attempts = self.state.get('long_close_attempts', 0)
+            if attempts >= 10 and self.state.get('long_close_source') in ('mqtt', 'broker_rest'):
+                self._place_long_close_market()
+            else:
+                self._place_long_close_at_mid(existing_limit=existing_limit)
             return
 
         if quote.mid is None:
             self._mark_long_close_blocked(quote.source)
             return
 
+        attempts = self.state.get('long_close_attempts', 0)
+        if attempts >= 10 and self.state.get('long_close_source') in ('mqtt', 'broker_rest'):
+            log.info('Long close escalating to MARKET — cancelling working order %s first', oid)
+            self.broker.cancel_order(oid)
+            return
+
         if existing_limit is not None:
             existing_rounded = round_spx_option_price(float(existing_limit))
-            if existing_rounded <= LEGACY_LONG_CLOSE_FLOOR and quote.mid > LEGACY_LONG_CLOSE_FLOOR:
+            if existing_rounded <= LEGACY_LONG_CLOSE_FLOOR and quote.mid >= 0.15:
                 new_limit = round_spx_option_price(quote.mid)
+                log.info('Long close floor exit — cancelling order %s to re-place at %.2f', oid, new_limit)
                 self.broker.cancel_order(oid)
-                self._place_long_close_limit(new_limit, source=quote.source)
                 return
 
         if quote.mid <= 0.01:
@@ -1628,12 +2474,8 @@ class StopMonitor:
         if existing_limit is not None and new_limit >= round_spx_option_price(float(existing_limit)):
             return
 
+        log.info('Long close repricing step — cancelling order %s to re-place at %.2f', oid, new_limit)
         self.broker.cancel_order(oid)
-        self._place_long_close_limit(new_limit, source=quote.source)
-
-        attempts = self.state.get('long_close_attempts', 0)
-        if attempts >= 10 and self.state.get('long_close_source') in ('mqtt', 'broker_rest'):
-            self._place_long_close_market()
 
     def _place_long_close_at_mid(self, existing_limit: Optional[float] = None) -> None:
         """Place SELL_TO_CLOSE; step down if mid matches the last working limit."""
@@ -1659,13 +2501,37 @@ class StopMonitor:
     def _place_long_close_market(self) -> None:
         """Escalate to market order after too many chase attempts."""
         long_sym = self.state['long_leg']['symbol']
-        qty = stop_qty_for_state(self.state)
+        try:
+            held_qty = self.broker.get_single_leg_position_qty(long_sym)
+            if held_qty <= 0:
+                log.warning(
+                    'Cannot place long close market: position for %s is already flat/short (qty=%d) — auto-finalizing close',
+                    long_sym,
+                    held_qty,
+                )
+                self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+                return
+        except Exception as exc:
+            log.warning('Broker position verification check failed in _place_long_close_market: %s', exc)
+            held_qty = None
+
+        desired_qty = stop_qty_for_state(self.state)
+        qty = min(desired_qty, held_qty) if held_qty is not None and held_qty > 0 else desired_qty
         result = self.broker.place_market_order('SELL_TO_CLOSE', long_sym, qty)
         if result.success:
             self.state['long_close_order_id'] = result.order_id
+            self.state.pop('long_close_fail_count', None)
+            self.state.pop('long_close_last_error', None)
+            self.state.pop('long_close_next_retry_at', None)
             log.info('Long close escalated to MARKET: %s qty=%s (order %s)',
                      long_sym, qty, result.order_id)
         else:
+            fail_count = int(self.state.get('long_close_fail_count') or 0) + 1
+            self.state['long_close_fail_count'] = fail_count
+            self.state['long_close_last_error'] = str(result.message)
+            self.state['long_close_failed_at'] = state_mod.now_iso()
+            backoff_sec = min(60.0, 5.0 * (2 ** min(fail_count - 1, 4)))
+            self.state['long_close_next_retry_at'] = time.time() + backoff_sec
             log.error('Long close market order failed: %s', result.message)
 
     # --- AlertListener re-registration (GAP-04) ---

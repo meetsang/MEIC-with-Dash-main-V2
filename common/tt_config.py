@@ -7,7 +7,7 @@ _env_path = os.path.join(_here, '..', '.env')
 load_dotenv(_env_path)
 
 BROKER = os.getenv('BROKER', 'schwab').lower().strip()
-PAPER_MODE = os.getenv('PAPER_MODE', 'false').lower() in ('1', 'true', 'yes')
+PAPER_MODE = os.getenv('PAPER_MODE', 'true').lower() in ('1', 'true', 'yes')
 
 TT_CLIENT_SECRET = os.getenv('TT_CLIENT_SECRET', '')
 TT_REFRESH_TOKEN = os.getenv('TT_REFRESH_TOKEN', '')

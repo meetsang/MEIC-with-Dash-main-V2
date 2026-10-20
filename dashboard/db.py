@@ -40,6 +40,13 @@ STRATEGY_MEIC = trades_layout.STRATEGY_MEIC
 STRATEGY_MANUAL = trades_layout.STRATEGY_MANUAL
 STRATEGY_SKYLINE = trades_layout.STRATEGY_SKYLINE
 STRATEGY_PERMA_BULL = trades_layout.STRATEGY_PERMA_BULL
+STRATEGY_MEAN_REVERSION = trades_layout.STRATEGY_MEAN_REVERSION
+STRATEGY_IRON_FLY = trades_layout.STRATEGY_IRON_FLY
+STRATEGY_IRON_FLY_XSP = trades_layout.STRATEGY_IRON_FLY_XSP
+STRATEGY_DRMA_HM = trades_layout.STRATEGY_DRMA_HM
+STRATEGY_DRMA_HM_DIR = trades_layout.STRATEGY_DRMA_HM_DIR
+STRATEGY_DRMA_HM_NONDIR = trades_layout.STRATEGY_DRMA_HM_NONDIR
+STRATEGY_DRMA_HM_FUT = trades_layout.STRATEGY_DRMA_HM_FUT
 
 
 def _truthy_paper(value) -> bool:
@@ -54,12 +61,35 @@ def _paper_sql_clause(*, include_paper: bool = False, paper_only: bool = False) 
     return ''
 
 
+def _strategy_sql_filter(strategy: str) -> tuple[str, list]:
+    if strategy == STRATEGY_DRMA_HM_DIR:
+        return "(strategy = ? AND lot LIKE 'dir_%')", [STRATEGY_DRMA_HM]
+    elif strategy == STRATEGY_DRMA_HM_NONDIR:
+        return "(strategy = ? AND (lot LIKE 'credit_%' OR lot LIKE 'ic_%'))", [STRATEGY_DRMA_HM]
+    elif strategy == STRATEGY_DRMA_HM_FUT:
+        return "(strategy = ? AND lot LIKE 'fut_%')", [STRATEGY_DRMA_HM]
+    else:
+        return "strategy = ?", [strategy]
+
+
 def infer_strategy(lot: str, entry_strategy: str | None = None) -> str:
-    if entry_strategy in (STRATEGY_MEIC, STRATEGY_MANUAL):
+    if entry_strategy in (STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE, STRATEGY_PERMA_BULL, STRATEGY_MEAN_REVERSION, STRATEGY_IRON_FLY, STRATEGY_IRON_FLY_XSP, STRATEGY_DRMA_HM):
         return entry_strategy
     text = (lot or '').strip().lower()
     if text.startswith('ms-') or text.startswith('ms'):
         return STRATEGY_MANUAL
+    if text.startswith('skyline-') or text.startswith('skyline'):
+        return STRATEGY_SKYLINE
+    if text.startswith('perma-') or text.startswith('perma'):
+        return STRATEGY_PERMA_BULL
+    if text.startswith('mr-') or text.startswith('mean'):
+        return STRATEGY_MEAN_REVERSION
+    if text.startswith('xsp-') or text.startswith('xsp'):
+        return STRATEGY_IRON_FLY_XSP
+    if text.startswith('if-') or text.startswith('iron'):
+        return STRATEGY_IRON_FLY
+    if text.startswith('drma') or text.startswith('dir_') or text.startswith('credit_') or text.startswith('ic_') or text.startswith('fut_'):
+        return STRATEGY_DRMA_HM
     return STRATEGY_MEIC
 
 
@@ -85,6 +115,7 @@ CREATE TABLE IF NOT EXISTS trades (
     open_order_id    TEXT,
     short_close_order_id TEXT,
     created_at       TEXT DEFAULT (CURRENT_TIMESTAMP),
+    paper            INTEGER NOT NULL DEFAULT 0,
     UNIQUE(date_opened, lot, side)           -- prevent duplicate inserts
 );
 
@@ -230,8 +261,9 @@ def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, pape
         clauses.append('date_opened = ?')
         params.append(date)
     if strategy:
-        clauses.append('strategy = ?')
-        params.append(strategy)
+        strat_clause, strat_params = _strategy_sql_filter(strategy)
+        clauses.append(strat_clause)
+        params.extend(strat_params)
     paper_clause = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     if paper_clause:
         clauses.append(paper_clause.replace('AND ', '', 1))
@@ -243,6 +275,21 @@ def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, pape
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
     for row in rows:
         row['paper'] = bool(row.get('paper'))
+        strat = row.get('strategy')
+        lot = str(row.get('lot') or '').lower()
+        if strat == STRATEGY_DRMA_HM:
+            if lot.startswith('dir_'):
+                row['sub_strategy'] = STRATEGY_DRMA_HM_DIR
+                row['sub_strategy_label'] = 'Directional Spread'
+            elif lot.startswith(('credit_', 'ic_')):
+                row['sub_strategy'] = STRATEGY_DRMA_HM_NONDIR
+                row['sub_strategy_label'] = 'Non-Directional Spread'
+            elif lot.startswith('fut_'):
+                row['sub_strategy'] = STRATEGY_DRMA_HM_FUT
+                row['sub_strategy_label'] = 'Directional Futures'
+            else:
+                row['sub_strategy'] = STRATEGY_DRMA_HM
+                row['sub_strategy_label'] = 'DRMA Other'
     return rows
 
 
@@ -274,8 +321,9 @@ def get_stats(strategy=None, *, include_paper=False, paper_only=False):
     where = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     params = []
     if strategy:
-        where += ' AND strategy = ?'
-        params.append(strategy)
+        strat_clause, strat_params = _strategy_sql_filter(strategy)
+        where += ' AND ' + strat_clause
+        params.extend(strat_params)
     with get_conn() as conn:
         row = conn.execute(_stats_sql(where), params).fetchone()
         return _row_to_stats(row)
@@ -292,24 +340,28 @@ def get_stats_by_strategy(*, include_paper=False, paper_only=False) -> dict:
                 (key,),
             ).fetchone()
             out[key] = _row_to_stats(row)
+        out[STRATEGY_DRMA_HM_DIR] = get_stats(STRATEGY_DRMA_HM_DIR, include_paper=include_paper, paper_only=paper_only)
+        out[STRATEGY_DRMA_HM_NONDIR] = get_stats(STRATEGY_DRMA_HM_NONDIR, include_paper=include_paper, paper_only=paper_only)
+        out[STRATEGY_DRMA_HM_FUT] = get_stats(STRATEGY_DRMA_HM_FUT, include_paper=include_paper, paper_only=paper_only)
         return out
 
 
 def get_daily_summary(days=30, strategy=None):
     if strategy:
-        sql = """
+        strat_clause, strat_params = _strategy_sql_filter(strategy)
+        sql = f"""
             SELECT date_opened AS date,
                    ROUND(SUM(COALESCE(pnl,0)), 2) AS total_pnl,
                    COUNT(*) AS num_trades,
                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS num_wins,
                    SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) AS num_losses
             FROM trades
-            WHERE status = 'CLOSED' AND strategy = ?
+            WHERE status = 'CLOSED' AND {strat_clause}
             GROUP BY date_opened
             ORDER BY date DESC LIMIT ?
         """
         with get_conn() as conn:
-            return [dict(r) for r in conn.execute(sql, (strategy, days)).fetchall()]
+            return [dict(r) for r in conn.execute(sql, (*strat_params, days)).fetchall()]
 
     sql = """
         SELECT * FROM daily_summary
@@ -320,21 +372,16 @@ def get_daily_summary(days=30, strategy=None):
 
 
 def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> list[dict]:
-    """Per-day PnL split by strategy for calendar / charts."""
+    """Per-day PnL split by strategy and sub-strategy for calendar / charts."""
     paper_clause = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     sql = f"""
-        SELECT date_opened AS date, strategy,
-               ROUND(SUM(COALESCE(pnl,0)), 2) AS total_pnl,
-               COUNT(*) AS num_trades,
-               SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS num_wins
+        SELECT date_opened AS date, strategy, lot, pnl
         FROM trades
         WHERE status = 'CLOSED' {paper_clause}
-        GROUP BY date_opened, strategy
         ORDER BY date_opened DESC
-        LIMIT ?
     """
     with get_conn() as conn:
-        rows = [dict(r) for r in conn.execute(sql, (days * 4,)).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql).fetchall()]
 
     by_date: dict[str, dict] = {}
     for row in rows:
@@ -348,32 +395,93 @@ def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> li
                 'meic_pnl': 0.0,
                 'manual_pnl': 0.0,
                 'skyline_pnl': 0.0,
+                'perma_bull_pnl': 0.0,
+                'mean_reversion_pnl': 0.0,
+                'iron_fly_pnl': 0.0,
+                'iron_fly_xsp_pnl': 0.0,
+                'drma_hm_pnl': 0.0,
+                'drma_dir_pnl': 0.0,
+                'drma_nondir_pnl': 0.0,
+                'drma_fut_pnl': 0.0,
                 'meic_trades': 0,
                 'manual_trades': 0,
                 'skyline_trades': 0,
+                'perma_bull_trades': 0,
+                'mean_reversion_trades': 0,
+                'iron_fly_trades': 0,
+                'iron_fly_xsp_trades': 0,
+                'drma_hm_trades': 0,
+                'drma_dir_trades': 0,
+                'drma_nondir_trades': 0,
+                'drma_fut_trades': 0,
                 'meic_wins': 0,
                 'manual_wins': 0,
                 'skyline_wins': 0,
+                'perma_bull_wins': 0,
+                'mean_reversion_wins': 0,
+                'iron_fly_wins': 0,
+                'iron_fly_xsp_wins': 0,
+                'drma_hm_wins': 0,
+                'drma_dir_wins': 0,
+                'drma_nondir_wins': 0,
+                'drma_fut_wins': 0,
             }
         bucket = by_date[d]
-        pnl = float(row['total_pnl'] or 0)
-        n = int(row['num_trades'] or 0)
-        wins = int(row['num_wins'] or 0)
+        pnl = float(row['pnl'] or 0)
+        wins = 1 if pnl > 0 else 0
         bucket['pnl'] = round(bucket['pnl'] + pnl, 2)
-        bucket['numTrades'] += n
+        bucket['numTrades'] += 1
         bucket['num_wins'] += wins
+
         strat = row['strategy']
+        lot = (row.get('lot') or '').lower()
         if strat == STRATEGY_MANUAL:
             bucket['manual_pnl'] = round(bucket['manual_pnl'] + pnl, 2)
-            bucket['manual_trades'] += n
+            bucket['manual_trades'] += 1
             bucket['manual_wins'] += wins
         elif strat == STRATEGY_SKYLINE:
             bucket['skyline_pnl'] = round(bucket['skyline_pnl'] + pnl, 2)
-            bucket['skyline_trades'] += n
+            bucket['skyline_trades'] += 1
             bucket['skyline_wins'] += wins
+        elif strat == STRATEGY_PERMA_BULL:
+            bucket['perma_bull_pnl'] = round(bucket['perma_bull_pnl'] + pnl, 2)
+            bucket['perma_bull_trades'] += 1
+            bucket['perma_bull_wins'] += wins
+        elif strat == STRATEGY_MEAN_REVERSION:
+            bucket['mean_reversion_pnl'] = round(bucket['mean_reversion_pnl'] + pnl, 2)
+            bucket['mean_reversion_trades'] += 1
+            bucket['mean_reversion_wins'] += wins
+        elif strat == STRATEGY_IRON_FLY:
+            bucket['iron_fly_pnl'] = round(bucket['iron_fly_pnl'] + pnl, 2)
+            bucket['iron_fly_trades'] += 1
+            bucket['iron_fly_wins'] += wins
+        elif strat == STRATEGY_IRON_FLY_XSP:
+            bucket['iron_fly_xsp_pnl'] = round(bucket['iron_fly_xsp_pnl'] + pnl, 2)
+            bucket['iron_fly_xsp_trades'] += 1
+            bucket['iron_fly_xsp_wins'] += wins
+        elif strat == STRATEGY_DRMA_HM:
+            bucket['drma_hm_pnl'] = round(bucket['drma_hm_pnl'] + pnl, 2)
+            bucket['drma_hm_trades'] += 1
+            bucket['drma_hm_wins'] += wins
+            if lot.startswith('dir_'):
+                bucket['drma_dir_pnl'] = round(bucket['drma_dir_pnl'] + pnl, 2)
+                bucket['drma_dir_trades'] += 1
+                bucket['drma_dir_wins'] += wins
+            elif lot.startswith(('credit_', 'ic_')):
+                bucket['drma_nondir_pnl'] = round(bucket['drma_nondir_pnl'] + pnl, 2)
+                bucket['drma_nondir_trades'] += 1
+                bucket['drma_nondir_wins'] += wins
+            elif lot.startswith('fut_'):
+                bucket['drma_fut_pnl'] = round(bucket['drma_fut_pnl'] + pnl, 2)
+                bucket['drma_fut_trades'] += 1
+                bucket['drma_fut_wins'] += wins
+        elif strat == STRATEGY_MEIC:
+            bucket['meic_pnl'] = round(bucket['meic_pnl'] + pnl, 2)
+            bucket['meic_trades'] += 1
+            bucket['meic_wins'] += wins
         else:
             bucket['meic_pnl'] = round(bucket['meic_pnl'] + pnl, 2)
-            bucket['meic_trades'] += n
+            bucket['meic_trades'] += 1
             bucket['meic_wins'] += wins
 
     result = []

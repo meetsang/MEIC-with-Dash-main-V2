@@ -21,7 +21,7 @@ from blocks.entry.handoff import apply_stop_snapshot
 from blocks.entry.result import EntryWorkerResult
 from blocks.session.plan import SessionRow, parse_width
 from blocks.stop import state as state_mod
-from common.broker_factory import get_shared_broker
+from common.broker_factory import get_shared_broker, get_shared_broker_for_strategy
 from common.entry_risk_lane import opening_risk_critical_section
 from common.integration_report import append_event
 from common.streamer_symbols import register_spread_symbols
@@ -275,8 +275,12 @@ def _failed_result(row: SessionRow, error: str = '') -> EntryWorkerResult:
 
 def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None) -> EntryWorkerResult:
     """Run entry for one CSV row; returns result for Entry Monitor to persist on CSV."""
+    from common.meic_settings import is_meic_paper_mode
+    from common import trades_layout
+
     row_log = row_log or logging.getLogger(f'entry.{row.slot_key}')
-    broker = get_shared_broker()
+    paper = is_meic_paper_mode()
+    broker = get_shared_broker_for_strategy(trades_layout.STRATEGY_MEIC, paper=paper)
     expiry = util.get_expiration_date(row_log)
     entry = CreditSpreadEntry(broker, _entry_config(row), log=row_log)
 
@@ -357,6 +361,7 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
             row_log.info('Handshake %s order=%s', trade_path, open_order_id)
 
             st = state_mod.load_state(trade_path)
+            st['paper'] = paper
             record_entry_attempt(
                 st,
                 attempt=attempt,
@@ -444,11 +449,36 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
                 update_latest_attempt_status(st, status='cancelled', terminal_confirmed=True, filled_quantity=0)
                 state_mod.save_state(trade_path, st)
 
+        if trade_path and os.path.isfile(trade_path):
+            try:
+                st = state_mod.load_state(trade_path)
+                if st.get('status') == 'pending_fill':
+                    st['status'] = 'cancelled'
+                    state_mod.save_state(trade_path, st)
+            except Exception:
+                pass
+
         row_log.error('Entry failed for %s after %d attempts', row.slot_key, attempt)
         return _failed_result(row)
     except util.TerminateRequest as exc:
+        if trade_path and os.path.isfile(trade_path):
+            try:
+                st = state_mod.load_state(trade_path)
+                if st.get('status') == 'pending_fill':
+                    st['status'] = 'cancelled'
+                    state_mod.save_state(trade_path, st)
+            except Exception:
+                pass
         row_log.error('Entry terminated: %s', exc)
         return _failed_result(row, str(exc))
     except Exception:
+        if trade_path and os.path.isfile(trade_path):
+            try:
+                st = state_mod.load_state(trade_path)
+                if st.get('status') == 'pending_fill':
+                    st['status'] = 'cancelled'
+                    state_mod.save_state(trade_path, st)
+            except Exception:
+                pass
         row_log.exception('Entry worker crashed for %s', row.slot_key)
         return _failed_result(row, 'entry worker failed')

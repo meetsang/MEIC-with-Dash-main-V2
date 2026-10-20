@@ -8,6 +8,361 @@ Older history (V2 rewrite, pre-Jul-6 design) stays in the other `changes/` docs 
 
 ---
 
+## 2026-10-20 — Strategy Persistent Live / Paper Execution Modes & Trade Provenance Safety
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_strategy_modes_persistence.py tests/test_drma_hm.py tests/test_drma_hm_dashboard.py` → 43 passed  
+**Doc:** [fixes/2026-10-20_STRATEGY_PERSISTENT_LIVE_PAPER_MODES_AND_PROVENANCE_SAFETY.md](fixes/2026-10-20_STRATEGY_PERSISTENT_LIVE_PAPER_MODES_AND_PROVENANCE_SAFETY.md)
+
+### What changed
+- **Persistent Strategy Execution Store (`common/strategy_modes.py` & `trades/strategy_modes.json`):**
+  - Added dedicated atomic persistent storage (`trades/strategy_modes.json`) for strategy and sub-strategy execution modes (`paper`, `dir_paper`, `non_dir_paper`, `futures_paper`).
+  - Implemented `get_strategy_paper_mode()`, `set_strategy_paper_mode()`, and `delete_strategy_paper_mode()` with atomic temp-file write and retry mechanism.
+  - Changes made in the dashboard or via API persist indefinitely across sessions, calendar date rollovers, and launcher restarts until explicitly changed back.
+- **Hierarchical Broker Resolution (`common/broker_factory.py`, `strategies/loader.py`, `common/daily_overrides.py`):**
+  - `is_strategy_paper()` checks today's session overrides, then persistent modes from `strategy_modes.json`, before falling back to `strategies.yaml`.
+  - `_build_config()` and `effective_config()` overlay persistent modes so strategies are initialized with the operator's configured execution environment.
+- **Trade Provenance Safety Guard (`common/manual_close.py`, `strategies/drma_hm/strategy.py`, `blocks/stop/broker.py`):**
+  - Enforced strict trade provenance: an open trade's internal `trade['paper']` flag strictly governs its closing broker.
+  - Even if a strategy or sub-strategy is flipped to LIVE mode while a paper trade is open, manual closes via dashboard or automated exits will NEVER send live orders to TastyTrade; they remain 100% on paper via `JournalBroker`.
+  - `resolve_broker_for_trade()` in Stop Supervisor checks `state.get('paper')` before checking strategy configuration.
+- **Dynamic In-Loop Reload (`strategies/drma_hm/strategy.py`):**
+  - The DRMA runtime monitoring loop reloads persistent modes every poll cycle, picking up dashboard changes on the fly.
+  - Ensured `_load_session_state()` always initializes and preserves the `overrides` dictionary.
+
+### Findings / Learnings
+- Storing execution mode overrides exclusively in daily session files (`session_{YYYY-MM-DD}.json`) caused settings to disappear whenever the calendar date rolled over.
+- Passing `paper = _strategy_paper_flag(name)` to `close_structure()` was unsafe because it allowed the strategy's current mode to override an existing open trade's provenance. Prioritizing `trade.get('paper')` prevents real capital risk when closing paper positions.
+
+### Validation
+- [x] Dedicated test suite in `tests/test_strategy_modes_persistence.py` verifying persistent storage, independent sub-strategy modes, session rollover persistence, build config overlays, and trade provenance safety during manual close and strategy exit (8/8 passed).
+- [x] Existing DRMA test suites in `tests/test_drma_hm.py` and `tests/test_drma_hm_dashboard.py` (35/35 passed).
+- [x] Regression testing across `tests/test_broker_factory_multi_strategy.py` and `tests/test_standalone_runner.py`.
+
+---
+
+## 2026-10-20 — Stop Order Partial Fill Immediate Cancellation & Market Mid Limit Replacement
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_partial_fill_stops.py` → 11 passed  
+**Doc:** [fixes/2026-10-20_STOP_PARTIAL_FILL_CANCEL_AND_MID_LIMIT_REPLACE.md](fixes/2026-10-20_STOP_PARTIAL_FILL_CANCEL_AND_MID_LIMIT_REPLACE.md)
+
+### What changed
+- **Immediate Partial Fill Cancellation & Market Mid Replacement (`blocks/stop/monitor.py`):**
+  - Added `handle_partial_stop_fill()`: As soon as a stop order partial fill is detected, the working stop order is immediately cancelled (waiting up to 3s confirmation).
+  - Queried actual broker position via `get_option_position_quantity()` to deduce exact remaining short contracts and captured partial fill audit records in `short_partial_fills`.
+  - If remaining contracts > 0, immediately places a `BUY_TO_CLOSE` limit order at current live **Market Mid** (`get_market_mid()`) for the remaining quantity with zero wait time.
+  - If all contracts filled before or during cancellation, transitions directly to `closing` and calculates VWAP blended fill price.
+  - Updated `replace_with_limit_close()` to clamp close quantity to broker's actual held short position (`min(qty, remaining_short)`), eliminating TastyTrade `cannot_close_more_than_existing_position` rejections.
+  - Added `_calculate_blended_short_close_price()` for volume-weighted average price calculation across multiple partial fills.
+- **Fill Sync & Stop Quantity Deduction (`blocks/stop/fill_sync.py`):**
+  - Updated `stop_qty_for_state()` to account for closed contracts recorded in `short_partial_fills` and prioritize `short_remaining_qty`.
+- **WebSocket Alert & Sync Handling (`blocks/stop/v3/supervisor.py`, `blocks/stop/monitor.py`):**
+  - Updated `_drain_alert_fills()` in `StopSupervisor` to route partial fill WebSocket events immediately into `mon.handle_partial_stop_fill()`.
+  - Updated `_sync_active_close_order()` and `_reconcile_active_stop_with_broker()` to intercept partial fills from REST status polls and trigger immediate cancellation and limit replacement.
+- **Common Framework Compatibility:**
+  - Common across automated MEIC (`MEIC_IC`) and manual discretionary spreads (`MANUAL_SPREAD`).
+
+### Findings / Learnings
+- In fast drops, stop orders at TastyTrade can partially fill leaving residual contracts working. Attempting to close using initial filled quantity triggers position limit rejections (`cannot_close_more_than_existing_position`).
+- Auditing the broker's held position (`get_option_position_quantity()`) before placing exit orders guarantees that the exit quantity matches reality.
+- Cancelling the remaining stop immediately upon partial fill and replacing with a limit order at Market Mid fills the remaining contract without leaving it stranded.
+
+### Validation
+- [x] Unit tests in `tests/test_partial_fill_stops.py` verifying partial fill cancellation, market mid limit replacement, VWAP price blending, and position clamping (11/11 passed).
+- [x] Regression tests in `tests/test_v3_exchange_stop.py`, `tests/test_fill_time_breach_safety_phase4.py`, `tests/test_long_close_chase.py`, and `tests/test_close_fills.py`.
+
+---
+
+## 2026-10-19 — DRMA+H-M: Independent Sub-Strategy Paper / Live Execution
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_drma_hm.py tests/test_drma_hm_dashboard.py` → 35 passed  
+**Doc:** [design/2026-10-19_DRMA_HM_INDEPENDENT_SUBSTRATEGY_PAPER_LIVE.md](design/2026-10-19_DRMA_HM_INDEPENDENT_SUBSTRATEGY_PAPER_LIVE.md)
+
+### What changed
+- **Independent Sub-Strategy Config (`strategies/drma_hm/config.py`):**
+  - Added tri-state configuration fields `dir_paper: Optional[bool] = None`, `non_dir_paper: Optional[bool] = None`, and `futures_paper: Optional[bool] = None` with properties falling back to global `paper` when `None`.
+  - Added `has_any_live_sub_strategy` and `is_sub_strategy_paper(sub_strategy)` helpers.
+- **Dynamic Multi-Broker Routing (`strategies/drma_hm/strategy.py`):**
+  - Added dynamic broker selector `_get_broker(is_paper)` returning shared `JournalBroker` (paper) or `TastyTradeBroker` (live).
+  - Updated `_enter_directional_trade()`, `_enter_non_directional_trade()`, and `_enter_directional_futures_trade()` to place orders via their respective sub-strategy broker and stamp `sub_strategy` and `paper` fields on active trade JSONs.
+  - Updated `_exit_trade()` to close positions through the broker corresponding to `trade.get('paper')`.
+- **System Framework & Safety Integration:**
+  - `common/broker_factory.py`: `is_strategy_paper()` resolves sub-strategy names (`DRMA_HM_DIR`, `DRMA_HM_NONDIR`, `DRMA_HM_FUT`) via daily overrides and `strategies.yaml`.
+  - `common/standalone_runner.py`: `_assert_paper_safety()` bypasses halt when `has_any_live_sub_strategy` is True, allowing mixed-mode operation.
+  - `common/manual_close.py`: `close_structure()` prioritizes `trade.get('paper')` so manual closes honor actual execution mode.
+- **Dashboard API & UI (`dashboard/server.py`, `dashboard/templates/index.html`):**
+  - Updated `/api/drma_hm/today` to return `dir_paper`, `non_dir_paper`, and `futures_paper`.
+  - Supported sub-strategy control endpoints `POST /api/strategy/<name>/control` and daily overrides.
+  - UI Header Alert: Simplified top banner to clean Master Strategy status and toggle.
+  - UI Parameters & Overrides Card: Relocated individual sub-strategy toggle buttons directly into each sub-strategy column header (`Non-Directional Spreads`, `Directional Spreads`, `Directional Futures`) with interactive toggle badges, hover micro-animations, and live confirmation modals.
+  - Form Synchronization: Updated `drmaHmToggleSubPaper()` and `drmaHmSaveOverrides()` to sync dropdown select values and delete override keys when reverted to "Inherit Strategy Default".
+  - Dynamic Override Hot-Reload: Updated `common/daily_overrides.py` and `strategies/base.py` to auto-reload modules and explicitly allow `dir_paper`, `non_dir_paper`, and `futures_paper` overrides, resolving `unknown override keys: ['non_dir_paper']` on running servers.
+
+### Findings / Learnings
+- Decoupling execution mode at the sub-strategy level eliminates the risk of testing options strategies live while allowing live execution of high-conviction futures scalps.
+- Placing the toggle buttons directly inside each sub-strategy column header creates a far more cohesive UI than crowding the top alert banner.
+- Adding dynamic module reload and explicit schema allowances in `set_overrides` avoids stale class definitions when background processes run continuously across days.
+
+### Validation
+- [x] Unit tests in `tests/test_drma_hm.py` verifying config inheritance, mixed-mode routing, and runner safety assertions.
+- [x] Dashboard API tests in `tests/test_drma_hm_dashboard.py` verifying control endpoints, overrides, and `/today` payload.
+- [x] Live HTTP endpoint validation (`GET /api/drma_hm/today`, `POST /api/strategy/DRMA_HM_SPX/overrides`, `DELETE /api/strategy/DRMA_HM_SPX/overrides/*`).
+- [x] Regression tests in `tests/test_broker_factory_multi_strategy.py` and `tests/test_standalone_runner.py`.
+
+---
+
+## 2026-10-03 — Dale Perryman NFH 0DTE Iron Fly Scaled to XSP (Mini-SPX) Implementation
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `.venv\Scripts\python.exe -m pytest tests/test_iron_fly_xsp_*.py` → 21 passed (70 passed across all strategy & integration tests)  
+**Doc:** [design/2026-10-03_IRON_FLY_XSP_SCALED_STRATEGY_IMPLEMENTATION.md](design/2026-10-03_IRON_FLY_XSP_SCALED_STRATEGY_IMPLEMENTATION.md)
+
+### What changed
+- **Synthetic 2-Fly Center Mechanism (`strategies/iron_fly_xsp/rules.py`):**
+  - Resolved XSP integer strike constraint (no 0.5 strikes): SPX centers ending in 5 (e.g. 7755 -> 775.5) execute as a paired set of 2 flies: 1 fly at 775 and 1 fly at 776 ($\text{avg} = 775.50$). SPX centers ending in 0 (e.g. 7750 -> 775.0) execute 2 flies at 775.
+  - Exactly 2 XSP contracts executed per fly trigger (0.2x SPX notional).
+  - Wing widths scale down by 10 to integer strikes (e.g. 30 pt SPX -> 3 pt XSP) with clash prevention against short strikes in the book.
+  - Break-even cut buffer scaled to 0.20 pt (from 2.0 pt in SPX).
+- **Orders & Combos (`strategies/iron_fly_xsp/orders.py`):**
+  - 4-leg combos using `.XSP{yymmdd}{C|P}{strike}` OCC symbols and combo tick rounding.
+- **Paired State Book (`strategies/iron_fly_xsp/book.py`):**
+  - `IronFlyXspPair` tracks pair metrics (`credit_total`, `credit_avg`, `be_low`, `be_high`, P&L, fees, open risk).
+  - `IronFlyXspBook` provides atomic JSON persistence and `structures` compatibility for manual closes.
+- **Strategy Orchestrator (`strategies/iron_fly_xsp/strategy.py`):**
+  - Inherits from `BaseStrategy(ABC)`. Dual 15s main sweep and 2s background spot cut loop.
+  - Auto-derives XSP spot as $SPX / 10.0$ when direct `.XSP` streamer quote is absent.
+  - Scaled safety caps ($3,000 max open risk, $500 daily loss stop, 20 max pairs/day).
+- **Dashboard & API Integration (`dashboard/`):**
+  - Top P&L stat card, dedicated "Iron Fly XSP" navigation tab, active paired ladder table with distance-to-BE indicators, pending approvals, and activity diary.
+  - REST endpoints: `/api/iron_fly_xsp/today`, `/api/iron_fly_xsp/approve`, `/api/iron_fly_xsp/skip`, and `/api/iron_fly_xsp/close_all`.
+
+---
+
+## 2026-10-03 — Dale Perryman NFH SPX 0DTE Iron Fly Strategy Implementation
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `.venv\Scripts\python.exe -m pytest tests/test_iron_fly_*.py` → 33 passed  
+**Doc:** [design/2026-10-03_IRON_FLY_SPX_0DTE_STRATEGY_IMPLEMENTATION.md](design/2026-10-03_IRON_FLY_SPX_0DTE_STRATEGY_IMPLEMENTATION.md)
+
+### What changed
+- **Pure Rules Engine** (`strategies/iron_fly/rules.py`):
+  - Implemented complete Dale Perryman NFH rule set: calendar skip filters (3rd Wednesday, last weekday, FOMC, holidays), 0DTE ATM Straddle 83% decay trigger, 5 ratcheting decay tiers (triggers 2.5–25 pt, spacing 5–30 pt), ~$0.40 wing target width picker, §2.6a strike clash prevention (never buy what book is short, never center where book is long), 2-point tolerance break-even cuts, and cash settlement intrinsic calculation.
+- **Orders & Combo Protocol** (`strategies/iron_fly/orders.py`):
+  - Built 4-leg Net Credit entry combos and Net Debit exit combos with combo tick rounding (down for credits, up for debits to nearest 0.05).
+  - Added broker order status normalization matching repo broker models.
+- **State Book & Diary** (`strategies/iron_fly/book.py`):
+  - Created `IronFlyBook` and `IronFly` models tracking full butterfly lifecycle (`OPENING`, `OPEN`, `CLOSING`, `CLOSED`, `EXPIRED`, `FAILED`).
+  - Dual schema compatibility: serializes both `flies` (dict) and `structures` (list) for seamless `common/manual_close.py` operations.
+  - Comprehensive diary metrics: `em_open`, `em_now`, `ratio_vs_83`, `current_tier`, `spot_trail`, and event log.
+- **Executors & Chase Loops** (`strategies/iron_fly/executor.py`):
+  - `PaperExecutor`: simulates live quotes, natural debit fills, and $1.30/leg/contract fee accounting.
+  - `BrokerExecutor`: implements MEIC cancel-and-re-quote chase loop (5s wait, cancel, verify cancel, re-quote with -0.05 step down to floor, max 6 attempts / 45s) and cut chase loop.
+- **Strategy Orchestrator** (`strategies/iron_fly/strategy.py`):
+  - Built `IronFlyStrategy(BaseStrategy)` with dual cadences: 15s main sweep loop + 2s background break-even spot cut monitor.
+  - Streamer symbol auto-subscription, risk caps enforcement ($15,000 max open risk, $2,500 daily loss stop, 20 max flies/day), and live approval modes.
+- **Framework & Dashboard Integration**:
+  - Registered `iron_fly_break_even_cut` stop profile in `blocks/stop/profiles/`.
+  - Registered `STRATEGY_IRON_FLY = 'IRON_FLY_SPX'` in `common/trades_layout.py` and `common/standalone_runner.py`.
+  - Added strategy configuration in `config/strategies.yaml` (`paper: true`, `confirmed: true`).
+  - Added REST API routes `/api/iron_fly/today`, `/api/iron_fly/approve`, `/api/iron_fly/skip`, `/api/iron_fly/close_all` in `dashboard/server.py`.
+  - Integrated Iron Fly in dashboard (`dashboard/templates/index.html`): top P&L stat card, nav tab item, active ladder table with live distance-to-BE, pending approval table, closed history, and activity diary.
+- **Automated Verification** (`tests/test_iron_fly_*.py`):
+  - Added 33 unit tests covering rules, order builders, book lifecycle, strategy runner, and dashboard endpoints (100% pass rate).
+
+---
+
+## 2026-10-01 — Vertical Spread Scale-Out (Partial Position Close) & Stop Sizing Safety
+
+**Status:** implemented, live-verified & unit-tested  
+**Tests:** `.venv\Scripts\pytest tests/test_scale_out.py` → 5 passed  
+**Doc:** [design/2026-10-01_SPREAD_SCALE_OUT_FEATURE.md](design/2026-10-01_SPREAD_SCALE_OUT_FEATURE.md)
+
+### What changed
+- **Scale-Out Core Engine** (`common/scale_out.py`):
+  - Added `scale_out_spread(broker, prices, filename, close_qty, debit_limit)` executing protected 4-step sequence: validates $1 \le \text{qty} < \text{holding}$, safely cancels active broker stop on short leg, places spread close order for `close_qty`, places replacement stop for remaining `holding - close_qty` contracts at same trigger price, and logs full audit trail.
+  - Fail-safe stop restoration: if the spread close order is rejected by broker, immediately restores stop for original full holding.
+- **Stop Monitor & Fill Sync Safety** (`blocks/stop/fill_sync.py`, `blocks/stop/monitor.py`, `blocks/stop/v3/trade_slot.py`):
+  - Changed `stop_is_current()` to check exact quantity match `stop_quantity == stop_qty_for_state(state)`.
+  - In `monitor.py`: stop resize check changed from `< filled` to `!= filled` to downward resize if needed.
+  - In `trade_slot.py` and `monitor.py`: added `'scale_outs'`, `'initial_quantity'`, and `'stop_quantity'` to disk merge policies.
+  - Software breach closes (`replace_with_spread_close`, `replace_with_limit_close`) use `stop_qty_for_state(state)` (remaining contracts), guaranteeing closed contracts are never touched.
+- **P&L Realization & Dashboard Integration** (`dashboard/server.py`, `dashboard/manual_spread_handlers.py`):
+  - Updated `_trade_pnl` to accumulate realized P&L from `trade['scale_outs']` on both live and closed trades.
+  - Added API endpoints `/api/manual_spread/scale_out` and `/api/scale_out`.
+- **Dashboard UI Enhancements** (`dashboard/templates/index.html`):
+  - Added `#modal-scale-out` modal with contracts input, live remaining preview, mid-spread limit override, and safety callout.
+  - Added "Scale Out" button in Active Manual Spreads card header (`msScaleOutSelected()`).
+  - Added "Scale" action button in `ms-active-tbody` Action column when `r.filled > 1` and open (`openScaleOutModal(fn)`).
+  - Added scaled quantity badge in Qty column (`s.quantity -s.scaled_qty`).
+
+### Validation
+- [x] 5/5 passed in `tests/test_scale_out.py`.
+- [x] 14/14 passed across `tests/test_trade_pnl_qty.py`, `tests/test_build_manual_trades.py`, `tests/test_fill_sync.py`.
+- [x] 6/6 passed in `tests/test_v3_manual_kill.py`.
+- [x] Dashboard running live on port 5002 with live `/api/manual_spread/scale_out` and `/api/scale_out` routes.
+
+---
+
+## 2026-09-09 — Exchange Stop Placement Priority & Streamer Reconnection Resilience
+
+**Status:** implemented, live-verified & unit-tested  
+**Tests:** `.venv\Scripts\pytest tests/test_v3_exchange_stop.py` → 3 passed  
+**Doc:** [fixes/2026-09-09_EXCHANGE_STOP_PRIORITY_AND_STREAMER_RESILIENCE.md](fixes/2026-09-09_EXCHANGE_STOP_PRIORITY_AND_STREAMER_RESILIENCE.md)
+
+### What changed
+- **Exchange Stop Priority over Quote Staleness** (`blocks/stop/v3/supervisor.py`):
+  - Moved `_requires_exchange_stop` and `_ensure_stop_for_filled_qty()` ahead of `mqtt_cache_stale` and `streamer_stale` checks in `_scan_open_slot()`.
+  - Fixes an operational bug where a streamer crash caused MQTT cache staleness, which triggered an early return and completely prevented new filled positions (`11-45_C`, `11-45_P`, `12-15_P`) from placing their exchange stops at TastyTrade. Broker stop orders are now placed immediately regardless of local streamer staleness.
+- **Streamer Disconnect Recovery Loop** (`streaming/publish_tastytrade.py`):
+  - Wrapped `main()` in an automated reconnection loop with exception logging to recover from websocket disconnects or DXLink transport interruptions after a 3s backoff instead of terminating the process with status 1.
+- **Unit Testing** (`tests/test_v3_exchange_stop.py`):
+  - Added `TestV3ExchangeStopPriorityWhenStale` testing that open slots without exchange stops successfully invoke stop placement even when `prices.is_stale()` is True.
+
+### Validation
+- [x] Streamer restarted and live (`trades/streamer_health.json` updated with live SPX stream).
+- [x] All 3 missing stop orders submitted and working at TastyTrade (`11-45_C` #8247501, `11-45_P` #8247503, `12-15_P` #8247506).
+- [x] 3/3 passed in `tests/test_v3_exchange_stop.py`.
+
+---
+
+## 2026-09-03 — MEIC Companion Breach Safety, Dynamic Spread Width Expansion & Dashboard Phase Tooltip
+
+**Status:** implemented & unit-tested  
+**Tests:** `.venv\Scripts\python -m unittest tests/test_meic_oco_and_breakeven.py tests/test_dashboard_phase_display.py tests/test_strike_guard.py tests/test_spread_scan_pick.py` → 35 passed  
+**Doc:** [fixes/2026-09-03_MEIC_COMPANION_BREACH_DYNAMIC_WIDTH_AND_PHASE_TOOLTIP.md](fixes/2026-09-03_MEIC_COMPANION_BREACH_DYNAMIC_WIDTH_AND_PHASE_TOOLTIP.md)
+
+### What changed
+- **Companion Breach Protection & Strict Date Scoping** (`blocks/stop/companion_breach.py`):
+  - `find_companion_trade_state()` strictly scopes candidate files to today's date using `_extract_trade_date()`, completely ignoring historical files from past days (e.g. August 24 files on September 3).
+  - `is_companion_breached()` returns `False` if companion status is `pending_fill`, `failed`, or `cancelled` with zero short fills (`filled_quantity <= 0`), preventing premature breakeven stop-outs on surviving spreads (e.g. 1:30 CCS).
+- **Ghost Trade Cleanup & Strike Guard Defense** (`blocks/entry/meic_worker.py`, `common/strike_guard.py`):
+  - Unfilled / failed entry attempts now transition trade state to `'cancelled'` rather than leaving lingering `pending_fill` states in `trades/active/`.
+  - `leg_overlap_conflict()` ignores `pending_fill` trades whose broker order is cancelled, rejected, or has 0 fills.
+- **Dynamic Spread Width Expansion on Clashes (25 → 30 or 35)** (`blocks/entry/spread_scan.py`):
+  - In `_resolve_overlap_candidate()`, when a candidate spread encounters a leg clash, it tests expanding spread width (25 → 30 → 35 up to `spread_width_max`) while keeping the short strike before falling back to strike shifting.
+  - Initialized `wmax` in `scan_credit_spreads()` to `spread_width_max` (or default 35) when a single `spread_width` is specified, giving width expansion headroom.
+- **Dashboard Phase Column Badges & Chronological Hover Tooltip** (`dashboard/server.py`, `dashboard/templates/index.html`):
+  - `_phase_display()` now renders explicit terminal outcome badges: `Closed (PT 15¢)`, `Closed (Stop)`, `Settled (Expiry)`, `Closed (Breach)`, and `Breakeven (1×)`.
+  - `_format_phase_tooltip()` generates a multi-line, timestamped progression of stop actions and price adjustments from `stop_history`.
+  - Added dotted underline styling (`cursor: help; text-decoration: underline dotted 1px;`) and tooltip rendering in `index.html`.
+
+### Validation
+- [x] 35/35 passed across `tests/test_meic_oco_and_breakeven.py`, `tests/test_dashboard_phase_display.py`, `tests/test_strike_guard.py`, and `tests/test_spread_scan_pick.py`.
+
+---
+
+## 2026-09-02 — MEIC OCO Sibling Order Resolution, Ghost BTO Prevention & Position Pre-Checks
+
+**Status:** implemented & unit-tested  
+**Tests:** `.venv\Scripts\python -m unittest tests/test_meic_oco_and_breakeven.py` → 12 passed  
+**Doc:** [fixes/2026-09-02_MEIC_OCO_SIBLING_RESOLUTION_AND_GHOST_BTO_PREVENTION.md](fixes/2026-09-02_MEIC_OCO_SIBLING_RESOLUTION_AND_GHOST_BTO_PREVENTION.md)
+
+### What changed
+- **TastyTrade Complex Order Sibling Aggregation** (`brokers/tastytrade_broker.py`):
+  - In `get_order_status()`, querying `live_orders` by `complex_order_id` aggregates all sibling child orders:
+    - If any sibling is `filled`, returns `status = 'filled'` with the actual execution fill price.
+    - If any sibling is `working` / `live`, returns `status = 'working'`.
+    - If all siblings are `cancelled` / `expired`, returns `status = 'cancelled'`.
+  - Prevents the cancelled stop leg of an OCO from masking the filled 15¢ profit target leg.
+- **Short Position Pre-Checks in Stop Placement & Breakeven** (`blocks/stop/monitor.py`):
+  - Queries `broker.get_single_leg_position_qty(short_sym)` before placing stops in `_place_short_stop()` or adjusting stops in `adjust_stop_to_breakeven()`.
+  - If held short quantity is $\le 0$ (already flat or long), skips order submission, transitions state to `'closing'`, and sets `close_mechanism = 'broker_position_flat'`. Zero buy orders are submitted, eliminating ghost BTO debit leg loops and margin exhaustion.
+  - Clamps stop order size to `min(desired_qty, abs(held_qty))`.
+- **Fast Stop Sync for OCO** (`blocks/stop/monitor.py`):
+  - Included `'OCO'` in `_sync_working_stop_order()` type check alongside `'STOP_LIMIT'` and `'LIMIT'`.
+
+### Validation
+- [x] 12/12 passed in `tests/test_meic_oco_and_breakeven.py`.
+
+---
+
+## 2026-08-21 — MEIC Expired Spreads Table View & Day P&L Settlement Fix
+
+**Status:** implemented & unit-tested  
+**Tests:** `uv run pytest tests/test_dashboard_meic_pnl.py tests/test_phase6_dashboard_runtime_status.py tests/test_manual_dashboard_trades.py` → 14 passed  
+**Doc:** [fixes/2026-08-21_MEIC_EXPIRED_SPREADS_DASHBOARD_PNL_FIX.md](fixes/2026-08-21_MEIC_EXPIRED_SPREADS_DASHBOARD_PNL_FIX.md)
+
+### What changed
+- **Expired Spread Inclusion in Dashboard P&L** (`dashboard/server.py`):
+  - Added `'expired'` to `MEIC_GRID_PNL_STATES`.
+  - `_counts_toward_meic_day_pnl()` and `build_summary()` now count all 0DTE expired spreads (+100% full profit) toward Day P&L and closed counts.
+- **Tranche Grid Table Display** (`dashboard/templates/index.html`):
+  - Added `'expired'` to `spreadRowHasData(s)` in frontend JS so expired trades retain full visible entry credits, $0.00 exit prices, and profit numbers instead of being rendered as empty dashes (`–`).
+- **History Tab Live Money Filter Default & PermaBull Integration** (`dashboard/server.py`, `dashboard/db.py`, `dashboard/templates/index.html`):
+  - Fixed History tab issue where default `All $` blended Live money with Paper Skyline (-$780 paper loss at expiry) yielding `-$230`.
+  - History tab now defaults to `Live $` (`money=live`), correctly displaying the live `+$550.00` total (+ $430 MEIC, + $120 Perma Bull).
+  - Added full support for `STRATEGY_PERMA_BULL` across database queries, breakdown helpers, and frontend dropdowns/badges.
+- **Trade History Table High-Contrast Dark Mode** (`dashboard/templates/index.html`):
+  - Added `.history-table` styling with `#181c28` headers, `#1a1e2b`/`#202536` alternating row backgrounds, `#f1f5f9` cell text, bright short/long strike colors, and vibrant badges.
+
+### Validation
+- [x] 6/6 passed in `tests/test_dashboard_meic_pnl.py`
+- [x] 8/8 passed in `tests/test_phase6_dashboard_runtime_status.py` and `tests/test_manual_dashboard_trades.py`
+- [x] 59/59 passed across full test suite
+- [x] Verified `/api/daily_calendar?days=30&money=live` returns `pnl: +550.00` (MEIC: +430.00, Perma Bull: +120.00)
+
+---
+
+## 2026-08-21 — MEIC Tranche Probe Unpause Gating Fix & PermaBull Dashboard High Contrast
+
+**Status:** implemented & unit-tested  
+**Tests:** `uv run pytest tests/test_probe_coordinator.py tests/test_entry_runner.py` → 15 passed  
+**Doc:** [fixes/2026-08-21_MEIC_TRANCHE_PROBE_UNPAUSE_AND_DASHBOARD_CONTRAST.md](fixes/2026-08-21_MEIC_TRANCHE_PROBE_UNPAUSE_AND_DASHBOARD_CONTRAST.md)
+
+### What changed
+- **MEIC Probe Unpause Gating Fix** (`common/probe_coordinator.py`, `blocks/entry/runner.py`):
+  - Fixed issue where `10-45` tranche was blocked at entry window with `rest_probe_missing` after being unpaused on the dashboard.
+  - `meic_tranches_from_session_plan()` now includes paused slots by default so the probe coordinator pre-probes all configured slots at $T-30\text{s}$.
+  - Added `ProbeCoordinator.schedule_tranche_probe(strategy, tranche_id)` for on-demand probe triggering.
+  - `EntryMonitorRunner._gate_allows_spawn()` now automatically dispatches on-demand probes if a scheduled MEIC tranche is unpaused late or lacks a fresh probe record.
+- **PermaBull Dashboard High Contrast** (`dashboard/templates/index.html`):
+  - Added high-contrast dark theme styling for `#strategy-perma-bull`: `#1e293b` alert background with `#38bdf8` border, bold `#f8fafc` status values, and `#cbd5e1` configuration text.
+  - Added `.perma-bull-table` with `#181c28` headers, `#1a1e2b`/`#202536` alternating row backgrounds, `#f1f5f9` cell text, and vibrant status badges.
+- **Mandatory Documentation Protocol**:
+  - Established `.cursor/rules/documenting-changes-and-fixes.mdc` and `.agents/rules/DOCUMENTATION_PROCESS.md` to enforce dated design/fix docs in `changes/fixes/` and living changelog updates for all future work.
+
+### Findings / learnings
+- Pre-entry REST probes should be scheduled for all planned tranches regardless of their initial pause status, ensuring that an operator unpausing a tranche dynamically is never blocked by a missing pre-tranche probe.
+
+### Validation
+- [x] 10/10 passed in `tests/test_probe_coordinator.py`
+- [x] 5/5 passed in `tests/test_entry_runner.py`
+
+---
+
+## 2026-08-20 — MEIC Long Chase Double-Sell Prevention, Exponential Backoff & CCS Overlap Resilience
+
+**Status:** implemented & unit-tested  
+**Tests:** `uv run pytest tests/test_long_close_chase.py tests/test_strike_guard.py tests/test_spread_scan_pick.py` → 30 passed; full stop/chase/v3 suite → 272 passed  
+**Doc:** [fixes/2026-08-20_MEIC_LONG_CHASE_DOUBLE_SELL_AND_CCS_OVERLAP_FIX.md](fixes/2026-08-20_MEIC_LONG_CHASE_DOUBLE_SELL_AND_CCS_OVERLAP_FIX.md)
+
+### What changed
+- **Double-Sell & Naked Short Prevention** (`blocks/stop/monitor.py`):
+  - Strict Cancel-Before-Replace: when repricing/escalating a working long close order, sends cancel and confirms cancellation on next tick before submitting new limit/market order.
+  - Race Condition Fill: if the previous order filled before cancel finished at the exchange, auto-records fill price and finalizes closed without sending secondary orders.
+  - Position Pre-Check: `get_single_leg_position_qty()` checks live broker net long position before submitting `SELL_TO_CLOSE`. If $\le 0$ contracts held, skips order submission and auto-finalizes close.
+  - Fixed attempt 10 dual order placement bug (limit + market on same tick).
+- **Exponential Backoff & Fail Tracking** (`blocks/stop/monitor.py`, `blocks/stop/v3/supervisor.py`):
+  - Tracks `long_close_fail_count`, `long_close_last_error`, and `long_close_next_retry_at` with exponential backoff (5s to 60s max).
+  - Stop supervisor `_poll_closing()` and monitor `_chase_long_close()` gate on cooldown.
+- **Multi-Width Scan & Bi-Directional Overlap Shift** (`blocks/entry/spread_scan.py`, `common/strike_guard.py`):
+  - Structured scan loops width-by-width so reaching `< credit_min` on one width does not prematurely abort evaluating wider spreads (e.g. 30, 35).
+  - Bi-directional shift: if shifting CCS toward ATM exceeds `credit_max`, automatically tests reverse shift further OTM.
+  - Added duplicate vertical spread conflict detection to prevent duplicate identical spreads across tranches.
+
+### Findings / learnings
+- In options trading with REST APIs, cancelling an order at the exchange is asynchronous. Never place a replacement order on the same execution tick as a cancel request; wait for the cancel confirmation report or query the net held position to guarantee no naked shorts are created.
+
+### Validation
+- [x] 12/12 passed in `tests/test_long_close_chase.py`
+- [x] 10/10 passed in `tests/test_strike_guard.py`
+- [x] 8/8 passed in `tests/test_spread_scan_pick.py`
+- [x] 272/272 passed in core stop, V3 supervisor, and entry suite
+
+---
+
 ## 2026-07-31 — Reorganize `changes/` folder + strategy north-star rule
 
 **Status:** implemented  

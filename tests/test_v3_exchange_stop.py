@@ -102,3 +102,33 @@ class TestV3LongChase(unittest.TestCase):
             limits = [p for p in broker.placed if p[0] == 'limit']
             self.assertGreaterEqual(len(limits), 1)
             self.assertIsNotNone(slot.state.get('long_close_order_id'))
+
+
+class TestV3ExchangeStopPriorityWhenStale(unittest.TestCase):
+    def test_ensures_stop_even_when_mqtt_stale(self):
+        from blocks.stop.v3.supervisor import StopSupervisor
+
+        broker = MockBroker()
+        prices = MagicMock()
+        prices.is_stale.return_value = True
+        prices.get_spx.return_value = 7640.0
+        prices.kill_switch = False
+
+        st = _open_state()
+        st['active_stop'] = None
+        st['stop_quantity'] = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'ms-v3_C_nostop.json')
+            state_mod.save_state(path, st)
+            slot = TradeSlot.from_path(path)
+
+            sup = StopSupervisor(broker=broker, prices=prices, alert_listener=None)
+            with patch('blocks.stop.monitor._trades_root_for_path', return_value=tmp):
+                sup._scan_open_slot(slot)
+
+            # Verify that stop placement was attempted despite stale MQTT
+            stops = [p for p in broker.placed if p[0] == 'stop_limit' or p[0] == 'stop']
+            self.assertGreaterEqual(len(stops), 1)
+            self.assertIsNotNone(slot.state.get('active_stop'))
+

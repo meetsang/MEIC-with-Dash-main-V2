@@ -21,8 +21,11 @@ _MODULE_DEFAULTS = {
     'strategies.manual_spread.strategy': ('ManualSpreadStrategy', 'ManualSpreadConfig'),
     'strategies.meic_ic.strategy': ('MEICStrategy', 'MEICConfig'),
     'strategies.iron_fly.strategy': ('IronFlyStrategy', 'IronFlyConfig'),
+    'strategies.iron_fly_xsp.strategy': ('IronFlyXspStrategy', 'IronFlyXspConfig'),
     'strategies.skyline.strategy': ('SkylineStrategy', 'SkylineConfig'),
     'strategies.perma_bull_pcs.strategy': ('PermaBullPCSStrategy', 'PermaBullPCSConfig'),
+    'strategies.mean_reversion.strategy': ('MeanReversionStrategy', 'MeanReversionConfig'),
+    'strategies.drma_hm.strategy': ('DRMAHMStrategy', 'DRMAHMConfig'),
 }
 
 
@@ -37,14 +40,25 @@ def load_strategies_yaml_raw() -> list:
 def _resolve_classes(module_path: str, entry: dict) -> Tuple[Type[BaseStrategy], Type[StrategyConfig]]:
     class_name = entry.get('class')
     config_name = entry.get('config_class')
+
+    # Reload strategy modules if already loaded so long-running 24/7 processes pick up fresh code & schemas
+    import sys
+    pkg_prefix = module_path.rsplit('.', 1)[0]
+    for mod_name in list(sys.modules.keys()):
+        if mod_name == module_path or mod_name.startswith(pkg_prefix + '.'):
+            try:
+                mod_ref = sys.modules.get(mod_name)
+                if mod_ref is not None:
+                    importlib.reload(mod_ref)
+            except Exception:
+                pass
+
+    mod = sys.modules.get(module_path) or importlib.import_module(module_path)
     if class_name and config_name:
-        mod = importlib.import_module(module_path)
         return getattr(mod, class_name), getattr(mod, config_name)
     defaults = _MODULE_DEFAULTS.get(module_path)
     if defaults:
-        mod = importlib.import_module(module_path)
         return getattr(mod, defaults[0]), getattr(mod, defaults[1])
-    mod = importlib.import_module(module_path)
     # Last resort: Strategy + Config suffix from module basename
     base = module_path.rsplit('.', 1)[-1]
     return getattr(mod, f'{base.title()}Strategy'), getattr(mod, f'{base.title()}Config')
@@ -57,6 +71,20 @@ def _build_config(entry: dict, cfg_cls: Type[StrategyConfig]) -> StrategyConfig:
     paper = entry.get('paper')
     if paper is None:
         paper = tt_config.PAPER_MODE
+
+    # Apply persistent strategy modes (persisted across sessions and restarts)
+    try:
+        from common.strategy_modes import get_persistent_modes_for_strategy
+        persisted = get_persistent_modes_for_strategy(name, root=ROOT)
+        if 'paper' in persisted and persisted['paper'] is not None:
+            paper = bool(persisted['paper'])
+        if isinstance(overrides, dict):
+            overrides = dict(overrides)
+            for k, v in persisted.items():
+                if v is not None:
+                    overrides[k] = v
+    except Exception:
+        pass
 
     cfg = cfg_cls(
         name=name,

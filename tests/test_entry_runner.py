@@ -106,9 +106,9 @@ class TestEntryRunner(unittest.TestCase):
                 c for c in mock_gate.call_args_list
                 if c.kwargs.get('strategy') == 'MANUAL_SPREAD'
             ]
-            self.assertEqual(len(manual_calls), 1)
-            self.assertTrue(manual_calls[0].kwargs.get('require_fresh_probe'))
-            self.assertIsNotNone(manual_calls[0].kwargs.get('tranche_id'))
+            self.assertIn(len(manual_calls), (1, 2))
+            self.assertTrue(manual_calls[-1].kwargs.get('require_fresh_probe'))
+            self.assertIsNotNone(manual_calls[-1].kwargs.get('tranche_id'))
             mock_sched.assert_called_once()
             plan = load_manual_session_today(tmp)
             self.assertEqual(

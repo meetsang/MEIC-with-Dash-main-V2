@@ -16,21 +16,21 @@ from orchestrator.scheduler import TrancheSlot
 
 class TestMeicCreditBandDefaults(unittest.TestCase):
   def test_meic_config_constants(self):
-    self.assertAlmostEqual(meic_config.CREDIT_MIN, 0.60)
-    self.assertAlmostEqual(meic_config.CREDIT_MAX_P, 1.20)
-    self.assertAlmostEqual(meic_config.CREDIT_MAX_C, 1.20)
+    self.assertAlmostEqual(meic_config.CREDIT_MIN, 0.50)
+    self.assertAlmostEqual(meic_config.CREDIT_MAX_P, 1.00)
+    self.assertAlmostEqual(meic_config.CREDIT_MAX_C, 1.00)
 
   def test_entry_config_defaults(self):
     cfg = CreditEntryConfig()
-    self.assertAlmostEqual(cfg.credit_min, 0.60)
-    self.assertAlmostEqual(cfg.credit_max_put, 1.20)
-    self.assertAlmostEqual(cfg.credit_max_call, 1.20)
+    self.assertAlmostEqual(cfg.credit_min, 0.50)
+    self.assertAlmostEqual(cfg.credit_max_put, 1.00)
+    self.assertAlmostEqual(cfg.credit_max_call, 1.00)
 
   def test_entry_config_from_meic_config(self):
     cfg = CreditEntryConfig.from_meic_config()
-    self.assertAlmostEqual(cfg.credit_min, 0.60)
-    self.assertAlmostEqual(cfg.credit_max_put, 1.20)
-    self.assertAlmostEqual(cfg.credit_max_call, 1.20)
+    self.assertAlmostEqual(cfg.credit_min, 0.50)
+    self.assertAlmostEqual(cfg.credit_max_put, 1.00)
+    self.assertAlmostEqual(cfg.credit_max_call, 1.00)
 
   def test_session_row_defaults(self):
     row = SessionRow(
@@ -40,8 +40,8 @@ class TestMeicCreditBandDefaults(unittest.TestCase):
       entry_window_start='10:59',
       entry_window_end='11:05',
     )
-    self.assertAlmostEqual(row.credit_min, 0.60)
-    self.assertAlmostEqual(row.credit_max, 1.20)
+    self.assertAlmostEqual(row.credit_min, 0.50)
+    self.assertAlmostEqual(row.credit_max, 1.00)
 
   def test_bootstrap_uses_meic_config_defaults(self):
     with tempfile.TemporaryDirectory() as tmp:
@@ -53,9 +53,13 @@ class TestMeicCreditBandDefaults(unittest.TestCase):
       from blocks.session.plan import SessionPlan
 
       plan = SessionPlan.load(path)
-      for row in plan.rows:
-        self.assertAlmostEqual(row.credit_min, 0.60)
-        self.assertAlmostEqual(row.credit_max, 1.20)
+      p_row = plan.row_by_slot_key('11-00_P')
+      c_row = plan.row_by_slot_key('11-00_C')
+      # 11-00 is in first four tranches: base is 1.20 - 1.60; Put has +25% skew: 1.50 - 2.00
+      self.assertAlmostEqual(p_row.credit_min, 1.50)
+      self.assertAlmostEqual(p_row.credit_max, 2.00)
+      self.assertAlmostEqual(c_row.credit_min, 1.20)
+      self.assertAlmostEqual(c_row.credit_max, 1.60)
 
   def test_explicit_csv_override_precedes_defaults(self):
     with tempfile.TemporaryDirectory() as tmp:
@@ -102,8 +106,8 @@ class TestMeicCreditBandDefaults(unittest.TestCase):
 
       summary = build_summary()
     slot = summary['grid'][0]
-    self.assertAlmostEqual(slot['credit_min'], 0.60)
-    self.assertAlmostEqual(slot['credit_max'], 1.20)
+    self.assertAlmostEqual(slot['credit_min'], 0.50)
+    self.assertAlmostEqual(slot['credit_max'], 1.00)
 
   def test_dashboard_prefers_explicit_row_values_over_fallbacks(self):
     row = SimpleNamespace(

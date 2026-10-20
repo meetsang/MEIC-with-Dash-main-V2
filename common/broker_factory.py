@@ -39,6 +39,14 @@ def get_broker(paper: Optional[bool] = None, *, _test_override: bool = False):
         from brokers.tastytrade_broker import TastyTradeBroker
 
         use_paper = paper if paper is not None else tt_config.PAPER_MODE
+        if use_paper and not tt_config.TASTYWARE_API_KEY:
+            from brokers.journal_broker import JournalBroker
+
+            underlying = get_broker(paper=False, _test_override=_test_override)
+            broker = JournalBroker(underlying, strategy_name='MEIC_IC')
+            log.info('Broker ready (JournalBroker paper=True, live quotes with simulated fills)')
+            return broker
+
         session = create_tastytrade_session(paper=use_paper)
         broker = TastyTradeBroker(session)
         log.info('Broker ready (paper=%s)', use_paper)
@@ -72,15 +80,95 @@ def get_shared_broker(paper: Optional[bool] = None, *, reset: bool = False):
         return _shared_broker
 
 
+def is_strategy_paper(strategy_name: str, default: bool = True) -> bool:
+    """Return whether strategy is configured for paper trading from daily overrides, configs, or strategies.yaml."""
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    # 1. Check today's daily overrides first
+    try:
+        from common.daily_overrides import get_overrides
+        ov = get_overrides(strategy_name, root)
+        if 'paper' in ov:
+            return bool(ov['paper'])
+        # DRMA_HM sub-strategies check parent DRMA_HM_SPX overrides
+        if strategy_name in ('DRMA_HM_DIR', 'DRMA_HM_NONDIR', 'DRMA_HM_FUT'):
+            parent_ov = get_overrides('DRMA_HM_SPX', root)
+            if strategy_name == 'DRMA_HM_DIR' and 'dir_paper' in parent_ov:
+                return bool(parent_ov['dir_paper'])
+            if strategy_name == 'DRMA_HM_NONDIR' and 'non_dir_paper' in parent_ov:
+                return bool(parent_ov['non_dir_paper'])
+            if strategy_name == 'DRMA_HM_FUT' and 'futures_paper' in parent_ov:
+                return bool(parent_ov['futures_paper'])
+            if 'paper' in parent_ov:
+                return bool(parent_ov['paper'])
+    except Exception:
+        pass
+
+    # 2. Check persistent strategy modes (persists across sessions and restarts until changed)
+    try:
+        from common.strategy_modes import get_strategy_paper_mode
+        persisted = get_strategy_paper_mode(strategy_name, root=root)
+        if persisted is not None:
+            return bool(persisted)
+    except Exception:
+        pass
+
+    # 3. Check strategy-specific configuration files
+    if strategy_name in ('MEIC_IC', 'MEIC'):
+        try:
+            from common.meic_settings import is_meic_paper_mode
+            return is_meic_paper_mode(root=root)
+        except Exception:
+            pass
+
+    if strategy_name == 'CLONE_TRADES':
+        try:
+            import json
+            cfg_p = os.path.join(root, 'trades', 'clone_trades', 'config.json')
+            if os.path.exists(cfg_p):
+                with open(cfg_p, 'r', encoding='utf-8') as f:
+                    return bool(json.load(f).get('paper_mode', False))
+        except Exception:
+            return False
+        return False
+
+    # 3. Check strategies.yaml
+    try:
+        from strategies.loader import load_strategies_yaml_raw
+        for s in load_strategies_yaml_raw():
+            if s.get('name') == strategy_name:
+                if 'paper' in s:
+                    return bool(s['paper'])
+            elif s.get('name') == 'DRMA_HM_SPX' and strategy_name in ('DRMA_HM_DIR', 'DRMA_HM_NONDIR', 'DRMA_HM_FUT'):
+                cfg_ov = s.get('config_overrides') or {}
+                if strategy_name == 'DRMA_HM_DIR' and 'dir_paper' in cfg_ov:
+                    return bool(cfg_ov['dir_paper'])
+                if strategy_name == 'DRMA_HM_NONDIR' and 'non_dir_paper' in cfg_ov:
+                    return bool(cfg_ov['non_dir_paper'])
+                if strategy_name == 'DRMA_HM_FUT' and 'futures_paper' in cfg_ov:
+                    return bool(cfg_ov['futures_paper'])
+                if 'paper' in s:
+                    return bool(s['paper'])
+    except Exception:
+        pass
+
+    if strategy_name == 'MANUAL_SPREAD':
+        return False
+
+    return default
+
+
 def get_shared_broker_for_strategy(
     strategy_name: str,
     *,
-    paper: bool,
+    paper: Optional[bool] = None,
     timeout_sec: Optional[float] = None,
     reset: bool = False,
 ):
     """One cached broker per (strategy_name, paper) pair per process."""
     global _strategy_brokers
+
+    if paper is None:
+        paper = is_strategy_paper(strategy_name, default=True)
 
     key = (tt_config.BROKER, bool(paper), strategy_name, os.getpid())
 

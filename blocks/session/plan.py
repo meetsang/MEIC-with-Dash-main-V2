@@ -44,6 +44,7 @@ MEIC_CSV_COLUMNS = [
     'expiry',
     'parent_trade_path',
     'error',
+    'profit_target_pct',
 ]
 
 
@@ -106,8 +107,8 @@ class SessionRow:
     stop_multiplier: float = 2.0
     stop_percent: str = ''
     width: str = '25-35'
-    credit_min: float = 0.60
-    credit_max: float = 1.20
+    credit_min: float = 0.50
+    credit_max: float = 1.00
     chase1_mode: str = 'chase_same_trade'
     chase1_max: int = 3
     chase2_mode: str = 'build_new_strikes'
@@ -123,6 +124,7 @@ class SessionRow:
     expiry: str = ''
     parent_trade_path: str = ''
     error: str = ''
+    profit_target_pct: float = 0.50
 
     @property
     def is_manual(self) -> bool:
@@ -135,7 +137,7 @@ class SessionRow:
             'quantity', 'chase1_max', 'chase2_max',
             'fill_wait_sec', 'max_attempts', 'short_strike', 'long_strike',
         }
-        float_fields = {'credit_min', 'credit_max', 'limit_credit', 'stop_multiplier'}
+        float_fields = {'credit_min', 'credit_max', 'limit_credit', 'stop_multiplier', 'profit_target_pct'}
         for f in fields(cls):
             raw = row.get(f.name, '')
             if f.name in ('paused', 'skip'):
@@ -162,6 +164,8 @@ class SessionRow:
                 out[f.name] = f'{float(val):.2f}'
             elif f.name == 'stop_multiplier':
                 out[f.name] = '' if not val else f'{float(val):g}'
+            elif f.name == 'profit_target_pct':
+                out[f.name] = '' if val is None else f'{float(val):.2f}'
             else:
                 out[f.name] = '' if val is None else str(val)
         return out

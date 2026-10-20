@@ -200,6 +200,141 @@ class TestDedupeSpreadCandidates(unittest.TestCase):
         keys = [(c.short_strike, c.long_strike) for c in results]
         self.assertEqual(len(keys), len(set(keys)))
 
+    def test_scan_evaluates_wider_width_when_narrower_width_has_overlap_and_breaks(self):
+        broker = MockBroker()
+        broker.prices['SPX'] = 7660.0
+        expiry = '260820'
+        log = logging.getLogger('test')
+
+        # Width 25: 7680/7705 has overlap. 7685/7710 credit is 0.50 (below credit_min 0.60)
+        s25_1 = build_tastytrade_symbol(expiry, 'C', 7680)
+        l25_1 = build_tastytrade_symbol(expiry, 'C', 7705)
+        broker.prices[to_tastytrade(s25_1)] = 1.10
+        broker.prices[to_tastytrade(l25_1)] = 0.15  # credit = 0.95, but has overlap
+
+        s25_2 = build_tastytrade_symbol(expiry, 'C', 7685)
+        l25_2 = build_tastytrade_symbol(expiry, 'C', 7710)
+        broker.prices[to_tastytrade(s25_2)] = 0.60
+        broker.prices[to_tastytrade(l25_2)] = 0.10  # credit = 0.50 (below credit_min 0.60) -> breaks width 25
+
+        # Width 30: 7685/7715 has credit 0.85 (in-band 0.60-1.20) and no overlap
+        s30_1 = build_tastytrade_symbol(expiry, 'C', 7685)
+        l30_1 = build_tastytrade_symbol(expiry, 'C', 7715)
+        broker.prices[to_tastytrade(s30_1)] = 0.95
+        broker.prices[to_tastytrade(l30_1)] = 0.10  # credit = 0.85
+
+        def fake_overlap(short_symbol, long_symbol, opt_type):
+            if '7705' in long_symbol or '7705' in short_symbol:
+                return 'mock overlap on 7705'
+            return None
+
+        with patch('blocks.entry.spread_scan.leg_overlap_conflict', side_effect=fake_overlap):
+            results = scan_credit_spreads(
+                broker, 'C', expiry, '12-45', log,
+                spread_width_min=25,
+                spread_width_max=35,
+                otm_min=20,
+                otm_max=40,
+                credit_min=0.60,
+                credit_max=1.20,
+                max_results=1,
+                quote_source='api',
+            )
+
+        self.assertEqual(len(results), 1)
+        # Verify it picked the clean candidate from width 30 or shifted width 25
+        self.assertIsNone(results[0].overlap_warning)
+        self.assertGreaterEqual(results[0].market_credit, 0.60)
+        self.assertLessEqual(results[0].market_credit, 1.32)
+
+    def test_resolve_overlap_candidate_expands_width_on_long_clash(self):
+        broker = MockBroker()
+        expiry = '260903'
+        log = logging.getLogger('test')
+
+        # Candidate with width 25: short 7420, long 7395 (overlap on long)
+        cand = SpreadCandidate(
+            short_symbol=build_tastytrade_symbol(expiry, 'P', 7420),
+            long_symbol=build_tastytrade_symbol(expiry, 'P', 7395),
+            short_strike=7420,
+            long_strike=7395,
+            market_credit=0.90,
+            short_mid=1.20,
+            long_mid=0.30,
+            overlap_warning='Long leg 7395 overlaps with active trade',
+        )
+
+        price_map = {
+            to_tastytrade(build_tastytrade_symbol(expiry, 'P', 7420)): 1.20,
+            to_tastytrade(build_tastytrade_symbol(expiry, 'P', 7395)): 0.30,
+            to_tastytrade(build_tastytrade_symbol(expiry, 'P', 7390)): 0.20,  # width 30 -> credit 1.00
+        }
+
+        def fake_overlap(short_symbol, long_symbol, opt_type, **kwargs):
+            if '7395' in long_symbol:
+                return 'overlap on 7395'
+            return None
+
+        from blocks.entry.spread_scan import _resolve_overlap_candidate
+
+        with patch('blocks.entry.spread_scan.leg_overlap_conflict', side_effect=fake_overlap):
+            resolved = _resolve_overlap_candidate(
+                broker,
+                cand,
+                'P',
+                expiry,
+                log,
+                quote_source='api',
+                price_map=price_map,
+                target_credit=None,
+                credit_min=0.60,
+                credit_max=1.20,
+                min_market_credit=0.05,
+                spread_width_max=35,
+            )
+
+        self.assertIsNone(resolved.overlap_warning)
+        self.assertEqual(resolved.short_strike, 7420)
+        self.assertEqual(resolved.long_strike, 7390)
+        self.assertEqual(abs(resolved.short_strike - resolved.long_strike), 30)
+        self.assertAlmostEqual(resolved.market_credit, 1.00)
+
+    def test_sub_bracket_credit_expands_debit_leg_into_band(self):
+        broker = MockBroker()
+        broker.prices['SPX'] = 7600.0
+        expiry = '260915'
+        log = logging.getLogger('test')
+
+        # Short 7620 mid = 0.65
+        # Width 25: Long 7645 mid = 0.25 -> credit = 0.40 (below credit_min = 0.50)
+        # Width 30: Long 7650 mid = 0.10 -> credit = 0.55 (in bracket 0.50 - 1.00!)
+        s = build_tastytrade_symbol(expiry, 'C', 7620)
+        l25 = build_tastytrade_symbol(expiry, 'C', 7645)
+        l30 = build_tastytrade_symbol(expiry, 'C', 7650)
+
+        broker.prices[to_tastytrade(s)] = 0.65
+        broker.prices[to_tastytrade(l25)] = 0.25
+        broker.prices[to_tastytrade(l30)] = 0.10
+
+        with patch('blocks.entry.spread_scan.leg_overlap_conflict', return_value=None):
+            results = scan_credit_spreads(
+                broker, 'C', expiry, '12-15', log,
+                spread_width=25,
+                spread_width_max=35,
+                otm_min=20,
+                otm_max=30,
+                credit_min=0.50,
+                credit_max=1.00,
+                max_results=1,
+                quote_source='api',
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].short_strike, 7620)
+        self.assertEqual(results[0].long_strike, 7650)
+        self.assertEqual(abs(results[0].short_strike - results[0].long_strike), 30)
+        self.assertAlmostEqual(results[0].market_credit, 0.55)
+
 
 if __name__ == '__main__':
     unittest.main()

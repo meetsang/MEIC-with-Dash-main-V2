@@ -108,6 +108,8 @@ def archive_active_trades(
             continue
         expiry = trade_expiry_date(state, name)
         if should_archive_expiry(expiry, today, mode):
+            target_date = expiry if expiry is not None else today
+            dest_dir = os.path.join(history_root, target_date.strftime('%Y-%m-%d'))
             _archive_file(path, dest_dir)
             archived += 1
             log.info(
@@ -297,6 +299,40 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         except Exception as exc:
             lg.exception('Skyline EOD settlement failed: %s', exc)
             summary['skyline_settlement_error'] = str(exc)
+
+        try:
+            import glob
+            from strategies.drma_hm.settlement import settle_open_trade as settle_drma_hm
+            from common import trades_layout
+
+            active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_HM, root)
+            settled = 0
+            for path in glob.glob(os.path.join(active, 'drma_hm_*.json')):
+                if settle_drma_hm(path, root, for_date=today):
+                    settled += 1
+            summary['drma_hm_settled'] = settled
+            if settled:
+                lg.info('DRMA_HM EOD settlement: %d trade(s) moved to history', settled)
+        except Exception as exc:
+            lg.exception('DRMA_HM EOD settlement failed: %s', exc)
+            summary['drma_hm_settlement_error'] = str(exc)
+
+        try:
+            import glob
+            from strategies.mean_reversion.settlement import settle_open_trade as settle_mr
+            from common import trades_layout
+
+            active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_MEAN_REVERSION, root)
+            settled = 0
+            for path in glob.glob(os.path.join(active, 'mean_reversion_*.json')):
+                if settle_mr(path, root, for_date=today):
+                    settled += 1
+            summary['mean_reversion_settled'] = settled
+            if settled:
+                lg.info('Mean Reversion EOD settlement: %d trade(s) moved to history', settled)
+        except Exception as exc:
+            lg.exception('Mean Reversion EOD settlement failed: %s', exc)
+            summary['mean_reversion_settlement_error'] = str(exc)
 
     return summary
 

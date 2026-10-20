@@ -10,7 +10,7 @@ from strategies.base import BaseStrategy, StrategyConfig
 
 def manual_stop_profile():
     import blocks.stop.profiles  # noqa: F401
-    from blocks.stop.profiles.meic import meic_stop_profile as _factory
+    from blocks.stop.profiles.manual import manual_stop_profile as _factory
     return _factory()
 
 

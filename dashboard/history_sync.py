@@ -138,6 +138,26 @@ def _trade_priority(trade: Dict[str, Any]) -> int:
 
 
 def _trade_key(trade: Dict[str, Any]) -> Optional[tuple[str, str, str]]:
+    from common.history_adapter import is_skyline_trade, is_drma_hm_trade, is_iron_fly_trade
+    if is_skyline_trade(trade):
+        date_opened = str(trade.get('date') or '')
+        if not date_opened:
+            return None
+        return (date_opened, f"skyline-{date_opened}", 'X')
+    if is_drma_hm_trade(trade):
+        entered_at = trade.get('entered_at') or ''
+        date_opened = entered_at[:10] if len(entered_at) >= 10 else str(trade.get('date') or '')
+        if not date_opened:
+            return None
+        trade_id = trade.get('trade_id') or f"drma_hm_{date_opened}"
+        side = str(trade.get('opt_type') or ('C' if 'bull' in trade_id else 'P')).upper()
+        return (date_opened, trade_id, side)
+    if is_iron_fly_trade(trade):
+        date_opened = str(trade.get('date') or '')
+        if not date_opened:
+            return None
+        strat = trade.get('strategy') or 'IRON_FLY_SPX'
+        return (date_opened, f"{strat.lower()}-{date_opened}", 'IF')
     entry = trade.get('entry') or {}
     ts = entry.get('timestamp') or ''
     if len(ts) < 10:
@@ -187,7 +207,7 @@ def sync_all_history_from_disk(
 
     for (_d, _lot, _side), (trade, path) in sorted(best_by_key.items()):
         entry = trade.get('entry') or {}
-        ts = entry.get('timestamp') or ''
+        ts = entry.get('timestamp') or trade.get('entered_at') or str(trade.get('date') or '')
         try:
             entry_date = date.fromisoformat(ts[:10])
         except ValueError:

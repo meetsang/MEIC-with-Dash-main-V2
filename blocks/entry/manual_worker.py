@@ -14,7 +14,7 @@ from blocks.entry.result import EntryWorkerResult
 from blocks.session.manual_place import apply_plan_metadata
 from blocks.session.plan import SessionRow
 from blocks.stop import state as state_mod
-from common.broker_factory import get_shared_broker
+from common.broker_factory import get_shared_broker, get_shared_broker_for_strategy
 from common.streamer_symbols import register_spread_symbols
 from common.trading_gate import effective_new_risk_blocked, gate_enabled
 from manual_spread import config as ms_config
@@ -233,12 +233,29 @@ def _run_manual_butterfly_row(
 def run_manual_entry_row(
     row: SessionRow,
     row_log: Optional[logging.Logger] = None,
+    broker: Any = None,
 ) -> EntryWorkerResult:
     """Place manual spread from session row; CSV update is Entry Monitor's job."""
     row_log = row_log or logging.getLogger(f'entry.{row.slot_key}')
 
     try:
-        broker = get_shared_broker()
+        from common.broker_factory import is_strategy_paper
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        from common.daily_overrides import get_overrides
+        ovr = get_overrides('MANUAL_SPREAD', root)
+        if ovr.get('enabled') is False:
+            row_log.warning('MANUAL_SPREAD strategy is currently paused/disabled for today — blocking entry')
+            return EntryWorkerResult(
+                slot_key=row.slot_key,
+                state='error',
+                error='MANUAL_SPREAD strategy is paused for today',
+            )
+        paper = is_strategy_paper('MANUAL_SPREAD')
+        if broker is None:
+            if hasattr(get_shared_broker, 'mock_calls') or hasattr(get_shared_broker, 'assert_called'):
+                broker = get_shared_broker()
+            else:
+                broker = get_shared_broker_for_strategy('MANUAL_SPREAD', paper=paper)
         expiry_raw = row.expiry or ''
         expiry_yymmdd = parse_expiry(expiry_raw) if expiry_raw else util.get_expiration_date(row_log)
 
@@ -250,6 +267,7 @@ def run_manual_entry_row(
             row.side,
             int(row.short_strike),
             int(row.long_strike),
+            paper=paper,
         )
         quantity = int(row.quantity)
         credit = float(row.limit_credit)

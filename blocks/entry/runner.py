@@ -73,12 +73,25 @@ class EntryMonitorRunner:
         global _GATE_WARN_AT
         if not gate_enabled():
             return True
-        # Manual Take Trade uses the same fresh-probe gate as MEIC, keyed by slot_key.
-        decision = evaluate_new_risk_gate(
-            require_fresh_probe=True,
-            strategy=strategy,
-            tranche_id=tranche_id,
-        )
+        # For manual entries, check global REST readiness first; only require a per-slot probe if global is stale.
+        if manual:
+            decision = evaluate_new_risk_gate(
+                require_fresh_probe=True,
+                strategy=strategy,
+                tranche_id=None,
+            )
+            if decision.blocked:
+                decision = evaluate_new_risk_gate(
+                    require_fresh_probe=True,
+                    strategy=strategy,
+                    tranche_id=tranche_id,
+                )
+        else:
+            decision = evaluate_new_risk_gate(
+                require_fresh_probe=True,
+                strategy=strategy,
+                tranche_id=tranche_id,
+            )
         if not decision.blocked:
             if manual and plan_path and slot_key:
                 # Clear waiting/blocked banner states once probe passes.
@@ -94,6 +107,10 @@ class EntryMonitorRunner:
                 strategy=strategy,
                 decision=decision,
             )
+        elif not manual and tranche_id:
+            reason = str(decision.reason or '')
+            if reason in ('rest_probe_pending', 'rest_probe_missing'):
+                self._ensure_tranche_probe(tranche_id=tranche_id, strategy=strategy or trades_layout.STRATEGY_MEIC)
         now = time.time()
         if now - _GATE_WARN_AT >= _GATE_WARN_COOLDOWN_SEC:
             _GATE_WARN_AT = now
@@ -103,6 +120,11 @@ class EntryMonitorRunner:
                 decision.detail,
             )
         return False
+
+    def _ensure_tranche_probe(self, *, tranche_id: str, strategy: str) -> None:
+        coord = get_coordinator()
+        if coord is not None:
+            coord.schedule_tranche_probe(strategy=strategy, tranche_id=tranche_id, source='pre_tranche')
 
     def _update_manual_gate_state(self, *, plan_path, slot_key, strategy, decision) -> None:
         reason = str(decision.reason or '')
@@ -233,9 +255,10 @@ class EntryMonitorRunner:
 
     def _emit_tranche_missed(self, plan, now: datetime) -> None:
         """Exactly-once CRITICAL when a pending MEIC window has ended with no spawn."""
+        from common.meic_settings import is_meic_side_enabled
         now_time = now.time()
         for row in plan.rows:
-            if row.state != 'pending' or row.paused or row.skip:
+            if row.state != 'pending' or row.paused or row.skip or not is_meic_side_enabled(row.side, root=self.root):
                 continue
             if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MEIC, now=now):
                 continue
@@ -272,6 +295,9 @@ class EntryMonitorRunner:
         if is_strategy_halted(trades_layout.STRATEGY_MEIC, self.root):
             return False
         if session_row_past_0dte_close(row, strategy=trades_layout.STRATEGY_MEIC, now=now):
+            return False
+        from common.meic_settings import is_meic_side_enabled
+        if not is_meic_side_enabled(row.side, root=self.root):
             return False
         return (
             row.state == 'pending'

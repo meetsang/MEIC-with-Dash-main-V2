@@ -46,6 +46,18 @@ class BrokerBase(ABC):
     ) -> OrderResult:
         ...
 
+    def place_oco_order(
+        self,
+        symbol: str,
+        qty: int,
+        *,
+        profit_price: float,
+        stop_price: float,
+        limit_price: float,
+    ) -> OrderResult:
+        """Place an OCO (One-Cancels-Other) order on a single leg with profit target limit + stop limit."""
+        raise NotImplementedError
+
     @abstractmethod
     def place_limit_order(
         self, action: str, symbol: str, qty: int, price: float
@@ -83,6 +95,18 @@ class BrokerBase(ABC):
         allow_unverified_emergency_close: bool = False,
     ) -> OrderResult:
         ...
+
+    def place_spread_oco_order(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        qty: int,
+        *,
+        profit_debit: float,
+        stop_trigger_debit: float,
+        stop_limit_debit: float,
+    ) -> OrderResult:
+        return OrderResult(False, 'place_spread_oco_order not supported on this broker', None)
 
     @abstractmethod
     def replace_order(self, order_id: str, new_spec: Dict) -> OrderResult:
@@ -130,6 +154,10 @@ class BrokerBase(ABC):
         closable | flat | mismatch | not_closable | unknown
         """
         return 'closable'
+
+    def get_single_leg_position_qty(self, symbol: str) -> int:
+        """Return net signed quantity held for symbol (short < 0, long > 0, 0 if flat)."""
+        return 0
 
     def close_at_market(self, symbol: str, qty: int) -> OrderResult:
         return self.place_market_order('BUY_TO_CLOSE', symbol, qty)

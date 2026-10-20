@@ -26,6 +26,8 @@ class CreditSpreadEntry:
         side: str,
         expiry_yymmdd: str,
         lot: str,
+        *,
+        paper: Optional[bool] = None,
     ) -> List[SpreadCandidate]:
         """MEIC scheduled entry — width band + credit min/max, first match.
 
@@ -49,6 +51,7 @@ class CreditSpreadEntry:
             max_results=1,
             quote_source=self.config.quote_source,
             use_loaded_chain_only=True,
+            paper=paper,
         )
 
     def scan_for_target(
@@ -60,10 +63,11 @@ class CreditSpreadEntry:
         spread_width: int,
         target_credit: float,
         max_results: int = 3,
-    otm_min: int | None = None,
-    otm_max: int | None = None,
-    use_loaded_chain_only: bool = False,
-) -> List[SpreadCandidate]:
+        otm_min: int | None = None,
+        otm_max: int | None = None,
+        use_loaded_chain_only: bool = False,
+        paper: bool | None = None,
+    ) -> List[SpreadCandidate]:
         """Manual spread — fixed width, rank by distance to target credit."""
         if otm_max is None:
             otm_max = resolve_scan_otm_max(target_credit=target_credit)
@@ -81,6 +85,7 @@ class CreditSpreadEntry:
             max_results=max_results,
             quote_source=self.config.quote_source,
             use_loaded_chain_only=use_loaded_chain_only,
+            paper=paper,
         )
 
     def open_candidate(

@@ -86,7 +86,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
     def test_two_same_strike_tranches_place_separate_stops(self):
         broker = MagicMock()
         broker.get_order_status.return_value = OrderResult(True, 'x', 'filled')
-        broker.place_stop_order.side_effect = [
+        broker.place_oco_order.side_effect = [
             OrderResult(True, '481561791', 'working'),
             OrderResult(True, '481562001', 'working'),
         ]
@@ -108,7 +108,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
                 m2 = StopMonitor(p2, broker, prices)
                 m2._ensure_stop_for_filled_qty()
 
-            self.assertEqual(broker.place_stop_order.call_count, 2)
+            self.assertEqual(broker.place_oco_order.call_count, 2)
             self.assertEqual(m1.state['active_stop']['order_id'], '481561791')
             self.assertEqual(m2.state['active_stop']['order_id'], '481562001')
             broker.find_working_close_order.assert_not_called()
@@ -116,7 +116,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
     def test_different_long_strike_still_one_stop_per_json(self):
         broker = MagicMock()
         broker.get_order_status.return_value = OrderResult(True, 'x', 'filled')
-        broker.place_stop_order.return_value = OrderResult(True, '481599999', 'working')
+        broker.place_oco_order.return_value = OrderResult(True, '481599999', 'working')
 
         st = _make_open_state(
             lot='01-45',
@@ -136,7 +136,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
                 mon = StopMonitor(path, broker, prices)
                 mon._ensure_stop_for_filled_qty()
 
-            broker.place_stop_order.assert_called_once()
+            broker.place_oco_order.assert_called_once()
             self.assertEqual(mon.state['active_stop']['order_id'], '481599999')
 
     def test_slow_reconcile_does_not_adopt_other_tranche_stop(self):
@@ -156,7 +156,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
             order_quantity=1,
             raw=_broker_order_raw(exp_stop, exp_limit),
         )
-        broker.place_stop_order.return_value = OrderResult(True, '481562002', 'working')
+        broker.place_oco_order.return_value = OrderResult(True, '481562002', 'working')
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, '12-30_P.json')
@@ -170,7 +170,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
                 mon._ensure_stop_for_filled_qty()
 
             broker.find_working_close_order.assert_not_called()
-            broker.place_stop_order.assert_called_once()
+            broker.place_oco_order.assert_called_once()
             self.assertEqual(mon.state['active_stop']['order_id'], '481562002')
 
     def test_stop_is_current_false_when_ownership_conflict(self):
@@ -314,7 +314,7 @@ class TestSharedStopPerTranche(unittest.TestCase):
         broker = MagicMock()
         broker.get_order_status.return_value = OrderResult(False, '', 'unknown')
         broker.find_working_close_order.return_value = OrderResult(True, '481561791', 'live', order_quantity=1)
-        broker.place_stop_order.return_value = OrderResult(True, '481562003', 'working')
+        broker.place_oco_order.return_value = OrderResult(True, '481562003', 'working')
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, '12-30_P.json')

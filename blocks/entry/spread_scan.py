@@ -80,118 +80,149 @@ def _resolve_overlap_candidate(
     credit_max: Optional[float],
     min_market_credit: float,
     exclude_path: Optional[str] = None,
+    spread_width_max: Optional[int] = None,
+    paper: Optional[bool] = None,
 ) -> SpreadCandidate:
-    """Shift strikes $5 (CCS down / PCS up) until leg flip conflict clears."""
+    """Resolve leg overlap conflict by attempting width expansion first, then strike shifts."""
     if not candidate.overlap_warning:
         return candidate
 
-    resolved = resolve_leg_overlap(
-        expiry,
-        opt_type,
-        candidate.short_strike,
-        candidate.long_strike,
-        exclude_path=exclude_path,
-    )
-    if resolved is None:
-        return candidate
-
-    ss, ls, short_sym, long_sym, shifts = resolved
-    if shifts == 0:
-        return candidate
-
-    if quote_source == 'api':
-        if price_map and price_map.get('_loaded_chain_only'):
-            from common.chain_snapshot import lookup_mids_from_snapshot
-
-            extra = lookup_mids_from_snapshot(
-                [short_sym, long_sym],
-                str(price_map.get('_chain_expiry', '')),
-                int(price_map.get('_chain_otm_max', 0)),
-            )
-            merged = dict(price_map)
-            merged.update(extra)
-            price_map = merged
-        else:
-            extra = broker.fetch_option_mids_api([short_sym, long_sym])
-            merged = dict(price_map or {})
-            merged.update(extra)
-            price_map = merged
-
-    if quote_source == 'mqtt_fallback':
-        from blocks.entry.mqtt_entry_fallback import evaluate_mqtt_entry_pair
-
-        if price_map is None or price_map.get('_scan_request_epoch') is None:
-            return candidate
-        pair = evaluate_mqtt_entry_pair(
-            broker,
-            short_sym,
-            long_sym,
-            scan_request_epoch=float(price_map['_scan_request_epoch']),
-            spread_width=abs(ss - ls),
-        )
-        if pair is None:
-            return candidate
-        short_p, long_p = pair
-    else:
-        short_p, long_p = _leg_prices(broker, short_sym, long_sym, quote_source, price_map)
-    if short_p is None or long_p is None:
-        log.warning(
-            'Overlap shift %s/%s -> %s/%s: missing quotes — keeping original strikes',
-            candidate.short_strike,
-            candidate.long_strike,
-            ss,
-            ls,
-        )
-        return candidate
-
     shift_credit_min, shift_credit_max = _overlap_shift_credit_bounds(credit_min, credit_max)
-    adjusted = _evaluate_spread(
-        short_symbol=short_sym,
-        long_symbol=long_sym,
-        short_strike=ss,
-        long_strike=ls,
-        short_p=short_p,
-        long_p=long_p,
-        opt_type=opt_type,
-        target_credit=target_credit,
-        credit_min=shift_credit_min,
-        credit_max=shift_credit_max,
-        min_market_credit=min_market_credit,
-        check_overlap=True,
-    )
-    if adjusted is None:
-        log.warning(
-            'Overlap shift %s/%s -> %s/%s: out of credit band after shift (even with %.0f%% expansion)',
-            candidate.short_strike,
-            candidate.long_strike,
-            ss,
-            ls,
-            OVERLAP_SHIFT_CREDIT_BAND_EXPANSION * 100,
-        )
-        return candidate
-    if adjusted.overlap_warning:
-        log.warning(
-            'Overlap shift %s/%s -> %s/%s still has leg overlap',
-            candidate.short_strike,
-            candidate.long_strike,
-            ss,
-            ls,
-        )
-        return candidate
 
-    adjusted.overlap_shifts = shifts
-    log.info(
-        'Shifted %s spread %s/%s by $%d x%d -> %s/%s (credit %.2f) to avoid leg overlap',
-        opt_type,
-        candidate.short_strike,
-        candidate.long_strike,
-        5,
-        shifts,
-        ss,
-        ls,
-        adjusted.market_credit,
-    )
-    return adjusted
+    def _try_candidate(ss: int, ls: int, short_sym: str, long_sym: str, note: str) -> Optional[SpreadCandidate]:
+        local_price_map = price_map
+        if quote_source == 'api':
+            if local_price_map and local_price_map.get('_loaded_chain_only'):
+                from common.chain_snapshot import lookup_mids_from_snapshot
+
+                extra = lookup_mids_from_snapshot(
+                    [short_sym, long_sym],
+                    str(local_price_map.get('_chain_expiry', '')),
+                    int(local_price_map.get('_chain_otm_max', 0)),
+                )
+                merged = dict(local_price_map)
+                merged.update(extra)
+                local_price_map = merged
+            else:
+                extra = broker.fetch_option_mids_api([short_sym, long_sym])
+                merged = dict(local_price_map or {})
+                merged.update(extra)
+                local_price_map = merged
+
+        if quote_source == 'mqtt_fallback':
+            from blocks.entry.mqtt_entry_fallback import evaluate_mqtt_entry_pair
+
+            if local_price_map is None or local_price_map.get('_scan_request_epoch') is None:
+                return None
+            pair = evaluate_mqtt_entry_pair(
+                broker,
+                short_sym,
+                long_sym,
+                scan_request_epoch=float(local_price_map['_scan_request_epoch']),
+                spread_width=abs(ss - ls),
+            )
+            if pair is None:
+                return None
+            short_p, long_p = pair
+        else:
+            short_p, long_p = _leg_prices(broker, short_sym, long_sym, quote_source, local_price_map)
+
+        if short_p is None or long_p is None:
+            log.warning(
+                'Overlap resolution (%s) %s/%s -> %s/%s: missing quotes',
+                note, candidate.short_strike, candidate.long_strike, ss, ls,
+            )
+            return None
+
+        adjusted = _evaluate_spread(
+            short_symbol=short_sym,
+            long_symbol=long_sym,
+            short_strike=ss,
+            long_strike=ls,
+            short_p=short_p,
+            long_p=long_p,
+            opt_type=opt_type,
+            target_credit=target_credit,
+            credit_min=shift_credit_min,
+            credit_max=shift_credit_max,
+            min_market_credit=min_market_credit,
+            check_overlap=True,
+            paper=paper,
+        )
+        if adjusted is None:
+            log.warning(
+                'Overlap resolution (%s) %s/%s -> %s/%s: out of credit band (even with %.0f%% expansion)',
+                note, candidate.short_strike, candidate.long_strike, ss, ls,
+                OVERLAP_SHIFT_CREDIT_BAND_EXPANSION * 100,
+            )
+            return None
+        if adjusted.overlap_warning:
+            log.warning(
+                'Overlap resolution (%s) %s/%s -> %s/%s still has leg overlap: %s',
+                note, candidate.short_strike, candidate.long_strike, ss, ls, adjusted.overlap_warning,
+            )
+            return None
+        return adjusted
+
+    # 1. Attempt width expansion (e.g. width 25 -> 30 -> 35) keeping original short strike
+    curr_width = abs(candidate.short_strike - candidate.long_strike)
+    max_w = spread_width_max if spread_width_max is not None else config.SPREAD_WIDTH_MAX
+    if curr_width < max_w:
+        for target_w in range(curr_width + config.STEP, max_w + 1, config.STEP):
+            ss = candidate.short_strike
+            ls = ss - target_w if opt_type == 'P' else ss + target_w
+            short_sym = build_tastytrade_symbol(expiry, opt_type, ss)
+            long_sym = build_tastytrade_symbol(expiry, opt_type, ls)
+            if exclude_path is not None:
+                conflict = leg_overlap_conflict(short_sym, long_sym, opt_type, exclude_path=exclude_path, paper=paper)
+            else:
+                conflict = leg_overlap_conflict(short_sym, long_sym, opt_type, paper=paper)
+            if conflict is not None:
+                continue
+            adj = _try_candidate(ss, ls, short_sym, long_sym, f"expand width {curr_width}->{target_w}")
+            if adj is not None:
+                log.info(
+                    'Expanded %s spread width %d -> %d (%s/%s, credit %.2f) to avoid leg overlap',
+                    opt_type, curr_width, target_w, ss, ls, adj.market_credit,
+                )
+                return adj
+
+    # 2. Attempt strike shifts ($5 lockstep in default/reverse directions)
+    for direction in ('default', 'reverse'):
+        resolved = resolve_leg_overlap(
+            expiry,
+            opt_type,
+            candidate.short_strike,
+            candidate.long_strike,
+            exclude_path=exclude_path,
+            direction=direction,
+            paper=paper,
+        )
+        if resolved is None:
+            continue
+
+        ss, ls, short_sym, long_sym, shifts = resolved
+        if shifts == 0:
+            return candidate
+
+        adj = _try_candidate(ss, ls, short_sym, long_sym, f"shift {direction}")
+        if adj is not None:
+            adj.overlap_shifts = shifts
+            log.info(
+                'Shifted %s spread (%s) %s/%s by $%d x%d -> %s/%s (credit %.2f) to avoid leg overlap',
+                opt_type,
+                direction,
+                candidate.short_strike,
+                candidate.long_strike,
+                5,
+                shifts,
+                ss,
+                ls,
+                adj.market_credit,
+            )
+            return adj
+
+    return candidate
 
 
 def _otm_values(otm_min: int, otm_max: int, step: int) -> range:
@@ -429,6 +460,7 @@ def _evaluate_spread(
     credit_max: Optional[float],
     min_market_credit: float,
     check_overlap: bool,
+    paper: Optional[bool] = None,
 ) -> Optional[SpreadCandidate]:
     raw_credit = short_p - long_p
     if raw_credit < min_market_credit:
@@ -448,7 +480,7 @@ def _evaluate_spread(
 
     overlap_warning = None
     if check_overlap:
-        conflict = leg_overlap_conflict(short_symbol, long_symbol, opt_type)
+        conflict = leg_overlap_conflict(short_symbol, long_symbol, opt_type, paper=paper)
         if conflict:
             overlap_warning = conflict
 
@@ -464,6 +496,118 @@ def _evaluate_spread(
         distance_from_target=distance,
         overlap_warning=overlap_warning,
     )
+
+
+def _expand_sub_bracket_debit_leg(
+    broker,
+    short_strike: int,
+    curr_width: int,
+    wmax: int,
+    opt_type: str,
+    expiry: str,
+    short_p: float,
+    short_symbol: str,
+    price_map: Optional[Dict[str, float]],
+    quote_source: str,
+    credit_min: Optional[float],
+    credit_max: Optional[float],
+    min_market_credit: float,
+    check_overlap: bool,
+    log,
+    target_credit: Optional[float] = None,
+    diagnostics=None,
+    scan_request_epoch: Optional[float] = None,
+    rest_price_map: Optional[Dict[str, float]] = None,
+    paper: Optional[bool] = None,
+) -> Optional[SpreadCandidate]:
+    """When short_p - long_p < credit_min, test widening OTM debit leg to reach bracket."""
+    if curr_width >= wmax:
+        return None
+
+    for target_w in range(curr_width + config.STEP, wmax + 1, config.STEP):
+        ls = short_strike - target_w if opt_type == 'P' else short_strike + target_w
+        long_symbol = build_tastytrade_symbol(expiry, opt_type, ls)
+
+        if quote_source == 'mqtt_fallback':
+            from blocks.entry.mqtt_entry_fallback import evaluate_mqtt_entry_pair
+            pair = evaluate_mqtt_entry_pair(
+                broker,
+                short_symbol,
+                long_symbol,
+                scan_request_epoch=scan_request_epoch,
+                spread_width=target_w,
+                diagnostics=diagnostics,
+            )
+            if pair is not None:
+                _, long_p = pair
+            elif rest_price_map:
+                _, long_p = _leg_prices(broker, short_symbol, long_symbol, 'api', rest_price_map)
+            else:
+                long_p = None
+        else:
+            local_map = price_map
+            if quote_source == 'api':
+                if local_map and local_map.get('_loaded_chain_only'):
+                    from common.chain_snapshot import lookup_mids_from_snapshot
+                    extra = lookup_mids_from_snapshot(
+                        [short_symbol, long_symbol],
+                        str(local_map.get('_chain_expiry', '')),
+                        int(local_map.get('_chain_otm_max', 0)),
+                    )
+                    merged = dict(local_map)
+                    merged.update(extra)
+                    local_map = merged
+                elif local_map and to_tastytrade(long_symbol) not in local_map:
+                    extra = broker.fetch_option_mids_api([long_symbol])
+                    merged = dict(local_map or {})
+                    merged.update(extra)
+                    local_map = merged
+            _, long_p = _leg_prices(broker, short_symbol, long_symbol, quote_source, local_map)
+
+        if long_p is None:
+            continue
+
+        cand = _evaluate_spread(
+            short_symbol=short_symbol,
+            long_symbol=long_symbol,
+            short_strike=short_strike,
+            long_strike=ls,
+            short_p=short_p,
+            long_p=long_p,
+            opt_type=opt_type,
+            target_credit=target_credit,
+            credit_min=credit_min,
+            credit_max=credit_max,
+            min_market_credit=min_market_credit,
+            check_overlap=check_overlap,
+            paper=paper,
+        )
+        if cand is None:
+            continue
+
+        resolved = _resolve_overlap_candidate(
+            broker,
+            cand,
+            opt_type,
+            expiry,
+            log,
+            quote_source=quote_source,
+            price_map=price_map,
+            target_credit=target_credit,
+            credit_min=credit_min,
+            credit_max=credit_max,
+            min_market_credit=min_market_credit,
+            spread_width_max=wmax,
+            paper=paper,
+        )
+        if resolved is not None and not resolved.overlap_warning:
+            log.info(
+                'Expanded %s spread width %d -> %d (%s/%s, credit %.2f) to reach credit bracket',
+                opt_type, curr_width, target_w, short_strike, ls, resolved.market_credit,
+            )
+            return resolved
+
+    return None
 
 
 def pick_meic_candidate(candidates: List[SpreadCandidate]) -> Optional[SpreadCandidate]:
@@ -494,6 +638,7 @@ def scan_credit_spreads(
     check_overlap: bool = True,
     quote_source: str = 'api',
     use_loaded_chain_only: bool = False,
+    paper: Optional[bool] = None,
 ) -> List[SpreadCandidate]:
     """Scan OTM grid and return spread candidates.
 
@@ -504,6 +649,18 @@ def scan_credit_spreads(
     Manual mode: fixed width + target_credit ranking (max_results=N).
     """
     opt_type = opt_type.upper()
+
+    if paper is None and broker is not None:
+        if getattr(broker, '_is_paper', None) is not None:
+            paper = bool(broker._is_paper)
+        elif getattr(broker, 'is_paper', None) is not None:
+            paper = bool(broker.is_paper)
+        elif getattr(broker, '_strategy_name', None):
+            try:
+                from common.broker_factory import is_strategy_paper
+                paper = is_strategy_paper(broker._strategy_name)
+            except Exception:
+                pass
 
     snap = None
     if use_loaded_chain_only:
@@ -519,11 +676,14 @@ def scan_credit_spreads(
     else:
         spx_price = _resolve_spx_price(broker, quote_source, log)
 
+    wmax = (
+        spread_width_max if spread_width_max is not None
+        else (int(spread_width) if spread_width is not None else config.SPREAD_WIDTH_MAX)
+    )
     if spread_width is not None:
         widths = [int(spread_width)]
     else:
         wmin = spread_width_min if spread_width_min is not None else config.SPREAD_WIDTH_MIN
-        wmax = spread_width_max if spread_width_max is not None else config.SPREAD_WIDTH_MAX
         widths = list(range(wmin, wmax + 1, config.STEP))
 
     legs = list(_iter_spread_legs(widths, opt_type, spx_price, expiry, otm_min, otm_max))
@@ -612,84 +772,120 @@ def scan_credit_spreads(
         )
 
     candidates: List[SpreadCandidate] = []
-    for short_strike, long_strike, width, short_symbol, long_symbol in legs:
-        if active_quote_source == 'mqtt_fallback':
-            assert scan_request_epoch is not None
-            pair = evaluate_mqtt_entry_pair(
-                broker,
-                short_symbol,
-                long_symbol,
-                scan_request_epoch=scan_request_epoch,
-                spread_width=width,
-                diagnostics=diagnostics,
-            )
-            if pair is not None:
-                short_p, long_p = pair
-            elif rest_price_map:
-                short_p, long_p = _leg_prices(
-                    broker, short_symbol, long_symbol, 'api', rest_price_map,
+    for width in widths:
+        for short_strike, long_strike, _, short_symbol, long_symbol in _iter_spread_legs([width], opt_type, spx_price, expiry, otm_min, otm_max):
+            if active_quote_source == 'mqtt_fallback':
+                assert scan_request_epoch is not None
+                pair = evaluate_mqtt_entry_pair(
+                    broker,
+                    short_symbol,
+                    long_symbol,
+                    scan_request_epoch=scan_request_epoch,
+                    spread_width=width,
+                    diagnostics=diagnostics,
                 )
+                if pair is not None:
+                    short_p, long_p = pair
+                elif rest_price_map:
+                    short_p, long_p = _leg_prices(
+                        broker, short_symbol, long_symbol, 'api', rest_price_map,
+                    )
+                else:
+                    short_p, long_p = None, None
+                if short_p is None or long_p is None:
+                    continue
             else:
-                short_p, long_p = None, None
-            if short_p is None or long_p is None:
-                continue
-        else:
-            short_p, long_p = _leg_prices(
-                broker, short_symbol, long_symbol, active_quote_source, price_map,
+                short_p, long_p = _leg_prices(
+                    broker, short_symbol, long_symbol, active_quote_source, price_map,
+                )
+                if short_p is None or long_p is None:
+                    if target_credit is None and credit_min is not None:
+                        raw_try = None
+                        if short_p is not None and long_p is not None:
+                            raw_try = short_p - long_p
+                        if raw_try is not None and raw_try < (credit_min or config.CREDIT_MIN):
+                            break
+                    continue
+
+            candidate = _evaluate_spread(
+                short_symbol=short_symbol,
+                long_symbol=long_symbol,
+                short_strike=short_strike,
+                long_strike=long_strike,
+                short_p=short_p,
+                long_p=long_p,
+                opt_type=opt_type,
+                target_credit=target_credit,
+                credit_min=credit_min,
+                credit_max=credit_max,
+                min_market_credit=min_market_credit,
+                check_overlap=check_overlap,
+                paper=paper,
             )
-            if short_p is None or long_p is None:
-                if target_credit is None and credit_min is not None:
-                    raw_try = None
-                    if short_p is not None and long_p is not None:
-                        raw_try = short_p - long_p
-                    if raw_try is not None and raw_try < (credit_min or config.CREDIT_MIN):
-                        break
+            if candidate is None:
+                if target_credit is None and credit_min is not None and (short_p - long_p) < credit_min:
+                    if width < wmax:
+                        expanded = _expand_sub_bracket_debit_leg(
+                            broker,
+                            short_strike=short_strike,
+                            curr_width=width,
+                            wmax=wmax,
+                            opt_type=opt_type,
+                            expiry=expiry,
+                            short_p=short_p,
+                            short_symbol=short_symbol,
+                            price_map=price_map,
+                            quote_source=active_quote_source,
+                            credit_min=credit_min,
+                            credit_max=credit_max,
+                            min_market_credit=min_market_credit,
+                            check_overlap=check_overlap,
+                            log=log,
+                            target_credit=target_credit,
+                            diagnostics=diagnostics,
+                            scan_request_epoch=scan_request_epoch,
+                            rest_price_map=rest_price_map,
+                            paper=paper,
+                        )
+                        if expanded is not None:
+                            if active_quote_source in ('api', 'mqtt_fallback'):
+                                expanded.candidate_source = (
+                                    'mqtt_fallback' if active_quote_source == 'mqtt_fallback' else 'rest'
+                                )
+                            candidates.append(expanded)
+                            if max_results == 1 and not expanded.overlap_warning:
+                                return [expanded]
+                            continue
+                    break
                 continue
 
-        candidate = _evaluate_spread(
-            short_symbol=short_symbol,
-            long_symbol=long_symbol,
-            short_strike=short_strike,
-            long_strike=long_strike,
-            short_p=short_p,
-            long_p=long_p,
-            opt_type=opt_type,
-            target_credit=target_credit,
-            credit_min=credit_min,
-            credit_max=credit_max,
-            min_market_credit=min_market_credit,
-            check_overlap=check_overlap,
-        )
-        if candidate is None:
-            if target_credit is None and credit_min is not None and (short_p - long_p) < credit_min:
-                break
-            continue
+            candidate = _resolve_overlap_candidate(
+                broker,
+                candidate,
+                opt_type,
+                expiry,
+                log,
+                quote_source=active_quote_source,
+                price_map=price_map,
+                target_credit=target_credit,
+                credit_min=credit_min,
+                credit_max=credit_max,
+                min_market_credit=min_market_credit,
+                spread_width_max=wmax,
+                paper=paper,
+            )
+            if active_quote_source in ('api', 'mqtt_fallback'):
+                candidate.candidate_source = 'mqtt_fallback' if active_quote_source == 'mqtt_fallback' else 'rest'
 
-        candidate = _resolve_overlap_candidate(
-            broker,
-            candidate,
-            opt_type,
-            expiry,
-            log,
-            quote_source=active_quote_source,
-            price_map=price_map,
-            target_credit=target_credit,
-            credit_min=credit_min,
-            credit_max=credit_max,
-            min_market_credit=min_market_credit,
-        )
-        if active_quote_source in ('api', 'mqtt_fallback'):
-            candidate.candidate_source = 'mqtt_fallback' if active_quote_source == 'mqtt_fallback' else 'rest'
+            log.info(
+                '%s - %.2f | %s - %.2f = %.2f',
+                candidate.short_symbol, candidate.short_mid, candidate.long_symbol,
+                candidate.long_mid, candidate.market_credit,
+            )
+            candidates.append(candidate)
 
-        log.info(
-            '%s - %.2f | %s - %.2f = %.2f',
-            candidate.short_symbol, candidate.short_mid, candidate.long_symbol,
-            candidate.long_mid, candidate.market_credit,
-        )
-        candidates.append(candidate)
-
-        if target_credit is None and max_results == 1 and not candidate.overlap_warning:
-            return [candidate]
+            if target_credit is None and max_results == 1 and not candidate.overlap_warning:
+                return [candidate]
 
     if target_credit is not None:
         candidates = _dedupe_spread_candidates(candidates)
@@ -730,6 +926,7 @@ def scan_credit_spreads(
                 credit_min=credit_min,
                 credit_max=credit_max,
                 min_market_credit=min_market_credit,
+                paper=paper,
             )
             if not resolved.overlap_warning:
                 return [resolved]

@@ -47,7 +47,7 @@ class ChainSnapshotNotLoaded(RuntimeError):
             loaded = get_snapshot(expiry)
             band = loaded.otm_range if loaded else 0
             msg = (
-                f'Loaded chain band is ±{band} pts but search OTM max is '
+                f'Loaded chain band is ±{band} pts but search OTM needed is '
                 f'{otm_max_needed} — Load Chain again with wider Chain ± pts'
             )
         else:

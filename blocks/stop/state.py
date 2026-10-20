@@ -34,6 +34,8 @@ def closed_dir_for_state(state: Dict[str, Any]) -> str:
     strategy = section(state, 'entry').get('strategy', '')
     if strategy == trades_layout.STRATEGY_MANUAL:
         return manual_spread_closed_dir()
+    if strategy:
+        return trades_layout.history_dir_for_strategy(strategy, _project_root())
     return closed_dir()
 
 
@@ -88,7 +90,12 @@ def section(state: Dict[str, Any], key: str) -> Dict[str, Any]:
 def _v2_metadata(strategy: str, stop_profile: Optional[str] = None) -> Dict[str, Any]:
     from blocks.stop.profiles.meic import MEIC_CREDIT_SPREAD_PROFILE
 
-    profile = stop_profile or MEIC_CREDIT_SPREAD_PROFILE
+    if stop_profile:
+        profile = stop_profile
+    elif strategy == 'MANUAL_SPREAD':
+        profile = 'manual_credit_spread'
+    else:
+        profile = MEIC_CREDIT_SPREAD_PROFILE
     return {
         'strategy_version': '2.0',
         'instrument': 'SPX',
@@ -372,7 +379,7 @@ def active_path_glob() -> str:
 
 def save_state(path: str, state: Dict[str, Any]) -> None:
     """Atomic write via temp file + rename (retries replace on Windows)."""
-    state['recovery']['last_heartbeat'] = now_iso()
+    state.setdefault('recovery', {})['last_heartbeat'] = now_iso()
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, suffix='.tmp')
@@ -602,6 +609,7 @@ def move_to_closed(active_path: str, state: Dict[str, Any]) -> str:
     ensure_dirs()
     basename = os.path.basename(active_path)
     dest_root = closed_dir_for_state(state)
+    os.makedirs(dest_root, exist_ok=True)
     closed_path = os.path.join(dest_root, basename)
     save_state(closed_path, state)
     if os.path.exists(active_path):

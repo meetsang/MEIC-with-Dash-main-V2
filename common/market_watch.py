@@ -50,6 +50,12 @@ DXLINK_TO_MQTT: dict[str, str] = {
     'IWM': 'IWM',
     'TLT': 'TLT',
     'GLD': 'GLD',
+    'ES': 'ES',
+    '/ES': 'ES',
+    '/ES:XCME': 'ES',
+    'MES': 'MES',
+    '/MES': 'MES',
+    '/MES:XCME': 'MES',
 }
 
 # Trade channel for OHLCV (all watch symbols except SPX index).
@@ -98,7 +104,18 @@ def dxlink_trade_symbols() -> list[str]:
 
 def mqtt_topic_from_dxlink(event_symbol: str) -> str:
     sym = (event_symbol or '').strip()
-    return DXLINK_TO_MQTT.get(sym, sym)
+    if sym in DXLINK_TO_MQTT:
+        return DXLINK_TO_MQTT[sym]
+    upper = sym.upper()
+    if upper.startswith(('/ES', 'ES')):
+        return 'ES'
+    if upper.startswith(('/MES', 'MES')):
+        return 'MES'
+    if upper.startswith(('/NQ', 'NQ')):
+        return 'NQ'
+    if upper.startswith(('/MNQ', 'MNQ')):
+        return 'MNQ'
+    return sym
 
 
 def canonical_watch_symbol(topic_or_dxlink: str) -> Optional[str]:

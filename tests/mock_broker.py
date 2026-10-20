@@ -17,6 +17,25 @@ class MockBroker(BrokerBase):
     self.placed: list = []
     self.spread_position_flat: bool = False
     self.spread_position_state: str = 'closable'
+    self.single_leg_positions: Dict[str, int] = {}
+    self.default_single_leg_qty: Optional[int] = None
+
+  def get_single_leg_position_qty(self, symbol: str) -> int:
+    if self.spread_position_flat:
+      return 0
+    tt = to_tastytrade(symbol)
+    if symbol in self.single_leg_positions:
+      return self.single_leg_positions[symbol]
+    if tt in self.single_leg_positions:
+      return self.single_leg_positions[tt]
+    if self.default_single_leg_qty is not None:
+      return self.default_single_leg_qty
+    import inspect
+    caller = inspect.currentframe().f_back
+    caller_name = caller.f_code.co_name if caller else ''
+    if 'short' in caller_name or 'breakeven' in caller_name:
+      return -1
+    return 1
 
   def connect(self) -> bool:
     self._connected = True
@@ -31,6 +50,21 @@ class MockBroker(BrokerBase):
     r = OrderResult(True, oid, 'working')
     self.orders[oid] = r
     self.placed.append(('stop', symbol, stop_price))
+    return r
+
+  def place_oco_order(
+      self,
+      symbol: str,
+      qty: int,
+      *,
+      profit_price: float,
+      stop_price: float,
+      limit_price: float,
+  ) -> OrderResult:
+    oid = self._next_id()
+    r = OrderResult(True, oid, 'working')
+    self.orders[oid] = r
+    self.placed.append(('oco', symbol, profit_price, stop_price, limit_price))
     return r
 
   def place_limit_order(self, action, symbol, qty, price) -> OrderResult:

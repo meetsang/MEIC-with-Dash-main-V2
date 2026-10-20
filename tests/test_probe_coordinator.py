@@ -206,6 +206,41 @@ class TestProbeCoordinator(unittest.TestCase):
         self.assertEqual(len(pre), 1)
         self.assertEqual(sum(1 for c in self._calls if c[0] == 'startup'), 1)
 
+    def test_schedule_tranche_probe_on_demand(self):
+        coord = ProbeCoordinator(
+            session_date_ct='2026-07-13',
+            get_broker_fn=lambda: MagicMock(),
+            run_probe_fn=self._run_probe,
+            clock=self._clock_fn,
+            tick_interval_sec=0.05,
+        )
+        coord.start()
+        # Schedule on demand for a tranche that was unpaused late
+        res = coord.schedule_tranche_probe(strategy='MEIC_IC', tranche_id='10-45', source='pre_tranche')
+        self.assertTrue(res)
+        time.sleep(0.3)
+        coord.stop()
+        pre = [c for c in self._calls if c[0] == 'pre_tranche' and c[2] == '10-45']
+        self.assertEqual(len(pre), 1)
+
+    def test_meic_tranches_from_session_plan_includes_paused_by_default(self):
+        from common.probe_coordinator import meic_tranches_from_session_plan
+        from blocks.session.plan import SessionPlan, SessionRow
+
+        plan = SessionPlan(
+            path='mock.csv',
+            strategy='MEIC_IC',
+            rows=[
+                SessionRow('10-45_P', '10-45', 'P', '10:44', '10:50', paused=True, state='pending'),
+                SessionRow('10-45_C', '10-45', 'C', '10:44', '10:50', paused=True, state='pending'),
+                SessionRow('11-15_P', '11-15', 'P', '11:14', '11:20', paused=False, state='pending'),
+            ]
+        )
+        tranches = meic_tranches_from_session_plan(plan, include_paused=True)
+        lots = {t.tranche_id for t in tranches}
+        self.assertIn('10-45', lots)
+        self.assertIn('11-15', lots)
+
 
 # import mock at module for test_evaluate
 import unittest.mock  # noqa: E402

@@ -52,6 +52,8 @@ class Phase1InitialStop(PhaseBase):
     name = 'phase1_initial_stop'
 
     def should_activate(self, monitor: 'StopMonitor') -> bool:
+        if monitor.state.get('is_scale_out_split') or (monitor.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+            return False
         return monitor.state.get('status') == 'open'
 
     def _evaluate_active(self, monitor: 'StopMonitor') -> str:
@@ -154,6 +156,8 @@ class Phase2NetCreditUpgrade(PhaseBase):
     def should_activate(self, monitor: 'StopMonitor') -> bool:
         if monitor.state.get('status') != 'open':
             return False
+        if monitor.state.get('is_scale_out_split') or (monitor.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+            return False
         if monitor.state['phases'].get('short_stoplmt_replaced'):
             return False
         long_p = monitor.prices.get(monitor.state['long_leg']['symbol'])
@@ -174,6 +178,8 @@ class Phase3SpxProximityClose(PhaseBase):
 
     def should_activate(self, monitor: 'StopMonitor') -> bool:
         if monitor.state.get('status') != 'open':
+            return False
+        if monitor.state.get('is_scale_out_split') or (monitor.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
             return False
         from meic0dte.app.utilities import central_time
 
@@ -201,6 +207,36 @@ class Phase3SpxProximityClose(PhaseBase):
 
     def execute(self, monitor: 'StopMonitor') -> None:
         monitor.execute_spx_proximity_close()
+
+
+class PhaseCompanionBreachAdjustment(PhaseBase):
+    """When companion IC tranche breaches, tighten short stop to breakeven."""
+
+    priority = 8
+    name = 'phase_companion_breach_adjustment'
+
+    def should_activate(self, monitor: 'StopMonitor') -> bool:
+        if monitor.state.get('status') != 'open':
+            return False
+        if not getattr(monitor.stop_profile, 'adjust_to_breakeven_on_companion_breach', False):
+            return False
+        from common.meic_settings import is_companion_tightening_enabled
+        from blocks.stop.monitor import _trades_root_for_path
+        trades_root = _trades_root_for_path(monitor.json_path) if getattr(monitor, 'json_path', None) else None
+        if not is_companion_tightening_enabled(root=trades_root):
+            return False
+        if monitor.state.get('phases', {}).get('breakeven_tightened'):
+            return False
+        from blocks.stop.companion_breach import find_companion_trade_state, is_companion_breached
+
+        companion_state = find_companion_trade_state(monitor.state)
+        return is_companion_breached(companion_state)
+
+    def _evaluate_active(self, monitor: 'StopMonitor') -> str:
+        return PhaseAction.MAINTENANCE
+
+    def execute(self, monitor: 'StopMonitor') -> None:
+        monitor.adjust_stop_to_breakeven(reason='companion_breached')
 
 
 def default_phases() -> List[PhaseBase]:
