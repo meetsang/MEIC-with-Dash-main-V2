@@ -710,6 +710,12 @@ if __name__ == "__main__":
         raise SystemExit('Launcher already running — exit to avoid duplicate broker traffic')
     atexit.register(release_lock, 'launcher')
 
+    # Daily fresh start: archive all prior-day closed/expired trades before starting any services
+    try:
+        run_session_cleanup('morning', log)
+    except Exception:
+        log.exception('Morning session cleanup failed on launcher startup')
+
     # Start dashboard server once — stays running all week
     dash_log = os.path.join(ROOT, 'logs', f'dashboard_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
     dash_log_fh = open(dash_log, 'w', encoding='utf-8')

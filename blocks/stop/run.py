@@ -77,6 +77,17 @@ def main():
     log_dir = os.path.join(ROOT, 'meic0dte', 'logs')
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, 'stop_monitor.log')
+    from datetime import datetime
+    if os.path.isfile(log_path):
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(log_path))
+            fsize = os.path.getsize(log_path)
+            if mtime.date() < datetime.now().date() or fsize > 20 * 1024 * 1024:
+                rotated_name = f"stop_monitor_{mtime.strftime('%Y-%m-%d_%H%M%S')}.log"
+                os.replace(log_path, os.path.join(log_dir, rotated_name))
+        except Exception:
+            pass
+
     from common.logging_config import setup_file_only_logging
 
     setup_file_only_logging('blocks.stop.run', log_path, stream_prefix='STOP-MON', file_mode='a')

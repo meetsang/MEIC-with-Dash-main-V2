@@ -46,7 +46,7 @@ def all_active_dirs() -> List[str]:
 
 def iter_active_trade_paths() -> Iterator[str]:
     """Yield every trades/active/{strategy}/*.json path (vertical-spread trades only)."""
-    skip_prefixes = ('session_', 'halted_', 'skyline_')
+    skip_prefixes = ('session_', 'halted_', 'skyline_', 'iron_fly_')
     for directory in all_active_dirs():
         if not os.path.isdir(directory):
             continue

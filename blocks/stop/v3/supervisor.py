@@ -89,6 +89,7 @@ class StopSupervisor:
         self.lane = BrokerLane()
         self.exit_pool = ExitWorkerPool()
         self._slots: Dict[str, TradeSlot] = {}
+        self._ineligible_paths: Dict[str, float] = {}
         self._stop = threading.Event()
         self._killswitch_claimed = False
         self._loop_count = 0
@@ -198,14 +199,28 @@ class StopSupervisor:
                 self._sync_alert_registration(slot)
                 if not self._slot_eligible(slot.state):
                     del self._slots[path]
+                    try:
+                        self._ineligible_paths[path] = os.path.getmtime(path)
+                    except OSError:
+                        pass
                     continue
                 slots.append(slot)
+                continue
+
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+
+            # Skip checking ineligible / closed paths if file has not changed on disk
+            if self._ineligible_paths.get(path) == mtime:
                 continue
 
             try:
                 st = state_mod.load_state(path)
             except Exception as exc:
                 log.warning('Skip slot %s — load failed: %s', path, exc)
+                self._ineligible_paths[path] = mtime
                 continue
 
             root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -214,10 +229,16 @@ class StopSupervisor:
                 state_mod.section(st, 'recovery')
                 state_mod.save_state(path, st)
                 log.info('Expiry gate %s for %s — skip slot', outcome, path)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    pass
 
             if not self._slot_eligible(st):
+                self._ineligible_paths[path] = mtime
                 continue
 
+            self._ineligible_paths.pop(path, None)
             slot = TradeSlot.from_loaded(path, st)
             ensure_v3_exit_fields(slot.state)
             lot = slot.state.get('lot', 'stop-monitor')
@@ -232,6 +253,10 @@ class StopSupervisor:
         for path in list(self._slots.keys()):
             if path not in seen:
                 del self._slots[path]
+
+        for path in list(self._ineligible_paths.keys()):
+            if path not in seen:
+                del self._ineligible_paths[path]
 
         return slots
 

@@ -52,6 +52,19 @@ def trade_expiry_date(state: Dict[str, Any], filename: str = '') -> Optional[dat
                 return datetime.strptime(m.group(2), '%y%m%d').date()
             except ValueError:
                 pass
+        m_iso = re.search(r'(20\d{2}-\d{2}-\d{2})', filename)
+        if m_iso:
+            try:
+                return datetime.strptime(m_iso.group(1), '%Y-%m-%d').date()
+            except ValueError:
+                pass
+    entry = state.get('entry') if isinstance(state.get('entry'), dict) else {}
+    ts = str(entry.get('timestamp') or state.get('day') or state.get('date') or '')
+    if len(ts) >= 10:
+        try:
+            return datetime.strptime(ts[:10], '%Y-%m-%d').date()
+        except ValueError:
+            pass
     return None
 
 
@@ -91,7 +104,6 @@ def archive_active_trades(
     """Move eligible active/*.json into history_root/YYYY-MM-DD/. Returns kept, archived, warnings."""
     if not os.path.isdir(active_dir):
         return 0, 0, []
-    dest_dir = os.path.join(history_root, today.strftime('%Y-%m-%d'))
     archived = 0
     kept = 0
     warnings: List[str] = []
@@ -107,15 +119,21 @@ def archive_active_trades(
             kept += 1
             continue
         expiry = trade_expiry_date(state, name)
-        if should_archive_expiry(expiry, today, mode):
-            target_date = expiry if expiry is not None else today
-            dest_dir = os.path.join(history_root, target_date.strftime('%Y-%m-%d'))
+        is_prior = (expiry is not None and expiry < today)
+        is_closed = str(state.get('status', '')).lower() == 'closed'
+        if should_archive_expiry(expiry, today, mode) or (is_prior and is_closed):
+            dest_dir = os.path.join(history_root, today.strftime('%Y-%m-%d'))
             _archive_file(path, dest_dir)
             archived += 1
             log.info(
                 'Archived %s (expiry=%s mode=%s)',
                 name, expiry.isoformat() if expiry else '?', mode,
             )
+        elif name.startswith('session_') and is_prior:
+            dest_dir = os.path.join(history_root, today.strftime('%Y-%m-%d'))
+            _archive_file(path, dest_dir)
+            archived += 1
+            log.info('Archived prior session %s (date=%s)', name, today.isoformat())
         else:
             kept += 1
             log.debug(
@@ -239,12 +257,36 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     meic_settled, meic_frozen = settle_expired_active_trades(meic_active, root, today, lg)
     manual_settled, manual_frozen = settle_expired_active_trades(manual_active, root, today, lg)
 
+    mk = ma = uk = ua = 0
+    mw: List[str] = []
+    uw: List[str] = []
+    other_warnings: List[str] = []
+    other_settled = 0
+    other_frozen = 0
+    other_archived = 0
+    other_kept = 0
+
+    # Sweep all registered strategy active directories (PERMA_BULL_PCS, SKYLINE, IRON_FLY, etc.)
+    for strat in trades_layout.registered_strategies():
+        if strat in (trades_layout.STRATEGY_MEIC, trades_layout.STRATEGY_MANUAL):
+            continue
+        s_act = trades_layout.active_dir_for_strategy(strat, root)
+        s_hist = trades_layout.history_dir_for_strategy(strat, root)
+        if not os.path.isdir(s_act):
+            continue
+        st, fr = settle_expired_active_trades(s_act, root, today, lg)
+        other_settled += st
+        other_frozen += fr
+        if mode == 'morning':
+            kp, arc, warns = archive_active_trades(s_act, s_hist, today, mode)
+            other_kept += kp
+            other_archived += arc
+            other_warnings.extend(warns)
+
     if mode == 'morning':
         mk, ma, mw = archive_active_trades(meic_active, meic_history, today, mode)
         uk, ua, uw = archive_active_trades(manual_active, manual_history, today, mode)
     else:
-        mk = ma = uk = ua = 0
-        mw = uw = []
         lg.info('Skipping active/ archive at %s — trades stay visible until morning cleanup', mode)
 
     summary = {
@@ -258,13 +300,16 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         'meic_archived': ma,
         'manual_kept': uk,
         'manual_archived': ua,
+        'total_settled': meic_settled + manual_settled + other_settled,
+        'total_archived': ma + ua + other_archived,
         'commands_removed': cmds,
-        'warnings': mw + uw,
+        'warnings': mw + uw + other_warnings,
     }
     lg.info(
         'Cleanup done (%s): MEIC settled=%d frozen=%d archived=%d kept=%d | '
-        'Manual settled=%d frozen=%d archived=%d kept=%d | commands=%d',
-        mode, meic_settled, meic_frozen, ma, mk, manual_settled, manual_frozen, ua, uk, cmds,
+        'Manual settled=%d frozen=%d archived=%d kept=%d | All strategies archived=%d | commands=%d',
+        mode, meic_settled, meic_frozen, ma, mk, manual_settled, manual_frozen, ua, uk,
+        ma + ua + other_archived, cmds,
     )
     for w in summary['warnings']:
         lg.warning('Cleanup: %s', w)
@@ -286,7 +331,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         try:
             import glob
             from strategies.skyline.settlement import settle_open_trade
-            from common import trades_layout
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, root)
             settled = 0
@@ -303,7 +347,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         try:
             import glob
             from strategies.drma_hm.settlement import settle_open_trade as settle_drma_hm
-            from common import trades_layout
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_HM, root)
             settled = 0
@@ -320,7 +363,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         try:
             import glob
             from strategies.mean_reversion.settlement import settle_open_trade as settle_mr
-            from common import trades_layout
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_MEAN_REVERSION, root)
             settled = 0
@@ -333,6 +375,13 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         except Exception as exc:
             lg.exception('Mean Reversion EOD settlement failed: %s', exc)
             summary['mean_reversion_settlement_error'] = str(exc)
+
+        try:
+            from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+            export_strategy_daily_pnl_csv(root)
+            lg.info('EOD: Updated strategy_daily_pnl.csv successfully')
+        except Exception as exc:
+            lg.warning('EOD strategy_daily_pnl.csv export failed: %s', exc)
 
     return summary
 

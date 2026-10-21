@@ -40,6 +40,10 @@ def _row(*, slot_key='11-00_P', lot='11-00', side='P', state='entered', trade_pa
 def _trade(*, status='open', filled_quantity=1, net_credit=0.9, lot='11-00', side='P'):
     short_fill = 1.0 if filled_quantity > 0 else 0.0
     long_fill = 0.1 if filled_quantity > 0 else 0.0
+    from common.session_cleanup import central_today
+    today = central_today()
+    d_str = today.isoformat()
+    yymmdd = today.strftime('%y%m%d')
     return {
         'status': status,
         'filled_quantity': filled_quantity,
@@ -47,10 +51,10 @@ def _trade(*, status='open', filled_quantity=1, net_credit=0.9, lot='11-00', sid
             'side': side,
             'lot': lot,
             'net_credit': net_credit,
-            'timestamp': '2026-07-23T11:00:00-05:00',
+            'timestamp': f'{d_str}T11:00:00-05:00',
         },
-        'short_leg': {'symbol': '.SPXW260723P7345', 'strike': 7345, 'fill_price': short_fill},
-        'long_leg': {'symbol': '.SPXW260723P7320', 'strike': 7320, 'fill_price': long_fill},
+        'short_leg': {'symbol': f'.SPXW{yymmdd}P7345', 'strike': 7345, 'fill_price': short_fill},
+        'long_leg': {'symbol': f'.SPXW{yymmdd}P7320', 'strike': 7320, 'fill_price': long_fill},
         '_filename': f'{lot}_{side}_test.json',
     }
 
