@@ -20,23 +20,28 @@ def apply_entry_result(plan_path: str, result: EntryWorkerResult, *, strategy: s
     fields: dict[str, Any] = {'state': result.state}
     if result.trade_path:
         fields['trade_path'] = result.trade_path
+    if result.error:
+        fields['error'] = result.error
+    elif result.state == 'entered':
+        fields['error'] = ''
     with _csv_lock:
         plan = SessionPlan.load(plan_path, strategy=strategy)
         plan.update_row(result.slot_key, **fields)
         plan.save()
     log.info(
-        'Session CSV %s → %s state=%s path=%s',
+        'Session CSV %s → %s state=%s path=%s%s',
         result.slot_key,
         plan_path,
         result.state,
         result.trade_path or '(none)',
+        f' error={result.error}' if result.error else '',
     )
 
 
 def mark_row_entering(plan_path: str, slot_key: str, *, strategy: str) -> None:
     with _csv_lock:
         plan = SessionPlan.load(plan_path, strategy=strategy)
-        plan.update_row(slot_key, state='entering')
+        plan.update_row(slot_key, state='entering', error='')
         plan.save()
 
 

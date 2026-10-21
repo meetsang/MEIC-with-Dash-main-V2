@@ -80,6 +80,30 @@ class TestCsvUpdate(unittest.TestCase):
             self.assertEqual(final.row_by_slot_key('11-00_P').trade_path, path_p)
             self.assertEqual(final.row_by_slot_key('11-00_C').trade_path, path_c)
 
+    def test_apply_entry_result_persists_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bootstrap_meic_session_if_missing(
+                tmp,
+                slots=[TrancheSlot('11-00', __import__('datetime').time(10, 59), __import__('datetime').time(11, 5))],
+            )
+            plan = load_meic_session_today(tmp)
+            err_msg = '11-00 C: no in-band credit (empty scan — check API quotes or credit band)'
+            apply_entry_result(
+                plan.path,
+                EntryWorkerResult(slot_key='11-00_C', state='failed', error=err_msg),
+                strategy=plan.strategy,
+            )
+
+            final = SessionPlan.load(plan.path, strategy=plan.strategy)
+            c_row = final.row_by_slot_key('11-00_C')
+            self.assertEqual(c_row.state, 'failed')
+            self.assertEqual(c_row.error, err_msg)
+
+            # Re-entering should clear error
+            mark_row_entering(plan.path, '11-00_C', strategy=plan.strategy)
+            entering_plan = SessionPlan.load(plan.path, strategy=plan.strategy)
+            self.assertEqual(entering_plan.row_by_slot_key('11-00_C').error, '')
+
 
 if __name__ == '__main__':
     unittest.main()

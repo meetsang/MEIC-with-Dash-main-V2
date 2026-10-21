@@ -342,12 +342,14 @@ class IronFlyXspStrategy(BaseStrategy):
             if time.time() - self.last_spot_update_ts > self.config.stale_spot_s:
                 return
 
+            open_pairs = [p for p in self.book.pairs.values() if p.status == FlyStatus.OPEN]
+            if not open_pairs:
+                return
+
             chain = self._fetch_xsp_chain()
             now_t = datetime.now().time()
 
-            for pair in list(self.book.pairs.values()):
-                if pair.status != FlyStatus.OPEN:
-                    continue
+            for pair in open_pairs:
                 bbe = calculate_bbe_amount_xsp(pair.credit or 0.0, now_t, self.rules)
                 ror = (pair.open_pnl / pair.open_risk) if (pair.open_risk and pair.open_risk > 0) else None
 
@@ -443,9 +445,12 @@ class IronFlyXspStrategy(BaseStrategy):
             # Calendar Skip Check
             skip = skip_reason(today)
             if skip:
-                self.book.log_event('SKIP', f'Day skipped: {skip}')
-                self.book.save()
+                if not getattr(self, '_skip_logged', False):
+                    self.book.log_event('SKIP', f'Day skipped: {skip}')
+                    self.book.save()
+                    self._skip_logged = True
                 return
+            self._skip_logged = False
 
             spot = self._get_live_spot()
             if spot is None:

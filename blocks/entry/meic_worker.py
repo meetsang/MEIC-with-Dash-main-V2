@@ -459,7 +459,7 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
                 pass
 
         row_log.error('Entry failed for %s after %d attempts', row.slot_key, attempt)
-        return _failed_result(row)
+        return _failed_result(row, f'unfilled after {attempt} attempts')
     except util.TerminateRequest as exc:
         if trade_path and os.path.isfile(trade_path):
             try:
@@ -471,7 +471,7 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
                 pass
         row_log.error('Entry terminated: %s', exc)
         return _failed_result(row, str(exc))
-    except Exception:
+    except Exception as exc:
         if trade_path and os.path.isfile(trade_path):
             try:
                 st = state_mod.load_state(trade_path)
@@ -481,4 +481,4 @@ def run_meic_entry_row(row: SessionRow, row_log: Optional[logging.Logger] = None
             except Exception:
                 pass
         row_log.exception('Entry worker crashed for %s', row.slot_key)
-        return _failed_result(row, 'entry worker failed')
+        return _failed_result(row, f'worker crashed: {exc}')
