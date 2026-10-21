@@ -15,7 +15,7 @@ import logging
 import time
 from datetime import datetime as dt, timezone
 
-import paho.mqtt.publish as publish
+import paho.mqtt.client as mqtt
 
 from common.broker_factory import get_mqtt_topic_prefix
 from common.market_watch import (
@@ -68,8 +68,38 @@ def _get_logger():
                 logging.FileHandler(log_path, mode='w'),
             ],
         )
+        # Suppress high-frequency raw websocket dumps to reduce memory & log bloat
+        logging.getLogger('tastytrade').setLevel(logging.WARNING)
+        logging.getLogger('websockets').setLevel(logging.WARNING)
         log.info('Streamer log: %s', log_path)
     return log
+
+
+def _create_persistent_mqtt_client(slog):
+    port = int(os.environ.get('MQTT_PORT', 1883))
+    host = os.environ.get('MQTT_HOST', config.MQTT_BROKER_ADDR)
+    client_id = f'tt_pub_{os.getpid()}_{int(time.time())}'
+    try:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+    except Exception:
+        client = mqtt.Client(client_id=client_id)
+
+    def on_connect(c, userdata, flags, rc, properties=None):
+        slog.info('Persistent MQTT publisher connected to %s:%s (rc=%s)', host, port, rc)
+
+    def on_disconnect(c, userdata, rc, properties=None, reason_code=None):
+        if rc != 0:
+            slog.warning('Persistent MQTT publisher disconnected (rc=%s)', rc)
+
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
+    try:
+        client.connect(host, port, keepalive=60)
+        client.loop_start()
+    except Exception as exc:
+        slog.error('Failed to connect persistent MQTT publisher: %s', exc)
+    return client
 
 
 def _read_ladder_meta() -> dict:
@@ -133,13 +163,23 @@ async def _stream_loop(session, slog):
 
     pub_state = StreamPublishState()
     heartbeat_every = max(1, int(round(heartbeat_interval_sec())))
+    mqtt_client = _create_persistent_mqtt_client(slog)
+
+    import atexit
+    def _cleanup_mqtt():
+        try:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+            slog.info('Persistent MQTT publisher disconnected cleanly')
+        except Exception:
+            pass
+    atexit.register(_cleanup_mqtt)
 
     try:
-        publish.single(
+        mqtt_client.publish(
             config.KILL_SWITCH_TOPIC.replace('SCHWAB/', TOPIC_PREFIX),
             'False',
             retain=True,
-            hostname=config.MQTT_BROKER_ADDR,
         )
     except Exception as exc:
         slog.info('Kill switch publish error: %s', exc)
@@ -158,26 +198,24 @@ async def _stream_loop(session, slog):
             targets.add(mqtt_sym)
         for s in targets:
             try:
-                publish.single(
+                mqtt_client.publish(
                     TOPIC_PREFIX + s,
                     str(mid),
                     retain=True,
-                    hostname=config.MQTT_BROKER_ADDR,
                 )
             except Exception as exc:
-                slog.info('MQTT publish error %s: %s', s, exc)
+                slog.debug('MQTT publish error %s: %s', s, exc)
 
 
     def _mqtt_publish_aux(topic: str, value: str, *, retain: bool = True) -> None:
         try:
-            publish.single(
+            mqtt_client.publish(
                 TOPIC_PREFIX + topic,
                 value,
                 retain=retain,
-                hostname=config.MQTT_BROKER_ADDR,
             )
         except Exception as exc:
-            slog.info('MQTT aux publish error %s: %s', topic, exc)
+            slog.debug('MQTT aux publish error %s: %s', topic, exc)
 
     def _publish_session() -> None:
         payload = build_session_payload(

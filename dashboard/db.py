@@ -2,7 +2,7 @@
 MEIC Trade Database (SQLite)
 All historical trade records are stored in dashboard/meic_trades.db
 """
-import sqlite3, os
+import sqlite3, os, contextlib
 from datetime import datetime as dt, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'meic_trades.db')
@@ -129,10 +129,15 @@ CREATE TABLE IF NOT EXISTS daily_summary (
 );
 """
 
+@contextlib.contextmanager
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 def init_db():
     with get_conn() as conn:

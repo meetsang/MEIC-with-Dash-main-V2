@@ -304,6 +304,9 @@ class DRMAHMStrategy(BaseStrategy):
 
             self._status['state'] = 'MONITORING'
 
+            cached_snapshots = []
+            last_bars_mtime = None
+
             # 4. Main monitoring and execution loop
             while self._running:
                 try:
@@ -337,27 +340,37 @@ class DRMAHMStrategy(BaseStrategy):
                         time.sleep(self.config.poll_interval_sec)
                         continue
 
-                    # Load 5m bars
-                    df_bars = load_spx_5m_bars(data_root, today, prepend_prev_bars=40)
-                    if df_bars.empty:
-                        time.sleep(self.config.poll_interval_sec)
-                        continue
+                    # Check if 5m bars file has updated on disk before re-reading CSV & recomputing indicators
+                    day_csv = os.path.join(data_root, today.isoformat(), 'SPX_5m.csv')
+                    current_mtime = os.path.getmtime(day_csv) if os.path.isfile(day_csv) else None
 
-                    # Compute complete indicator suite
-                    df_calc, snapshots = compute_indicators(
-                        df_bars,
-                        ma_type=self.config.ma_type,
-                        ma_len=self.config.ma_len,
-                        orb_minutes=self.config.orb_minutes,
-                        min_slope_pts=self.config.min_slope_pts,
-                        max_extension_pts=self.config.max_extension_pts,
-                        pullback_tol_pts=self.config.pullback_tol_pts,
-                        pdh=self._levels.get('pdh'),
-                        pdl=self._levels.get('pdl'),
-                        pdc=self._levels.get('pdc'),
-                        onh=self._levels.get('onh'),
-                        onl=self._levels.get('onl'),
-                    )
+                    if current_mtime is not None and current_mtime == last_bars_mtime and cached_snapshots:
+                        snapshots = cached_snapshots
+                    else:
+                        # Load 5m bars
+                        df_bars = load_spx_5m_bars(data_root, today, prepend_prev_bars=40)
+                        if df_bars.empty:
+                            time.sleep(self.config.poll_interval_sec)
+                            continue
+
+                        # Compute complete indicator suite
+                        df_calc, snapshots = compute_indicators(
+                            df_bars,
+                            ma_type=self.config.ma_type,
+                            ma_len=self.config.ma_len,
+                            orb_minutes=self.config.orb_minutes,
+                            min_slope_pts=self.config.min_slope_pts,
+                            max_extension_pts=self.config.max_extension_pts,
+                            pullback_tol_pts=self.config.pullback_tol_pts,
+                            pdh=self._levels.get('pdh'),
+                            pdl=self._levels.get('pdl'),
+                            pdc=self._levels.get('pdc'),
+                            onh=self._levels.get('onh'),
+                            onl=self._levels.get('onl'),
+                        )
+                        if snapshots:
+                            last_bars_mtime = current_mtime
+                            cached_snapshots = snapshots
 
                     if not snapshots:
                         time.sleep(self.config.poll_interval_sec)
