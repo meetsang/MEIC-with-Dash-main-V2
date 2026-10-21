@@ -97,6 +97,8 @@ def get_strategy_paper_mode(strategy_name: str, root: Optional[str] = None) -> O
         parent_cfg = modes.get(parent_name) or {}
         if field_name in parent_cfg and parent_cfg[field_name] is not None:
             return bool(parent_cfg[field_name])
+        if any(k in parent_cfg for k in ('dir_paper', 'non_dir_paper', 'futures_paper')):
+            return True
         if 'paper' in parent_cfg and parent_cfg['paper'] is not None:
             return bool(parent_cfg['paper'])
 
@@ -105,6 +107,12 @@ def get_strategy_paper_mode(strategy_name: str, root: Optional[str] = None) -> O
     if 'paper' in strat_cfg and strat_cfg['paper'] is not None:
         return bool(strat_cfg['paper'])
 
+    # DRMA_HM_SPX sub-strategy aggregation fallback
+    if clean_name == 'DRMA_HM_SPX':
+        sub_modes = [strat_cfg[k] for k in ('dir_paper', 'non_dir_paper', 'futures_paper') if k in strat_cfg and strat_cfg[k] is not None]
+        if sub_modes:
+            return all(bool(v) for v in sub_modes)
+
     return None
 
 
@@ -112,7 +120,13 @@ def get_persistent_modes_for_strategy(strategy_name: str, root: Optional[str] = 
     """Return all persistent mode fields stored for a strategy (e.g. paper, dir_paper, etc.)."""
     modes = load_strategy_modes(root=root)
     clean_name = strategy_name.strip()
-    return dict(modes.get(clean_name) or {})
+    data = dict(modes.get(clean_name) or {})
+    if clean_name == 'DRMA_HM_SPX' and 'paper' in data and data['paper'] is not None:
+        parent_val = bool(data['paper'])
+        for k in ('dir_paper', 'non_dir_paper', 'futures_paper'):
+            if k not in data or data[k] is None:
+                data[k] = parent_val
+    return data
 
 
 def set_strategy_paper_mode(
@@ -137,7 +151,11 @@ def set_strategy_paper_mode(
         target_name = 'DRMA_HM_SPX'
     elif clean_name == 'DRMA_HM_SPX' and sub_key is None:
         entry = modes.setdefault('DRMA_HM_SPX', {})
-        entry['paper'] = bool(paper)
+        b_val = bool(paper)
+        entry['paper'] = b_val
+        entry['dir_paper'] = b_val
+        entry['non_dir_paper'] = b_val
+        entry['futures_paper'] = b_val
         target_name = 'DRMA_HM_SPX'
     else:
         entry = modes.setdefault(clean_name, {})
@@ -203,6 +221,12 @@ def delete_strategy_paper_mode(
 
     if target_name in modes:
         modes[target_name].pop(target_key, None)
+        if target_name == 'DRMA_HM_SPX' and target_key == 'paper':
+            modes[target_name].pop('dir_paper', None)
+            modes[target_name].pop('non_dir_paper', None)
+            modes[target_name].pop('futures_paper', None)
+        if target_name == 'DRMA_HM_SPX' and not any(k in modes[target_name] for k in ('dir_paper', 'non_dir_paper', 'futures_paper')):
+            modes[target_name].pop('paper', None)
         if not modes[target_name]:
             modes.pop(target_name, None)
         save_strategy_modes(modes, root=root)

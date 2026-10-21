@@ -83,6 +83,11 @@ def _build_config(entry: dict, cfg_cls: Type[StrategyConfig]) -> StrategyConfig:
             for k, v in persisted.items():
                 if v is not None:
                     overrides[k] = v
+            if name == 'DRMA_HM_SPX' and 'paper' in persisted and persisted['paper'] is not None:
+                parent_p = bool(persisted['paper'])
+                for sub_k in ('dir_paper', 'non_dir_paper', 'futures_paper'):
+                    if sub_k not in persisted or persisted[sub_k] is None:
+                        overrides[sub_k] = parent_p
     except Exception:
         pass
 

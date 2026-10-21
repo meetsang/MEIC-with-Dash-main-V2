@@ -27,12 +27,24 @@ def session_state_path(strategy_name: str, root: str, for_date: Optional[date] =
 def load_session_state(strategy_name: str, root: str) -> Dict[str, Any]:
     path = session_state_path(strategy_name, root)
     if not os.path.isfile(path):
-        return {'entered': False, 'skip_reason': None, 'overrides': {}}
+        persisted = {}
+        try:
+            from common.strategy_modes import get_persistent_modes_for_strategy
+            persisted = get_persistent_modes_for_strategy(strategy_name, root)
+        except Exception:
+            pass
+        return {'entered': False, 'skip_reason': None, 'overrides': dict(persisted)}
     try:
         with open(path, encoding='utf-8') as f:
             state = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return {'entered': False, 'skip_reason': None, 'overrides': {}}
+        persisted = {}
+        try:
+            from common.strategy_modes import get_persistent_modes_for_strategy
+            persisted = get_persistent_modes_for_strategy(strategy_name, root)
+        except Exception:
+            pass
+        return {'entered': False, 'skip_reason': None, 'overrides': dict(persisted)}
     if 'overrides' not in state:
         state['overrides'] = {}
     return state
@@ -108,6 +120,12 @@ def delete_override(strategy_name: str, root: str, key: str) -> Dict[str, Any]:
     state = load_session_state(strategy_name, root)
     overrides = dict(state.get('overrides') or {})
     overrides.pop(key, None)
+    if strategy_name == 'DRMA_HM_SPX' and key == 'paper':
+        overrides.pop('dir_paper', None)
+        overrides.pop('non_dir_paper', None)
+        overrides.pop('futures_paper', None)
+    if strategy_name == 'DRMA_HM_SPX' and not any(k in overrides for k in ('dir_paper', 'non_dir_paper', 'futures_paper')):
+        overrides.pop('paper', None)
     state['overrides'] = overrides
     save_session_state(strategy_name, root, state)
 
@@ -130,6 +148,14 @@ def effective_config(cfg: StrategyConfig, strategy_name: str, root: str) -> Stra
         persisted = get_persistent_modes_for_strategy(strategy_name, root=root)
         if persisted:
             apply_config_overrides(merged, persisted)
+            if strategy_name == 'DRMA_HM_SPX' and 'paper' in persisted and persisted['paper'] is not None:
+                parent_p = bool(persisted['paper'])
+                if 'dir_paper' not in persisted:
+                    merged.dir_paper = parent_p
+                if 'non_dir_paper' not in persisted:
+                    merged.non_dir_paper = parent_p
+                if 'futures_paper' not in persisted:
+                    merged.futures_paper = parent_p
     except Exception:
         pass
     overrides = get_overrides(strategy_name, root)

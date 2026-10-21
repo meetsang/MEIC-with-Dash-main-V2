@@ -73,6 +73,7 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 0               # 0 = Flat, 1 = Any Open
         self._entry_bar = -999
         self._active_trade_path: Optional[str] = None
+        self._credit_options_trade_paper: Optional[bool] = None
         self._levels: Dict[str, Optional[float]] = {}
         self._paper_broker = None
         self._live_broker = None
@@ -140,7 +141,12 @@ class DRMAHMStrategy(BaseStrategy):
     def _load_session_state(self, root: str, for_date: date) -> Dict[str, Any]:
         path = self._session_state_path(root, for_date)
         if not os.path.isfile(path):
-            return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': {}}
+            try:
+                from common.strategy_modes import get_persistent_modes_for_strategy
+                persisted = get_persistent_modes_for_strategy(self.config.name, root)
+            except Exception:
+                persisted = {}
+            return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': dict(persisted)}
         try:
             with open(path, encoding='utf-8') as f:
                 state = json.load(f)
@@ -148,7 +154,12 @@ class DRMAHMStrategy(BaseStrategy):
                     state['overrides'] = {}
                 return state
         except Exception:
-            return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': {}}
+            try:
+                from common.strategy_modes import get_persistent_modes_for_strategy
+                persisted = get_persistent_modes_for_strategy(self.config.name, root)
+            except Exception:
+                persisted = {}
+            return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': dict(persisted)}
 
     def _save_session_state(self, root: str, for_date: date, **fields) -> None:
         path = self._session_state_path(root, for_date)
@@ -227,6 +238,17 @@ class DRMAHMStrategy(BaseStrategy):
                 self._write_skip(root, reason or 'not_a_trading_day')
                 return
 
+            # Apply persistent strategy modes on startup
+            try:
+                from common.strategy_modes import get_persistent_modes_for_strategy
+                persisted = get_persistent_modes_for_strategy(self.config.name, root=root)
+                if persisted:
+                    for ov_k, ov_v in persisted.items():
+                        if hasattr(self.config, ov_k):
+                            setattr(self.config, ov_k, ov_v)
+            except Exception:
+                pass
+
             self.logger.info(
                 'Starting %s strategy (mode=%s, paper=%s, ticker=%s)',
                 self.config.name, self.config.trade_mode, self.config.paper, self.config.ticker,
@@ -269,6 +291,7 @@ class DRMAHMStrategy(BaseStrategy):
                             self.register_open_trade_streamer_legs(open_trade_data, self.logger)
                         else:
                             self._credit_options_position_state = 1 if open_trade_data.get('side') == 'LONG' else -1
+                            self._credit_options_trade_paper = bool(open_trade_data.get('paper', self.config.is_non_dir_paper))
                             self.register_open_trade_streamer_legs(open_trade_data, self.logger)
                         self._manage_open_trade(root, t_path)
                 except Exception as exc:
@@ -416,6 +439,7 @@ class DRMAHMStrategy(BaseStrategy):
                                     has_open_dir_opts = True
                                 else:
                                     has_open_credit_opts = True
+                                    self._credit_options_trade_paper = bool(t_chk.get('paper', self.config.is_non_dir_paper))
                                 self._manage_open_trade(root, t_path, snapshots)
                         except Exception as exc:
                             self.logger.warning('Error managing open trade %s: %s', t_path, exc)
@@ -424,6 +448,7 @@ class DRMAHMStrategy(BaseStrategy):
                         self._dir_options_position_state = 0
                     if not has_open_credit_opts:
                         self._credit_options_position_state = 0
+                        self._credit_options_trade_paper = None
                     if not has_open_futures:
                         self._futures_position_state = 0
                     self._options_position_state = 1 if (self._dir_options_position_state != 0 or self._credit_options_position_state != 0) else 0
@@ -504,7 +529,35 @@ class DRMAHMStrategy(BaseStrategy):
 
         # 1. Directional Options (SPX Debit Spread)
         if is_directional and self.config.is_directional_options_enabled and self._dir_options_position_state == 0:
-            self._enter_directional_trade(root, expiry_yymmdd, snap, bar_idx)
+            block_same_side = bool(getattr(self.config, 'dir_block_if_same_side_nondir', True) and getattr(self.config, 'enable_debounce', True))
+            dir_same_side_blocked = False
+            if block_same_side and self._credit_options_position_state != 0:
+                nondir_same_side = (
+                    (snap.bias == 'BULL' and self._credit_options_position_state in (1, 2)) or
+                    (snap.bias == 'BEAR' and self._credit_options_position_state in (-1, 2))
+                )
+                if nondir_same_side:
+                    dir_paper = bool(self.config.is_dir_paper)
+                    nondir_paper = (
+                        self._credit_options_trade_paper
+                        if self._credit_options_trade_paper is not None
+                        else bool(self.config.is_non_dir_paper)
+                    )
+                    # Setting only kicks in when BOTH are LIVE or BOTH are PAPER
+                    if dir_paper == nondir_paper:
+                        dir_same_side_blocked = True
+                        self.logger.info(
+                            'Directional %s trade blocked: active non-directional trade open on same side (both %s)',
+                            snap.bias, 'PAPER' if dir_paper else 'LIVE',
+                        )
+                    else:
+                        self.logger.info(
+                            'Directional %s trade permitted: active non-directional is %s while directional is %s (mixed modes)',
+                            snap.bias, 'PAPER' if nondir_paper else 'LIVE', 'PAPER' if dir_paper else 'LIVE',
+                        )
+
+            if not dir_same_side_blocked:
+                self._enter_directional_trade(root, expiry_yymmdd, snap, bar_idx)
 
         # 2. Non-Directional Options (SPX Credit Spread)
         if not is_directional and self.config.is_non_directional_options_enabled and self._credit_options_position_state == 0:
@@ -898,6 +951,7 @@ class DRMAHMStrategy(BaseStrategy):
 
         self._active_trade_path = trade_path
         self._credit_options_position_state = 1 if snap.bias == 'BULL' else -1
+        self._credit_options_trade_paper = is_paper
         self._options_position_state = 1 if (self._dir_options_position_state != 0 or self._credit_options_position_state != 0) else 0
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
@@ -985,6 +1039,7 @@ class DRMAHMStrategy(BaseStrategy):
 
         self._active_trade_path = trade_path
         self._credit_options_position_state = 2
+        self._credit_options_trade_paper = is_paper
         self._options_position_state = 1 if (self._dir_options_position_state != 0 or self._credit_options_position_state != 0) else 0
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
@@ -1283,6 +1338,7 @@ class DRMAHMStrategy(BaseStrategy):
                     self._dir_options_position_state = 0
                 else:
                     self._credit_options_position_state = 0
+                    self._credit_options_trade_paper = None
                 self._options_position_state = 1 if (self._dir_options_position_state != 0 or self._credit_options_position_state != 0) else 0
 
             self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0

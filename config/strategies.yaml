@@ -118,9 +118,10 @@ strategies:
       trade_mode: all_three          # 'all_three', 'directional_futures', 'directional_only', 'non_directional_only', 'both'
       min_grade_to_signal: 'Grade A and A+'
       # Sub-strategy Independent Paper/Live controls (default to strategy paper setting if omitted)
-      dir_paper: true                # Directional options (Debit Spreads): true=paper, false=live
-      non_dir_paper: true            # Non-directional options (Credit Spreads): true=paper, false=live
-      futures_paper: true            # Directional futures (ES Outright): true=paper, false=live
+      # dir_paper: true                # Directional options (Debit Spreads): true=paper, false=live
+      # non_dir_paper: true            # Non-directional options (Credit Spreads): true=paper, false=live
+      # futures_paper: true            # Directional futures (ES Outright): true=paper, false=live
+      dir_block_if_same_side_nondir: true # Block Directional spread if active Non-Directional on same side (only when both Live or both Paper)
       # Directional Futures parameters (Outright ES Futures)
       futures_symbol: ES             # ES continuous / front month
       futures_quantity: 1            # 1 contract

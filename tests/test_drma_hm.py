@@ -643,6 +643,7 @@ class TestDRMAHMFutures(unittest.TestCase):
             trade_mode='all_three',
             min_grade_to_signal='Grade A and A+',
             futures_min_grade='Grade A+ Only',
+            dir_block_if_same_side_nondir=False,
         )
         strat = DRMAHMStrategy(cfg)
         mock_broker = MagicMock()
@@ -1017,6 +1018,229 @@ class TestDRMAHMFutures(unittest.TestCase):
         with patch('common.mqtt_prices.get_mqtt_price_cache', return_value=cache):
             price = fetch_es_current_price(broker=None)
             self.assertEqual(price, 5825.25)
+
+
+
+class TestDRMAHMSameSideLock(unittest.TestCase):
+    @staticmethod
+    def _make_snap(bias='BULL', close=5800.0, score=5):
+        grade = 'GRADE A+ (5/5)' if score == 5 else ('GRADE A (4/5)' if score == 4 else 'GRADE B (3/5)')
+        return IndicatorSnapshot(
+            bar_index=15, datetime_str='2026-10-15 09:30:00',
+            close=close, open=5795.0, high=5802.0, low=5794.0,
+            out_ma=5790.0, ma_delta_2=1.0, ma_slope_up=True, ma_slope_down=False,
+            is_not_extended=True, orb_high=5810.0, orb_low=5780.0, orb_mid=5795.0,
+            orb_formed=True, pdh=5820.0, pdl=5770.0, pdc=5795.0, onh=5815.0, onl=5785.0,
+            rsi=60.0, hm_fast=58.0, hm_slow=54.0,
+            is_super_bull=(bias == 'BULL'), is_super_bear=(bias == 'BEAR'),
+            is_bull_pullback=False, is_bear_bounce=False,
+            bull_score=score if bias == 'BULL' else 0,
+            bear_score=0 if bias == 'BULL' else score,
+            active_score=score, bias=bias,
+            setup_grade=grade,
+            trade_vehicle='BUY CALLS / CDS' if score == 5 else 'SELL PCS',
+            gamma_risk='NORMAL / THETA SAFE',
+        )
+
+    def test_dir_blocked_when_same_side_nondir_active_both_paper(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=True,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        # Active credit spread: PCS on BULL side, paper=True
+        strat._credit_options_position_state = 1
+        strat._credit_options_trade_paper = True
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # Directional options remains FLAT because blocked
+        self.assertEqual(strat._dir_options_position_state, 0)
+
+    def test_dir_blocked_when_same_side_nondir_active_both_live(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=False,
+            dir_paper=False,
+            non_dir_paper=False,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_live = MagicMock(_is_journal=False, _is_paper=False)
+        mock_live.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='dir_1')
+        strat._live_broker = mock_live
+
+        # Active credit spread: CCS on BEAR side, paper=False
+        strat._credit_options_position_state = -1
+        strat._credit_options_trade_paper = False
+
+        snap_bear = self._make_snap('BEAR', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5790, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bear, 1)
+
+        # Directional options remains FLAT because blocked
+        self.assertEqual(strat._dir_options_position_state, 0)
+        mock_live.place_multi_leg_order.assert_not_called()
+
+    def test_dir_enters_when_same_side_nondir_active_mixed_nondir_live_dir_paper(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,       # Directional is PAPER
+            non_dir_paper=False,  # Non-directional is LIVE
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_paper = MagicMock(_is_journal=True, _is_paper=True)
+        mock_paper.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='paper_dir_1')
+        strat._paper_broker = mock_paper
+        strat.broker = mock_paper
+
+        # Active credit spread: PCS on BULL side, entered LIVE
+        strat._credit_options_position_state = 1
+        strat._credit_options_trade_paper = False
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # In mixed modes, setting does NOT kick in -> directional enters successfully!
+        self.assertEqual(strat._dir_options_position_state, 1)
+
+    def test_dir_enters_when_same_side_nondir_active_mixed_nondir_paper_dir_live(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=False,      # Directional is LIVE
+            non_dir_paper=True,   # Non-directional is PAPER
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_live = MagicMock(_is_journal=False, _is_paper=False)
+        mock_live.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='live_dir_1')
+        strat._live_broker = mock_live
+        strat.broker = mock_live
+
+        # Active credit spread: CCS on BEAR side, entered PAPER
+        strat._credit_options_position_state = -1
+        strat._credit_options_trade_paper = True
+
+        snap_bear = self._make_snap('BEAR', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5790, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bear, 1)
+
+        # In mixed modes, setting does NOT kick in -> directional enters successfully!
+        self.assertEqual(strat._dir_options_position_state, -1)
+        mock_live.place_multi_leg_order.assert_called_once()
+
+    def test_dir_enters_when_opposite_side_nondir_active(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=True,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_paper = MagicMock(_is_journal=True, _is_paper=True)
+        mock_paper.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='paper_dir_2')
+        strat._paper_broker = mock_paper
+        strat.broker = mock_paper
+
+        # Active credit spread: PCS on BULL side (+1)
+        strat._credit_options_position_state = 1
+        strat._credit_options_trade_paper = True
+
+        # Incoming setup: BEAR (-1)
+        snap_bear = self._make_snap('BEAR', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5790, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bear, 1)
+
+        # Opposite side is not blocked -> directional enters!
+        self.assertEqual(strat._dir_options_position_state, -1)
+
+    def test_dir_enters_when_lock_disabled(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=True,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=False,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_paper = MagicMock(_is_journal=True, _is_paper=True)
+        mock_paper.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='paper_dir_3')
+        strat._paper_broker = mock_paper
+        strat.broker = mock_paper
+
+        # Active credit spread on BULL side (+1), both PAPER
+        strat._credit_options_position_state = 1
+        strat._credit_options_trade_paper = True
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.40, 2.50)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # Lock disabled -> directional enters!
+        self.assertEqual(strat._dir_options_position_state, 1)
+
+    def test_dir_iron_condor_lock_modes(self):
+        tmp = tempfile.mkdtemp()
+        # Case A: IC is active (state 2) and both are PAPER -> blocked
+        cfg_paper = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=True,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat_a = DRMAHMStrategy(cfg_paper)
+        strat_a._credit_options_position_state = 2  # Iron Condor
+        strat_a._credit_options_trade_paper = True
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.40, 2.50)):
+            strat_a._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+        self.assertEqual(strat_a._dir_options_position_state, 0)
+
+        # Case B: IC is LIVE (state 2), but directional is PAPER -> ENTERS!
+        cfg_mixed = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=False,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat_b = DRMAHMStrategy(cfg_mixed)
+        mock_p = MagicMock(_is_journal=True, _is_paper=True)
+        mock_p.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.50, order_id='p_dir')
+        strat_b._paper_broker = mock_p
+        strat_b.broker = mock_p
+        strat_b._credit_options_position_state = 2  # Iron Condor (LIVE)
+        strat_b._credit_options_trade_paper = False
+
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.40, 2.50)):
+            strat_b._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+        self.assertEqual(strat_b._dir_options_position_state, 1)
 
 
 if __name__ == '__main__':
