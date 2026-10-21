@@ -221,6 +221,18 @@ def stop_qty_for_state(state: Dict[str, Any]) -> int:
     return int(state.get('filled_quantity') or 0)
 
 
+def long_qty_for_state(state: Dict[str, Any]) -> int:
+    """Contracts held on the long leg belonging to this specific trade that should be closed."""
+    if state.get('status') == 'closed':
+        return 0
+    if state.get('long_remaining_qty') is not None:
+        return max(0, int(state['long_remaining_qty']))
+    total_entry = int(state.get('holding_quantity') or state.get('filled_quantity') or state.get('quantity') or 0)
+    already_closed = sum(int(p.get('qty') or 0) for p in (state.get('long_partial_fills') or []))
+    return max(0, total_entry - already_closed)
+
+
+
 def stop_is_current(
     state: Dict[str, Any],
     *,

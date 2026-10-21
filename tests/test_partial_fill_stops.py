@@ -8,7 +8,7 @@ from blocks.entry.handoff import apply_stop_snapshot
 from blocks.session.plan import SessionRow
 from blocks.stop import state as state_mod
 from blocks.stop.fill_provenance import is_fill_sync_terminal
-from blocks.stop.fill_sync import apply_order_result_to_state, stop_is_current, stop_qty_for_state, sync_open_order
+from blocks.stop.fill_sync import apply_order_result_to_state, long_qty_for_state, stop_is_current, stop_qty_for_state, sync_open_order
 from blocks.stop.pending_fill_sync import needs_open_order_sync
 from blocks.stop.v3.supervisor import StopSupervisor
 from blocks.stop.v3.trade_slot import merge_policy
@@ -516,6 +516,134 @@ class TestPartialFillStops(unittest.TestCase):
         mon.handle_partial_stop_fill.assert_called_once()
         args, kwargs = mon.handle_partial_stop_fill.call_args
         self.assertEqual(kwargs['broker_result'].filled_quantity, 2)
+
+    def test_long_qty_for_state_unaffected_by_short_remaining_qty_zero(self):
+        """When short leg is stopped out or breached (short_remaining_qty=0), long_qty_for_state returns full long size."""
+        st = {
+            'filled_quantity': 3,
+            'quantity': 3,
+            'short_remaining_qty': 0,
+        }
+        # Stop qty for short is 0 contracts (all short closed)
+        self.assertEqual(stop_qty_for_state(st), 0)
+        # But long leg still holds 3 contracts that need closing!
+        self.assertEqual(long_qty_for_state(st), 3)
+
+    def test_long_qty_for_state_partial_fills_and_closed_status(self):
+        """long_qty_for_state respects long_partial_fills, long_remaining_qty, and returns 0 when closed."""
+        st = {
+            'filled_quantity': 3,
+            'quantity': 3,
+            'long_partial_fills': [{'qty': 1, 'price': 0.20}],
+        }
+        self.assertEqual(long_qty_for_state(st), 2)
+
+        st['long_remaining_qty'] = 1
+        self.assertEqual(long_qty_for_state(st), 1)
+
+        st['status'] = 'closed'
+        self.assertEqual(long_qty_for_state(st), 0)
+
+    def test_long_close_places_correct_quantity_after_pcs_breached(self):
+        """Simulate manual PCS breach: short leg closed with short_remaining_qty=0, long close must place 3 contracts."""
+        import tempfile
+        import os
+        from blocks.stop.monitor import StopMonitor
+        from blocks.stop.mqtt_prices import MqttPriceCache
+
+        st = state_mod.create_new_state(
+            strategy='MANUAL_SPREAD',
+            lot='ms-481',
+            side='P',
+            short_symbol='.SPXW261021P7660',
+            long_symbol='.SPXW261021P7635',
+            short_strike=7660,
+            long_strike=7635,
+            short_fill=1.22,
+            long_fill=0.57,
+            net_credit=0.65,
+            quantity=3,
+            open_order_id='516674429',
+        )
+        st['filled_quantity'] = 3
+        st['status'] = 'closing'
+        st['short_remaining_qty'] = 0
+        st['short_closed_at'] = 1.0
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, 'ms-481_P.json')
+        state_mod.save_state(path, st)
+
+        broker = MagicMock()
+        broker.place_limit_order.return_value = OrderResult(
+            True,
+            '516700001',
+            'working',
+            order_quantity=3,
+        )
+
+        prices = MagicMock(spec=MqttPriceCache)
+        prices.get_market_mid.return_value = 0.50
+        prices.get.return_value = 0.50
+        prices.get_spx.return_value = 7715.0
+        prices.kill_switch = False
+
+        mon = StopMonitor(path, broker, prices=prices)
+        mon.state = st
+        mon.json_path = path
+
+        mon._chase_long_close()
+
+        # Must place SELL_TO_CLOSE for 3 contracts, NOT 0!
+        broker.place_limit_order.assert_called_once()
+        action, sym, qty, limit = broker.place_limit_order.call_args[0]
+        self.assertEqual(action, 'SELL_TO_CLOSE')
+        self.assertEqual(sym, '.SPXW261021P7635')
+        self.assertEqual(qty, 3)
+        self.assertEqual(limit, 0.50)
+        self.assertEqual(mon.state.get('long_close_order_id'), '516700001')
+
+    def test_long_close_zero_quantity_auto_finalizes_safely(self):
+        """If long leg position is already flat at broker (held_qty=0), auto-finalize rather than sending 0 to broker."""
+        import tempfile
+        import os
+        from blocks.stop.monitor import StopMonitor
+
+        st = state_mod.create_new_state(
+            strategy='MANUAL_SPREAD',
+            lot='ms-481',
+            side='P',
+            short_symbol='.SPXW261021P7660',
+            long_symbol='.SPXW261021P7635',
+            short_strike=7660,
+            long_strike=7635,
+            short_fill=1.22,
+            long_fill=0.57,
+            net_credit=0.65,
+            quantity=3,
+            open_order_id='516674429',
+        )
+        st['filled_quantity'] = 3
+        st['status'] = 'closing'
+        st['short_remaining_qty'] = 0
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, 'ms-481_P.json')
+        state_mod.save_state(path, st)
+
+        broker = MagicMock()
+        # Broker reports 0 long contracts held (already liquidated or expired flat)
+        broker.get_single_leg_position_qty.return_value = 0
+
+        mon = StopMonitor(path, broker, prices=MagicMock())
+        mon.state = st
+        mon.json_path = path
+
+        res = mon._place_long_close_limit(0.50)
+        self.assertFalse(res)
+        # Never sends order to broker with 0 quantity
+        broker.place_limit_order.assert_not_called()
+        self.assertEqual(mon.state['status'], 'closed')
 
 
 if __name__ == '__main__':

@@ -16,6 +16,7 @@ from brokers.base import BrokerBase, OrderResult
 from blocks.stop import state as state_mod
 from common.option_ticks import round_spx_option_price, step_down_spx_option_price
 from blocks.stop.fill_sync import (
+    long_qty_for_state,
     stop_is_current,
     stop_order_fully_filled,
     stop_qty_for_state,
@@ -1646,6 +1647,14 @@ class StopMonitor:
             self.state['scale_outs'] = disk['scale_outs']
         if disk.get('initial_quantity') is not None:
             self.state['initial_quantity'] = disk['initial_quantity']
+        if disk.get('short_remaining_qty') is not None:
+            self.state['short_remaining_qty'] = disk['short_remaining_qty']
+        if disk.get('short_partial_fills') is not None:
+            self.state['short_partial_fills'] = disk['short_partial_fills']
+        if disk.get('long_remaining_qty') is not None:
+            self.state['long_remaining_qty'] = disk['long_remaining_qty']
+        if disk.get('long_partial_fills') is not None:
+            self.state['long_partial_fills'] = disk['long_partial_fills']
 
         disk_stop = disk.get('active_stop') or {}
         if not disk_stop.get('order_id'):
@@ -1822,8 +1831,8 @@ class StopMonitor:
         qty = stop_qty_for_state(self.state)
         try:
             held = self.broker.get_option_position_quantity(short_sym)
-            if held is not None:
-                remaining_short = abs(held) if held < 0 else 0
+            if held is not None and isinstance(held, (int, float)):
+                remaining_short = abs(int(held)) if held < 0 else 0
                 qty = min(qty, remaining_short)
         except Exception as exc:
             log.warning('Could not get broker held position in replace_with_limit_close: %s', exc)
@@ -1970,6 +1979,31 @@ class StopMonitor:
             return round(total_cost / total_qty, 4)
         return final_fill_price
 
+    def _calculate_blended_long_close_price(
+        self,
+        final_fill_price: Optional[float] = None,
+        final_qty: Optional[int] = None,
+    ) -> Optional[float]:
+        partial_fills = self.state.get('long_partial_fills') or []
+        if not partial_fills:
+            return final_fill_price
+
+        total_qty = 0
+        total_cost = 0.0
+        for f in partial_fills:
+            q = int(f.get('qty') or 0)
+            p = float(f.get('price') or 0.0)
+            total_qty += q
+            total_cost += q * p
+
+        if final_fill_price is not None and final_qty is not None and final_qty > 0:
+            total_qty += final_qty
+            total_cost += final_qty * float(final_fill_price)
+
+        if total_qty > 0:
+            return round(total_cost / total_qty, 4)
+        return final_fill_price
+
     def handle_partial_stop_fill(
         self,
         active: Dict[str, Any],
@@ -2014,7 +2048,9 @@ class StopMonitor:
         short_sym = self.state['short_leg']['symbol']
         held_qty = None
         try:
-            held_qty = self.broker.get_option_position_quantity(short_sym)
+            pos = self.broker.get_option_position_quantity(short_sym)
+            if pos is not None and isinstance(pos, (int, float)):
+                held_qty = int(pos)
         except Exception as exc:
             log.warning('Could not get broker held position quantity for %s: %s', short_sym, exc)
 
@@ -2296,22 +2332,33 @@ class StopMonitor:
             )
             return False
         long_sym = self.state['long_leg']['symbol']
+        held_qty = None
         try:
-            held_qty = self.broker.get_single_leg_position_qty(long_sym)
-            if held_qty <= 0:
-                log.warning(
-                    'Cannot place long close: position for %s is already flat/short (qty=%d) — auto-finalizing close',
-                    long_sym,
-                    held_qty,
-                )
-                self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
-                return False
+            pos = self.broker.get_single_leg_position_qty(long_sym)
+            if pos is not None and isinstance(pos, (int, float)):
+                held_qty = int(pos)
+                if held_qty <= 0:
+                    log.warning(
+                        'Cannot place long close: position for %s is already flat/short (qty=%d) — auto-finalizing close',
+                        long_sym,
+                        held_qty,
+                    )
+                    self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+                    return False
         except Exception as exc:
             log.warning('Broker position verification check failed in _place_long_close_limit: %s', exc)
             held_qty = None
 
-        desired_qty = stop_qty_for_state(self.state)
+        desired_qty = long_qty_for_state(self.state)
         qty = min(desired_qty, held_qty) if held_qty is not None and held_qty > 0 else desired_qty
+        if qty <= 0:
+            log.warning(
+                'Cannot place long close: qty is <= 0 (desired=%s, held=%s) — auto-finalizing close',
+                desired_qty,
+                held_qty,
+            )
+            self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+            return False
         limit_price = round_spx_option_price(limit_price)
         result = self.broker.place_limit_order('SELL_TO_CLOSE', long_sym, qty, limit_price)
         if result.success:
@@ -2348,7 +2395,7 @@ class StopMonitor:
 
     def _close_long_leg(self, quantity: Optional[int] = None) -> None:
         if quantity is not None:
-            log.warning('_close_long_leg quantity override ignored; using stop_qty_for_state')
+            self.state['long_remaining_qty'] = int(quantity)
         self._place_long_close_at_mid()
 
     def _finalize_close(self, reason: str, spx_price: Optional[float] = None) -> None:
@@ -2359,6 +2406,8 @@ class StopMonitor:
         long_fill = self.state['long_leg']['fill_price']
         entry_credit = self.state['entry']['net_credit']
         self.state['status'] = 'closed'
+        self.state['short_remaining_qty'] = 0
+        self.state['long_remaining_qty'] = 0
         self.state['close'] = {
             'reason': reason,
             'timestamp': state_mod.now_iso(),
@@ -2392,12 +2441,12 @@ class StopMonitor:
         if not oid and fail_count >= 3:
             long_sym = self.state['long_leg']['symbol']
             try:
-                held_qty = self.broker.get_single_leg_position_qty(long_sym)
-                if held_qty <= 0:
+                pos = self.broker.get_single_leg_position_qty(long_sym)
+                if pos is not None and isinstance(pos, (int, float)) and int(pos) <= 0:
                     log.warning(
                         'Long leg %s is flat (qty=%d) at broker after %d placement failures — auto-finalizing close',
                         long_sym,
-                        held_qty,
+                        int(pos),
                         fail_count,
                     )
                     self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
@@ -2430,12 +2479,29 @@ class StopMonitor:
         status = str(result.status).lower()
         if status == 'filled':
             if result.filled_price is not None:
-                self.state['long_close_price'] = float(result.filled_price)
+                fill_px = float(result.filled_price)
+                final_qty = int(result.filled_quantity or long_qty_for_state(self.state) or 1)
+                self.state['long_close_price'] = self._calculate_blended_long_close_price(fill_px, final_qty=final_qty)
             self._finalize_close(reason=self.state.get('close_mechanism') or 'stop_filled')
             return
 
         if status in ('cancelled', 'canceled', 'rejected', 'expired'):
             self.state.pop('long_close_order_id', None)
+            if result.filled_quantity and int(result.filled_quantity) > 0:
+                partial_qty = int(result.filled_quantity)
+                partial_price = float(result.filled_price or existing_limit or 0.0)
+                partial_fills = self.state.setdefault('long_partial_fills', [])
+                if not any(str(p.get('order_id')) == str(oid) for p in partial_fills):
+                    partial_fills.append({
+                        'order_id': str(oid),
+                        'qty': partial_qty,
+                        'price': partial_price,
+                        'timestamp': state_mod.now_iso(),
+                    })
+            if long_qty_for_state(self.state) <= 0:
+                self.state['long_close_price'] = self._calculate_blended_long_close_price()
+                self._finalize_close(reason=self.state.get('close_mechanism') or 'stop_filled')
+                return
             if quote.mid is None:
                 self._mark_long_close_blocked(quote.source)
                 return
@@ -2501,22 +2567,33 @@ class StopMonitor:
     def _place_long_close_market(self) -> None:
         """Escalate to market order after too many chase attempts."""
         long_sym = self.state['long_leg']['symbol']
+        held_qty = None
         try:
-            held_qty = self.broker.get_single_leg_position_qty(long_sym)
-            if held_qty <= 0:
-                log.warning(
-                    'Cannot place long close market: position for %s is already flat/short (qty=%d) — auto-finalizing close',
-                    long_sym,
-                    held_qty,
-                )
-                self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
-                return
+            pos = self.broker.get_single_leg_position_qty(long_sym)
+            if pos is not None and isinstance(pos, (int, float)):
+                held_qty = int(pos)
+                if held_qty <= 0:
+                    log.warning(
+                        'Cannot place long close market: position for %s is already flat/short (qty=%d) — auto-finalizing close',
+                        long_sym,
+                        held_qty,
+                    )
+                    self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+                    return
         except Exception as exc:
             log.warning('Broker position verification check failed in _place_long_close_market: %s', exc)
             held_qty = None
 
-        desired_qty = stop_qty_for_state(self.state)
+        desired_qty = long_qty_for_state(self.state)
         qty = min(desired_qty, held_qty) if held_qty is not None and held_qty > 0 else desired_qty
+        if qty <= 0:
+            log.warning(
+                'Cannot place long close market: qty is <= 0 (desired=%s, held=%s) — auto-finalizing close',
+                desired_qty,
+                held_qty,
+            )
+            self._finalize_close(reason=self.state.get('close_mechanism') or 'position_flat')
+            return
         result = self.broker.place_market_order('SELL_TO_CLOSE', long_sym, qty)
         if result.success:
             self.state['long_close_order_id'] = result.order_id

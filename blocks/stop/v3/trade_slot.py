@@ -69,6 +69,10 @@ def merge_policy(memory: Dict[str, Any], disk: Dict[str, Any]) -> Dict[str, Any]
         'stop_quantity',
         'scale_outs',
         'open_order',
+        'short_remaining_qty',
+        'short_partial_fills',
+        'long_remaining_qty',
+        'long_partial_fills',
     ):
         if key in disk:
             merged[key] = disk[key]
