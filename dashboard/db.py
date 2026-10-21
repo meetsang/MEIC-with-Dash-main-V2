@@ -252,6 +252,12 @@ def _refresh_daily_summary(conn, date):
         "UPDATE daily_summary SET updated_at = ? WHERE date = ?",
         (central_now_iso(), date),
     )
+    try:
+        from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        export_strategy_daily_pnl_csv(root)
+    except Exception:
+        pass
 
 def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, paper_only=False):
     sql = "SELECT * FROM trades"

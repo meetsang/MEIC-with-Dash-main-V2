@@ -30,7 +30,7 @@ def _central_now_str():
 
 from typing import Optional
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 from flask_socketio import SocketIO
 import paho.mqtt.client as mqtt
 
@@ -189,10 +189,33 @@ def read_json_safe(path):
         return None
 
 
-def tail_log(path, n=40):
+def tail_log(path, n=40, buffer_size=65536):
+    """Read the last n lines of path safely without reading the entire file into RAM."""
     try:
-        with open(path, errors='replace') as f:
-            lines = f.readlines()
+        if not os.path.isfile(path):
+            return '(log not available)'
+        file_size = os.path.getsize(path)
+        if file_size == 0:
+            return ''
+        with open(path, 'rb') as f:
+            if file_size <= buffer_size:
+                data = f.read()
+            else:
+                lines_found = 0
+                seek_offset = 0
+                chunks = []
+                while seek_offset < file_size and lines_found <= n:
+                    read_size = min(buffer_size, file_size - seek_offset)
+                    seek_offset += read_size
+                    f.seek(file_size - seek_offset)
+                    chunk = f.read(read_size)
+                    chunks.append(chunk)
+                    lines_found += chunk.count(b'\n')
+                    if seek_offset >= file_size or lines_found > n:
+                        break
+                data = b''.join(reversed(chunks))
+        text = data.decode('utf-8', errors='replace')
+        lines = text.splitlines(keepends=True)
         return ''.join(lines[-n:])
     except Exception:
         return '(log not available)'
@@ -552,7 +575,7 @@ def _counts_toward_meic_day_pnl(row, trade, display_state: str) -> bool:
         return False
     if display_state not in MEIC_GRID_PNL_STATES:
         return False
-    if getattr(row, 'state', '') == 'failed' and not getattr(row, 'trade_path', ''):
+    if getattr(row, 'state', '') in ('failed', 'unfilled') and not getattr(row, 'trade_path', ''):
         return False
     return True
 
@@ -566,7 +589,7 @@ def _resolve_trade_for_row(row, active_trades, for_date=None):
                 state['_filepath'] = resolved
                 state['_filename'] = os.path.basename(resolved)
                 return state
-    if getattr(row, 'state', '') == 'failed':
+    if getattr(row, 'state', '') in ('failed', 'unfilled'):
         return None
     matching = [t for t in active_trades if _match_trade_to_slot(t, row.lot, row.side, for_date=for_date)]
     return pick_best_trade(matching)
@@ -593,8 +616,8 @@ def _session_display_state(row, trade) -> str:
         return 'waiting_rest_probe'
     if row.state == 'blocked_rest':
         return 'blocked_rest'
-    if row.state == 'failed':
-        return 'failed'
+    if row.state in ('failed', 'unfilled'):
+        return row.state
     if trade:
         entry = trade.get('entry') or {}
         return _slot_state_from_trade(
@@ -958,20 +981,18 @@ def _drma_hm_today_pnl() -> float:
 
 
 def _resolve_strategy_config(name: str):
+    lookup_name = 'DRMA_HM_SPX' if name in ('DRMA_HM_DIR', 'DRMA_HM_NONDIR', 'DRMA_HM_FUT') else name
+    from strategies.loader import load_strategies
+    for strat, cfg in load_strategies(include_disabled=True):
+        if cfg.name == lookup_name:
+            return strat, cfg, type(cfg)
     if name in ('DRMA_HM_SPX', 'DRMA_HM_DIR', 'DRMA_HM_NONDIR', 'DRMA_HM_FUT'):
         try:
-            import importlib, sys
-            if 'strategies.drma_hm.config' in sys.modules:
-                importlib.reload(sys.modules['strategies.drma_hm.config'])
             from strategies.drma_hm.config import DRMAHMConfig
             from strategies.drma_hm.strategy import DRMAHMStrategy
             return DRMAHMStrategy(), DRMAHMConfig(), DRMAHMConfig
         except Exception:
             pass
-    from strategies.loader import load_strategies
-    for strat, cfg in load_strategies(include_disabled=True):
-        if cfg.name == name:
-            return strat, cfg, type(cfg)
     if name == 'MANUAL_SPREAD':
         try:
             from strategies.manual_spread.strategy import ManualSpreadStrategy, ManualSpreadConfig
@@ -1151,6 +1172,10 @@ def _set_strategy_control(name: str, *, enabled: Optional[bool] = None, paper: O
                 updates['paper'] = bool(paper)
                 if name in ('IRON_FLY_SPX', 'IRON_FLY_XSP'):
                     updates['mode'] = 'PAPER' if paper else 'LIVE_AUTO'
+                elif name == 'DRMA_HM_SPX':
+                    updates['dir_paper'] = bool(paper)
+                    updates['non_dir_paper'] = bool(paper)
+                    updates['futures_paper'] = bool(paper)
             if updates:
                 set_overrides(name, ROOT, updates, cfg_cls)
 
@@ -1166,10 +1191,6 @@ def _set_strategy_control(name: str, *, enabled: Optional[bool] = None, paper: O
 
 
 def build_summary():
-    active_trades = _read_active_trades()
-    bot_status = read_bot_status()
-    session_plan = _meic_session_rows()
-
     from common.expiry_settlement import ensure_spx_settlement_close, get_spx_settlement_close, settlement_cutoff_reached
     from common.session_cleanup import central_today
 
@@ -1186,6 +1207,10 @@ def build_summary():
             active_trades = _read_active_trades()
     except Exception as exc:
         log.warning('Pre-market auto-cleanup failed: %s', exc)
+
+    active_trades = _read_active_trades()
+    bot_status = read_bot_status()
+    session_plan = _meic_session_rows()
 
     spx_settle = get_spx_settlement_close(today, root=ROOT)
     if spx_settle is None and settlement_cutoff_reached(today):
@@ -2174,6 +2199,27 @@ def api_history_sync():
     return jsonify(result)
 
 
+@app.route('/api/history/pnl_csv')
+def api_history_pnl_csv():
+    """Download consolidated strategy daily P&L spreadsheet as CSV."""
+    from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+    csv_path = export_strategy_daily_pnl_csv(ROOT)
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return Response(
+        content,
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=strategy_daily_pnl.csv'},
+    )
+
+
+@app.route('/api/history/daily_strategy_summary')
+def api_history_daily_strategy_summary():
+    """Return lightweight daily summary grouped across all strategies."""
+    from dashboard.strategy_pnl_csv import build_daily_strategy_summary
+    return jsonify(build_daily_strategy_summary(ROOT))
+
+
 @app.route('/api/daily_summary')
 def api_daily_summary():
     _maybe_sync_history(ROOT)
@@ -2345,24 +2391,13 @@ def api_skyline_today():
                     pass
         attach_dollar_pnl_display(trade)
 
-    history = []
-    if os.path.isdir(hist_dir):
-        for path in sorted(glob.glob(os.path.join(hist_dir, 'skyline_*.json')), reverse=True)[:30]:
-            try:
-                with open(path, encoding='utf-8') as f:
-                    row = json.load(f)
-                attach_dollar_pnl_display(row)
-                history.append(row)
-            except (OSError, json.JSONDecodeError):
-                continue
-
     return jsonify({
         'strategy': trades_layout.STRATEGY_SKYLINE,
         'paper': paper,
         'date': today,
         'session': session,
         'trade': trade,
-        'history': history,
+        'history': [],
     })
 
 
@@ -2396,7 +2431,7 @@ def api_perma_bull_today():
         'date': today,
         'session': session,
         'trade': trade,
-        'history': _perma_bull_history_rows(),
+        'history': [],
     })
 
 
@@ -2456,24 +2491,13 @@ def api_mean_reversion_today():
                     pass
         attach_dollar_pnl_display(trade)
 
-    history = []
-    if os.path.isdir(hist_dir):
-        for path in sorted(glob.glob(os.path.join(hist_dir, 'mean_reversion_*.json')), reverse=True)[:30]:
-            try:
-                with open(path, encoding='utf-8') as f:
-                    row = json.load(f)
-                attach_dollar_pnl_display(row)
-                history.append(row)
-            except (OSError, json.JSONDecodeError):
-                continue
-
     return jsonify({
         'strategy': trades_layout.STRATEGY_MEAN_REVERSION,
         'paper': paper,
         'date': today,
         'session': session,
         'trade': trade,
-        'history': history,
+        'history': [],
     })
 
 

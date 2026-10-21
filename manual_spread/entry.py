@@ -594,7 +594,7 @@ def _is_test_trade_dict(trade: Dict[str, Any], path: str = '') -> bool:
     return is_test_trade(trade, filepath)
 
 
-def _iter_manual_history_paths() -> List[str]:
+def _iter_manual_history_paths(for_date: Optional[str] = None) -> List[str]:
     """JSON paths under manual spread history (flat + YYYY-MM-DD subdirs)."""
     paths: List[str] = []
     hist = state_mod.manual_spread_closed_dir()
@@ -606,6 +606,8 @@ def _iter_manual_history_paths() -> List[str]:
             paths.append(path)
             continue
         if not os.path.isdir(path) or len(name) != 10 or name[4] != '-':
+            continue
+        if for_date is not None and name != for_date:
             continue
         for sub in sorted(os.listdir(path)):
             if sub.endswith('.json'):
@@ -694,7 +696,7 @@ def load_dashboard_manual_trades() -> List[Dict[str, Any]]:
         if _keep(st, by_key.get(key)):
             by_key[key] = st
 
-    for path in _iter_manual_history_paths():
+    for path in _iter_manual_history_paths(for_date=today):
         name = os.path.basename(path)
         st = _load_trade_file(path, name)
         if not st or _is_test_trade_dict(st, path):

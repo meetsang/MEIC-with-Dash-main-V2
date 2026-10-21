@@ -791,6 +791,7 @@
   .state-breached { color:#f97316; }
   .state-expired  { color:#a78bfa; }
   .state-profit_target { color:#22c55e; }
+  .state-unfilled { color:#94a3b8; }
 
   .state-bg-pending  { }
   .state-bg-open     { background:rgba(34,197,94,.06); }
@@ -801,6 +802,7 @@
   .state-bg-breached { background:rgba(249,115,22,.08); }
   .state-bg-expired  { background:rgba(167,139,250,.08); }
   .state-bg-profit_target { background:rgba(34,197,94,.06); }
+  .state-bg-unfilled { background:rgba(148,163,184,.06); }
 
   /* Manual spread — scan candidates (Bootstrap text-muted is too dark on #1a1d27) */
   #ms-candidates tr.ms-cand-row td {
@@ -1394,7 +1396,7 @@
     <div id="strategy-skyline" class="strategy-panel" data-visible="false" style="display:none;">
       <div id="control-bar-SKYLINE_SPX" class="strategy-control-bar-container"></div>
       <div class="alert alert-secondary mb-3" style="border-radius:10px;border-color:#2d3148;background:#22263a;color:#e2e8f0;" id="skyline-weekend-note">
-        <i class="bi bi-calendar-week me-2"></i>Dashboard works on weekends — review paper history below. No new Skyline entry until the next session day.
+        <i class="bi bi-calendar-week me-2"></i>Dashboard active on weekends — review paper history on the History tab. No new Skyline entry until the next session day.
       </div>
       <div class="alert alert-info mb-3" style="border-radius:10px;" id="skyline-header-alert">
         <strong id="skyline-header-title">Skyline</strong> — four-butterfly 0DTE strategy. P/L is tracked separately from live MEIC/Manual totals.
@@ -1474,17 +1476,6 @@
           </table>
         </div>
       </div>
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Recent History</div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0 skyline-table">
-            <thead><tr>
-              <th>Date</th><th>Status</th><th>ATM</th><th>Realized P/L</th><th>Paper</th>
-            </tr></thead>
-            <tbody id="skyline-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
-          </table>
-        </div>
-      </div>
     </div><!-- /strategy-skyline -->
 
     <div id="strategy-perma-bull" class="strategy-panel" data-visible="false" style="display:none;">
@@ -1527,17 +1518,6 @@
               <th>Structure</th><th>Strikes</th><th>Status</th><th>Credit</th><th>P/L</th>
             </tr></thead>
             <tbody id="perma-bull-spread"><tr><td colspan="5" class="text-muted text-center py-3">No data</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Recent History</div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0 perma-bull-table">
-            <thead><tr>
-              <th>Date</th><th>Status</th><th>Strikes</th><th>Credit</th><th>Realized P/L</th>
-            </tr></thead>
-            <tbody id="perma-bull-history"><tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1604,18 +1584,6 @@
               <th>Time</th><th>Signal</th><th>SPX Spot</th><th>EM Level</th><th>Strikes</th><th>Delta</th><th>Credit Offered</th><th>Min Required</th><th>Reason</th>
             </tr></thead>
             <tbody id="mean-reversion-skipped-tbody"><tr><td colspan="9" class="text-muted text-center py-3">No skipped triggers today</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Recent History</div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0 mean-reversion-table">
-            <thead><tr>
-              <th>Date</th><th>Side</th><th>Signal</th><th>Strikes</th><th>Credit</th><th>Exit Price</th><th>Reason</th><th>Realized P/L</th>
-            </tr></thead>
-            <tbody id="mean-reversion-history"><tr><td colspan="8" class="text-muted text-center py-3">No history</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1703,9 +1671,9 @@
         </div>
       </div>
 
-      <!-- Recent History / Closed Flies -->
+      <!-- Today's Closed Flies -->
       <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Closed &amp; Expired Flies</div>
+        <div class="card-header"><i class="bi bi-clock-history me-2 text-info"></i>Today's Closed Flies</div>
         <div class="table-responsive">
           <table class="table table-sm mb-0 iron-fly-table">
             <thead><tr>
@@ -1812,9 +1780,9 @@
         </div>
       </div>
 
-      <!-- Recent History / Closed Flies -->
+      <!-- Today's Closed Flies -->
       <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-        <div class="card-header">Closed &amp; Expired XSP Flies</div>
+        <div class="card-header"><i class="bi bi-clock-history me-2 text-info"></i>Today's Closed XSP Flies</div>
         <div class="table-responsive">
           <table class="table table-sm mb-0 iron-fly-xsp-table">
             <thead><tr>
@@ -1846,7 +1814,7 @@
       <div id="control-bar-DRMA_HM_SPX" class="strategy-control-bar-container"></div>
       <!-- Weekend Note -->
       <div class="alert alert-secondary mb-3 d-none" style="border-radius:10px;border-color:#2d3148;background:#22263a;color:#e2e8f0;" id="drma-hm-weekend-note">
-        <i class="bi bi-calendar-week me-2"></i>Dashboard active on weekends — review paper history &amp; indicators below. No new live entries until the regular market session (08:30–15:00 CT).
+        <i class="bi bi-calendar-week me-2"></i>Dashboard active on weekends — review paper history on the History tab. No new live entries until the regular market session (08:30–15:00 CT).
       </div>
 
       <!-- Strategy Header Alert -->
@@ -2034,7 +2002,6 @@
                 <div class="col-12">
                   <label class="form-label small mb-1">Execution Mode</label>
                   <select id="drma-hm-ov-nondir-paper" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-                    <option value="">Inherit Strategy Default</option>
                     <option value="true">Paper Trading (Simulated Fills)</option>
                     <option value="false">Live Trading (Real Orders)</option>
                   </select>
@@ -2071,9 +2038,15 @@
                 <div class="col-12">
                   <label class="form-label small mb-1">Execution Mode</label>
                   <select id="drma-hm-ov-dir-paper" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-                    <option value="">Inherit Strategy Default</option>
                     <option value="true">Paper Trading (Simulated Fills)</option>
                     <option value="false">Live Trading (Real Orders)</option>
+                  </select>
+                </div>
+                <div class="col-12">
+                  <label class="form-label small mb-1" title="If active Non-Directional trade is open on the same side, block new Directional trade. Only blocks when BOTH are Live or BOTH are Paper.">Same-Side Non-Dir Lock</label>
+                  <select id="drma-hm-ov-dir-block-same-side" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                    <option value="true">Block Dir if Non-Dir on same side (when both Live/Paper)</option>
+                    <option value="false">Allow Concurrent Entries (Never Block)</option>
                   </select>
                 </div>
                 <div class="col-6 col-sm-3 col-lg-6">
@@ -2108,7 +2081,6 @@
                 <div class="col-12">
                   <label class="form-label small mb-1">Execution Mode</label>
                   <select id="drma-hm-ov-fut-paper" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-                    <option value="">Inherit Strategy Default</option>
                     <option value="true">Paper Trading (Simulated Fills)</option>
                     <option value="false">Live Trading (Real Orders)</option>
                   </select>
@@ -2791,44 +2763,6 @@
             </tbody>
           </table>
         </div>
-      </div>
-    </div>
-
-    <!-- ═══ HISTORICAL TRADES & SIGNALS ARCHIVE (SEPARATE SECTION) ═══ -->
-    <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <div class="d-flex align-items-center gap-2">
-          <span class="fw-bold text-muted"><i class="bi bi-archive me-2 text-secondary"></i>Historical Trades &amp; Signals Archive</span>
-          <span class="badge bg-secondary font-monospace" id="clone-hist-badge">0 HISTORICAL</span>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="clearCloneHistory('historical')" style="font-size:0.75rem;" title="Clear historical archive entries while keeping today's session">
-            <i class="bi bi-trash me-1"></i>Clear Historical Archive
-          </button>
-        </div>
-      </div>
-      <div class="card-body p-0">
-        <div class="table-responsive">
-          <table class="table table-hover mb-0 history-table" style="font-size:0.83rem;">
-            <thead>
-              <tr>
-                <th>Date &amp; Time (CST)</th>
-                <th>Option / Spec</th>
-                <th>Alert Px</th>
-                <th>Market @ Signal</th>
-                <th>Premium Diff</th>
-                <th>Status</th>
-                <th>Realized P&amp;L</th>
-                <th>Exit Reason &amp; Time (CST)</th>
-                <th class="text-end">Manual Action</th>
-              </tr>
-            </thead>
-            <tbody id="clone-history-tbody">
-              <tr><td colspan="9" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
 
   </div><!-- /strategy-clone-trades -->
@@ -3179,10 +3113,16 @@
       <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div class="d-flex align-items-center gap-2">
           <span><i class="bi bi-table me-2 text-info"></i>All Trades</span>
-          <span class="badge bg-secondary" id="hist-trades-count-badge">0 trades</span>
+          <span class="badge bg-secondary" id="hist-trades-count-badge">Standby</span>
           <small class="text-muted ms-1" id="hist-money-note">(live + paper)</small>
         </div>
         <div class="d-flex gap-2 align-items-center flex-wrap">
+          <a href="/api/history/pnl_csv" class="btn btn-sm btn-outline-info" download="strategy_daily_pnl.csv" title="Download daily strategy P&L spreadsheet (CSV)">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>P&L Spreadsheet (CSV)
+          </a>
+          <button id="btn-pull-hdr" class="btn btn-sm btn-outline-success" onclick="pullHistoryTransactions()" title="Pull transactions on demand">
+            <i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions
+          </button>
           <!-- In-table search input -->
           <div class="input-group input-group-sm" style="width:220px;">
             <span class="input-group-text bg-dark border-secondary text-muted" style="border-color:#2d3550!important;"><i class="bi bi-search"></i></span>
@@ -3233,9 +3173,41 @@
               <th>Qty</th><th>Credit</th><th>Debit</th><th>P&amp;L</th><th>Status</th><th></th>
             </tr></thead>
             <tbody id="history-tbody">
-              <tr><td colspan="13" class="text-center text-muted py-3">Loading&hellip;</td></tr>
+              <tr>
+                <td colspan="13" class="text-center py-5" style="color:#94a3b8;">
+                  <div class="mb-2"><i class="bi bi-shield-check text-info fs-3"></i></div>
+                  <div class="fw-semibold text-light mb-1 fs-6">Transactions on Standby (Memory Saver Mode)</div>
+                  <div class="small mb-3" style="max-width: 500px; margin: 0 auto; color: #94a3b8;">
+                    Live trading dashboard runs with zero historical data in memory. Click below to pull and view transactions on demand.
+                  </div>
+                  <div class="d-flex justify-content-center gap-2 flex-wrap">
+                    <button class="btn btn-sm btn-primary px-3" onclick="pullHistoryTransactions()">
+                      <i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions
+                    </button>
+                    <a href="/api/history/pnl_csv" class="btn btn-sm btn-outline-info px-3" download="strategy_daily_pnl.csv">
+                      <i class="bi bi-file-earmark-spreadsheet me-1"></i>Download P&L Spreadsheet (CSV)
+                    </a>
+                  </div>
+                </td>
+              </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Bottom On-Demand Pull / Pagination Footer -->
+        <div id="hist-pull-footer" class="p-2 px-3 d-flex justify-content-between align-items-center bg-dark border-top border-secondary flex-wrap gap-2" style="border-color:#282f45!important;">
+          <div class="d-flex align-items-center gap-2">
+            <span class="small text-muted" id="hist-pull-status">Ready to load transactions</span>
+            <span class="badge bg-secondary" id="hist-pull-mode-badge">Standby</span>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" id="btn-pull-more" onclick="pullMoreTransactions()" style="display:none;">
+              <i class="bi bi-arrow-down-circle me-1"></i>Pull More (Next 100)
+            </button>
+            <button class="btn btn-sm btn-primary" id="btn-pull-bottom" onclick="pullHistoryTransactions()">
+              <i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -4206,13 +4178,13 @@ const STATE_DOT = {
   pending:'dot-grey', open:'dot-green', closing:'dot-blue', working:'dot-yellow',
   closed:'dot-grey', killed:'dot-red', paused:'dot-yellow', breached:'dot-orange',
   expired:'dot-grey', profit_target:'dot-green', entering:'dot-yellow', placing:'dot-yellow',
-  waiting_rest_probe:'dot-yellow', blocked_rest:'dot-red', failed:'dot-red'
+  waiting_rest_probe:'dot-yellow', blocked_rest:'dot-red', failed:'dot-red', unfilled:'dot-grey'
 };
 const STATE_LABEL = {
   pending:'Pending', open:'Open', closing:'Closing', working:'Working',
   closed:'Closed', killed:'Killed', paused:'Paused', breached:'Breached',
   expired:'Expired', profit_target:'Profit Target', entering:'Entering...', placing:'Placing...',
-  waiting_rest_probe:'Waiting Probe', blocked_rest:'Gate Blocked', failed:'Failed'
+  waiting_rest_probe:'Waiting Probe', blocked_rest:'Gate Blocked', failed:'Failed', unfilled:'Unfilled by Broker'
 };
 
 let msSelected = null;
@@ -5633,7 +5605,7 @@ function renderHealth(h) {
 
 function spreadRowHasData(s) {
   const st = s.state || 'pending';
-  return ['open', 'closing', 'breached', 'working', 'closed', 'killed', 'expired', 'profit_target', 'entering', 'placing', 'waiting_rest_probe', 'blocked_rest', 'failed'].includes(st);
+  return ['open', 'closing', 'breached', 'working', 'closed', 'killed', 'expired', 'profit_target', 'entering', 'placing', 'waiting_rest_probe', 'blocked_rest', 'failed', 'unfilled'].includes(st);
 }
 
 function spreadGridDataCells(s, hasData, showLive, opts = {}) {
@@ -5742,12 +5714,14 @@ function renderGrid(grid) {
     const showLive = ['open','closing','breached'].includes(st) && !s.pnl_frozen;
     const legBadge = gridLegBadge(s, hasData);
     const gridChecked = gridSelectedSlots.has(s.slot_key) ? ' checked' : '';
+    const canSelect = ['open', 'closing', 'pending'].includes(st);
+    const cbDisabled = canSelect ? '' : ' disabled style="cursor:not-allowed;opacity:0.35;"';
 
     html += `<tr class="tranche-row ${bgCls}">
-      <td><input type="checkbox" class="form-check-input slot-cb" data-slot="${s.slot_key}" data-state="${st}" data-filename="${s._filename || ''}"${gridChecked} onchange="gridSlotCheckboxChange(this)" style="cursor:pointer;"></td>
+      <td><input type="checkbox" class="form-check-input slot-cb" data-slot="${s.slot_key}" data-state="${st}" data-filename="${s._filename || ''}"${gridChecked}${cbDisabled} onchange="gridSlotCheckboxChange(this)" style="cursor:${canSelect ? 'pointer' : 'not-allowed'};"></td>
       <td><span class="badge-lot">${s.lot}</span></td>
       <td>${legBadge}</td>
-      <td><span class="status-dot ${dotCls}"></span><span class="${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span></td>
+      <td><span class="status-dot ${dotCls}"></span><span class="${stateCls} fw-semibold">${STATE_LABEL[st] || st}</span>${s.error ? `<div class="text-danger small" style="font-size:0.68rem;line-height:1.15;margin-top:2px;max-width:180px;word-break:break-word;" title="${String(s.error).replace(/"/g, '&quot;')}">${String(s.error).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}</td>
       ${spreadGridDataCells(s, hasData, showLive, { showExitTime: true })}
     </tr>`;
   }
@@ -6110,7 +6084,7 @@ function renderSessionPlan(grid) {
       </td>
       <td class="text-center"><input type="checkbox" class="form-check-input" data-field="paused" ${paused ? 'checked' : ''} title="Pause this slot (Save All or Pause Selected)"></td>
       <td class="text-center"><input type="checkbox" class="form-check-input" data-field="skip" ${skip ? 'checked' : ''} ${editable ? '' : 'disabled'}></td>
-      <td><span class="state-${st} small fw-semibold">${STATE_LABEL[st] || st}</span>${paused ? ' <span class="badge bg-secondary" style="font-size:.6rem;">paused</span>' : ''}</td>
+      <td><span class="state-${st} small fw-semibold">${STATE_LABEL[st] || st}</span>${paused ? ' <span class="badge bg-secondary" style="font-size:.6rem;">paused</span>' : ''}${s.error ? `<div class="text-danger small" style="font-size:0.68rem;line-height:1.15;margin-top:2px;max-width:180px;word-break:break-word;" title="${String(s.error).replace(/"/g, '&quot;')}">${String(s.error).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}</td>
       <td>${action}</td>
     </tr>`;
   }
@@ -7456,6 +7430,8 @@ let activeHistoryStrategy = '';
 let activeHistoryMoney = 'all';
 let activeHistoryDate = '';
 let histRequestSeq = 0;
+let histTransactionsPulled = false;
+let histLoadedLimit = 100;
 
 const STRATEGY_DISPLAY_NAMES = {
   '': 'All Strategies',
@@ -7585,7 +7561,11 @@ function syncHistoryDateFilters(value) {
 
 function setHistoryStrategyFilter(strat) {
   syncHistoryStrategyFilters(strat);
-  loadHistoryTrades();
+  if (histTransactionsPulled || activeHistoryDate) {
+    loadHistoryTrades();
+  } else {
+    renderHistoryPlaceholder();
+  }
   populateTradingSessionsDropdown(activeHistoryStrategy);
   loadHistoryStats();
   loadHistoryChart();
@@ -7594,7 +7574,16 @@ function setHistoryStrategyFilter(strat) {
 
 function setHistoryDateFilter(dateVal) {
   syncHistoryDateFilters(dateVal);
-  loadHistoryTrades();
+  if (dateVal) {
+    histTransactionsPulled = true;
+    loadHistoryTrades();
+  } else {
+    if (histTransactionsPulled) {
+      loadHistoryTrades();
+    } else {
+      renderHistoryPlaceholder();
+    }
+  }
 }
 
 function clearHistoryDateFilter() {
@@ -7613,7 +7602,11 @@ function resetAllHistoryFilters() {
   syncHistoryStrategyFilters('');
   syncHistoryMoneyFilters('all');
   syncHistoryDateFilters('');
-  loadHistoryTrades();
+  if (histTransactionsPulled) {
+    loadHistoryTrades();
+  } else {
+    renderHistoryPlaceholder();
+  }
   populateTradingSessionsDropdown('');
   loadHistoryStats();
   loadHistoryChart();
@@ -7630,7 +7623,11 @@ function onHistoryStrategyChange(value) {
 
 function onHistoryMoneyChange(value) {
   syncHistoryMoneyFilters(value);
-  loadHistoryTrades();
+  if (histTransactionsPulled || activeHistoryDate) {
+    loadHistoryTrades();
+  } else {
+    renderHistoryPlaceholder();
+  }
   loadHistoryStats();
   loadHistoryChart();
   loadCalendarData(activeHistoryStrategy);
@@ -7994,11 +7991,81 @@ function historyQuerySuffix(stratFilter, moneyFilter) {
   return params.length ? '?' + params.join('&') : '';
 }
 
+function renderHistoryPlaceholder() {
+  const tbody = document.getElementById('history-tbody');
+  if (!tbody) return;
+  const countBadge = document.getElementById('hist-trades-count-badge');
+  if (countBadge) countBadge.textContent = 'Standby';
+  const hubBadge = document.getElementById('hub-trades-badge');
+  if (hubBadge) hubBadge.textContent = '—';
+  
+  const moreBtn = document.getElementById('btn-pull-more');
+  if (moreBtn) moreBtn.style.display = 'none';
+  const bottomPullBtn = document.getElementById('btn-pull-bottom');
+  if (bottomPullBtn) bottomPullBtn.style.display = 'inline-block';
+  const pullStatus = document.getElementById('hist-pull-status');
+  if (pullStatus) pullStatus.textContent = 'Transactions on standby (Memory Saver)';
+  const modeBadge = document.getElementById('hist-pull-mode-badge');
+  if (modeBadge) modeBadge.textContent = 'Standby';
+
+  tbody.innerHTML = `
+    <tr>
+      <td colspan="13" class="text-center py-5" style="color:#94a3b8;">
+        <div class="mb-2"><i class="bi bi-shield-check text-info fs-3"></i></div>
+        <div class="fw-semibold text-light mb-1 fs-6">Transactions on Standby (Memory Saver Mode)</div>
+        <div class="small mb-3" style="max-width: 500px; margin: 0 auto; color: #94a3b8;">
+          Live trading dashboard runs with zero historical data in memory. Click below to pull and view transactions on demand.
+        </div>
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+          <button class="btn btn-sm btn-primary px-3" onclick="pullHistoryTransactions()">
+            <i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions
+          </button>
+          <a href="/api/history/pnl_csv" class="btn btn-sm btn-outline-info px-3" download="strategy_daily_pnl.csv">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>Download P&L Spreadsheet (CSV)
+          </a>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function pullHistoryTransactions() {
+  histTransactionsPulled = true;
+  histLoadedLimit = 100;
+  loadHistoryTrades();
+}
+
+function pullMoreTransactions() {
+  histTransactionsPulled = true;
+  histLoadedLimit += 100;
+  loadHistoryTrades();
+}
+
 async function loadHistoryTrades() {
+  if (!histTransactionsPulled && !activeHistoryDate) {
+    renderHistoryPlaceholder();
+    return;
+  }
   const thisSeq = ++histRequestSeq;
   const tbody = document.getElementById('history-tbody');
+  const footer = document.getElementById('hist-pull-footer');
+  const statusEl = document.getElementById('hist-pull-status');
+  const moreBtn = document.getElementById('btn-pull-more');
+  const bottomPullBtn = document.getElementById('btn-pull-bottom');
+  const hdrBtn = document.getElementById('btn-pull-hdr');
+  const modeBadge = document.getElementById('hist-pull-mode-badge');
 
-  let url = '/api/history?limit=300';
+  if (hdrBtn) {
+    hdrBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span>Loading...';
+    hdrBtn.disabled = true;
+  }
+  if (bottomPullBtn) {
+    bottomPullBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span>Loading...';
+    bottomPullBtn.disabled = true;
+  }
+
+  const limit = activeHistoryDate ? 500 : histLoadedLimit;
+  let url = `/api/history?limit=${limit}`;
   if (activeHistoryStrategy) url += `&strategy=${encodeURIComponent(activeHistoryStrategy)}`;
   if (activeHistoryDate) url += `&date=${encodeURIComponent(activeHistoryDate)}`;
   if (activeHistoryMoney) url += `&money=${encodeURIComponent(activeHistoryMoney)}`;
@@ -8012,6 +8079,16 @@ async function loadHistoryTrades() {
     if (Array.isArray(trades)) {
       histLoadedTrades = trades;
       renderHistoryTable();
+      if (modeBadge) modeBadge.textContent = 'Active';
+      if (statusEl) {
+        statusEl.textContent = `Loaded ${trades.length} trade${trades.length === 1 ? '' : 's'}${trades.length >= limit ? ` (showing latest ${limit})` : ' (all available)'}`;
+      }
+      if (moreBtn) {
+        moreBtn.style.display = (!activeHistoryDate && trades.length >= limit) ? 'inline-block' : 'none';
+      }
+      if (bottomPullBtn) {
+        bottomPullBtn.style.display = 'none';
+      }
     } else {
       throw new Error('Invalid trade array');
     }
@@ -8020,6 +8097,15 @@ async function loadHistoryTrades() {
     console.error('History trades fetch error:', e);
     if (tbody) {
       tbody.innerHTML = `<tr><td colspan="13" class="text-center text-danger py-3"><i class="bi bi-exclamation-triangle me-1"></i>Failed to load trades (${e.message || e})</td></tr>`;
+    }
+  } finally {
+    if (hdrBtn) {
+      hdrBtn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions';
+      hdrBtn.disabled = false;
+    }
+    if (bottomPullBtn) {
+      bottomPullBtn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Pull Transactions';
+      bottomPullBtn.disabled = false;
     }
   }
 }
@@ -8136,7 +8222,11 @@ async function loadHistory() {
   syncHistoryMoneyFilters(activeHistoryMoney);
   syncHistoryDateFilters(activeHistoryDate);
 
-  loadHistoryTrades();
+  if (histTransactionsPulled || activeHistoryDate) {
+    loadHistoryTrades();
+  } else {
+    renderHistoryPlaceholder();
+  }
   loadHistoryStats();
   loadHistoryChart();
   loadCalendarData(activeHistoryStrategy);
@@ -8892,7 +8982,7 @@ function renderSkyline(data) {
   const pnlEl = document.getElementById('skyline-pnl');
   const tbody = document.getElementById('skyline-structures');
   const histBody = document.getElementById('skyline-history');
-  if (!statusEl || !pnlEl || !tbody || !histBody) {
+  if (!statusEl || !pnlEl || !tbody) {
     console.error('Skyline DOM nodes missing — hard refresh the dashboard');
     return;
   }
@@ -8968,19 +9058,21 @@ function renderSkyline(data) {
     `).join('');
   }
 
-  const history = data.history || [];
-  if (!history.length) {
-    histBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr>';
-  } else {
-    histBody.innerHTML = history.map(h => `
-      <tr>
-        <td>${h.date || '—'}</td>
-        <td>${(h.status || '—').toUpperCase()}</td>
-        <td>${h.atm != null ? h.atm : '—'}</td>
-        <td class="${pnlClass(h.realized_pnl_dollars ?? (h.realized_pnl_total || 0) * 100)}">${h.realized_pnl_total != null ? skylineDisplayPnl(h, 'realized_pnl_total', 'realized_pnl_dollars') : '—'}</td>
-        <td>${moneyBadge(h.paper !== false)}</td>
-      </tr>
-    `).join('');
+  if (histBody) {
+    const history = data.history || [];
+    if (!history.length) {
+      histBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No history</td></tr>';
+    } else {
+      histBody.innerHTML = history.map(h => `
+        <tr>
+          <td>${h.date || '—'}</td>
+          <td>${(h.status || '—').toUpperCase()}</td>
+          <td>${h.atm != null ? h.atm : '—'}</td>
+          <td class="${pnlClass(h.realized_pnl_dollars ?? (h.realized_pnl_total || 0) * 100)}">${h.realized_pnl_total != null ? skylineDisplayPnl(h, 'realized_pnl_total', 'realized_pnl_dollars') : '—'}</td>
+          <td>${moneyBadge(h.paper !== false)}</td>
+        </tr>
+      `).join('');
+    }
   }
 }
 
@@ -9074,7 +9166,7 @@ function renderPermaBull(data, cfg) {
   const pnlEl = document.getElementById('perma-bull-pnl');
   const tbody = document.getElementById('perma-bull-spread');
   const histBody = document.getElementById('perma-bull-history');
-  if (!statusEl || !pnlEl || !tbody || !histBody) return;
+  if (!statusEl || !pnlEl || !tbody) return;
 
   const navBadge = document.getElementById('perma-bull-nav-badge');
   const titleEl = document.getElementById('perma-bull-header-title');
@@ -9150,24 +9242,26 @@ function renderPermaBull(data, cfg) {
     `;
   }
 
-  const history = data.history || [];
-  if (!history.length) {
-    histBody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:#94a3b8;">No history</td></tr>';
-  } else {
-    histBody.innerHTML = history.map(h => {
-      const hStatus = String(h.status || '').toLowerCase();
-      const hBadge = hStatus === 'closed' ? 'bg-secondary' : (hStatus === 'open' ? 'bg-success' : 'bg-info');
-      const hPnl = h.realized_pnl_dollars || 0;
-      return `
-      <tr>
-        <td class="text-light">${h.date || '—'}</td>
-        <td><span class="badge ${hBadge}">${(h.status || '—').toUpperCase()}</span></td>
-        <td class="font-monospace text-light">${h.short_strike != null ? h.short_strike + '/' + h.long_strike : '—'}</td>
-        <td class="font-monospace text-light">${h.net_credit != null ? '$' + Number(h.net_credit).toFixed(2) : '—'}</td>
-        <td class="${pnlClass(hPnl)} fw-bold font-monospace">${fmtPnl(hPnl)}</td>
-      </tr>
-      `;
-    }).join('');
+  if (histBody) {
+    const history = data.history || [];
+    if (!history.length) {
+      histBody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:#94a3b8;">No history</td></tr>';
+    } else {
+      histBody.innerHTML = history.map(h => {
+        const hStatus = String(h.status || '').toLowerCase();
+        const hBadge = hStatus === 'closed' ? 'bg-secondary' : (hStatus === 'open' ? 'bg-success' : 'bg-info');
+        const hPnl = h.realized_pnl_dollars || 0;
+        return `
+        <tr>
+          <td class="text-light">${h.date || '—'}</td>
+          <td><span class="badge ${hBadge}">${(h.status || '—').toUpperCase()}</span></td>
+          <td class="font-monospace text-light">${h.short_strike != null ? h.short_strike + '/' + h.long_strike : '—'}</td>
+          <td class="font-monospace text-light">${h.net_credit != null ? '$' + Number(h.net_credit).toFixed(2) : '—'}</td>
+          <td class="${pnlClass(hPnl)} fw-bold font-monospace">${fmtPnl(hPnl)}</td>
+        </tr>
+        `;
+      }).join('');
+    }
   }
 }
 
@@ -9254,7 +9348,7 @@ function renderMeanReversion(data, cfg) {
   const triggerBadge = document.getElementById('mean-reversion-trigger-badge');
   const tbody = document.getElementById('mean-reversion-spread');
   const histBody = document.getElementById('mean-reversion-history');
-  if (!statusEl || !pnlEl || !tbody || !histBody) return;
+  if (!statusEl || !pnlEl || !tbody) return;
 
   const navBadge = document.getElementById('mean-reversion-nav-badge');
   const titleEl = document.getElementById('mean-reversion-header-title');
@@ -10274,17 +10368,24 @@ function drmaHmFillOverrideForm(cfg) {
   setVal('drma-hm-ov-pdc', 'manual_pdc');
 
   // Sub-strategy Execution Modes (Paper vs Live)
-  const dPaper = ov['dir_paper'] != null ? ov['dir_paper'] : eff['dir_paper'];
+  const fallbackPaper = (ov['paper'] != null ? ov['paper'] : eff['paper']) !== false;
+  const dPaper = ov['dir_paper'] != null ? ov['dir_paper'] : (eff['dir_paper'] != null ? eff['dir_paper'] : fallbackPaper);
   if (document.getElementById('drma-hm-ov-dir-paper')) {
-    document.getElementById('drma-hm-ov-dir-paper').value = dPaper != null ? (dPaper ? 'true' : 'false') : '';
+    document.getElementById('drma-hm-ov-dir-paper').value = dPaper !== false ? 'true' : 'false';
   }
-  const ndPaper = ov['non_dir_paper'] != null ? ov['non_dir_paper'] : eff['non_dir_paper'];
+  const ndPaper = ov['non_dir_paper'] != null ? ov['non_dir_paper'] : (eff['non_dir_paper'] != null ? eff['non_dir_paper'] : fallbackPaper);
   if (document.getElementById('drma-hm-ov-nondir-paper')) {
-    document.getElementById('drma-hm-ov-nondir-paper').value = ndPaper != null ? (ndPaper ? 'true' : 'false') : '';
+    document.getElementById('drma-hm-ov-nondir-paper').value = ndPaper !== false ? 'true' : 'false';
   }
-  const fPaper = ov['futures_paper'] != null ? ov['futures_paper'] : eff['futures_paper'];
+  const fPaper = ov['futures_paper'] != null ? ov['futures_paper'] : (eff['futures_paper'] != null ? eff['futures_paper'] : fallbackPaper);
   if (document.getElementById('drma-hm-ov-fut-paper')) {
-    document.getElementById('drma-hm-ov-fut-paper').value = fPaper != null ? (fPaper ? 'true' : 'false') : '';
+    document.getElementById('drma-hm-ov-fut-paper').value = fPaper !== false ? 'true' : 'false';
+  }
+
+  // Directional same-side non-directional trade lock
+  const dirBlockSameSide = ov['dir_block_if_same_side_nondir'] != null ? ov['dir_block_if_same_side_nondir'] : eff['dir_block_if_same_side_nondir'];
+  if (document.getElementById('drma-hm-ov-dir-block-same-side')) {
+    document.getElementById('drma-hm-ov-dir-block-same-side').value = dirBlockSameSide !== false ? 'true' : 'false';
   }
 }
 
@@ -10786,23 +10887,19 @@ async function drmaHmSaveOverrides() {
   const dirPVal = getVal('drma-hm-ov-dir-paper');
   if (dirPVal === 'true') body.dir_paper = true;
   else if (dirPVal === 'false') body.dir_paper = false;
-  else {
-    try { await fetch('/api/strategy/DRMA_HM_SPX/overrides/dir_paper', { method: 'DELETE' }); } catch (e) {}
-  }
 
   const nonDirPVal = getVal('drma-hm-ov-nondir-paper');
   if (nonDirPVal === 'true') body.non_dir_paper = true;
   else if (nonDirPVal === 'false') body.non_dir_paper = false;
-  else {
-    try { await fetch('/api/strategy/DRMA_HM_SPX/overrides/non_dir_paper', { method: 'DELETE' }); } catch (e) {}
-  }
 
   const futPVal = getVal('drma-hm-ov-fut-paper');
   if (futPVal === 'true') body.futures_paper = true;
   else if (futPVal === 'false') body.futures_paper = false;
-  else {
-    try { await fetch('/api/strategy/DRMA_HM_SPX/overrides/futures_paper', { method: 'DELETE' }); } catch (e) {}
-  }
+
+  // Directional same-side non-directional trade lock
+  const dirBlockVal = getVal('drma-hm-ov-dir-block-same-side');
+  if (dirBlockVal === 'true') body.dir_block_if_same_side_nondir = true;
+  else if (dirBlockVal === 'false') body.dir_block_if_same_side_nondir = false;
 
   // Manual levels
   const onh = getVal('drma-hm-ov-onh');
@@ -10841,6 +10938,7 @@ async function drmaHmClearOverrides() {
     const cfg = await fetch('/api/strategy/DRMA_HM_SPX/config').then(r => r.json());
     const keys = Object.keys(cfg.overrides || {});
     for (const key of keys) {
+      if (['paper', 'dir_paper', 'non_dir_paper', 'futures_paper'].includes(key)) continue;
       await fetch(`/api/strategy/DRMA_HM_SPX/overrides/${encodeURIComponent(key)}`, { method: 'DELETE' });
     }
     if (statusEl) statusEl.textContent = keys.length ? 'Overrides cleared.' : 'No overrides to clear.';
