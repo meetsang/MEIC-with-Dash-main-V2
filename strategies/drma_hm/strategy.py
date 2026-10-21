@@ -305,7 +305,7 @@ class DRMAHMStrategy(BaseStrategy):
             self._status['state'] = 'MONITORING'
 
             cached_snapshots = []
-            last_bars_mtime = None
+            last_cache_key = None
 
             # 4. Main monitoring and execution loop
             while self._running:
@@ -340,11 +340,20 @@ class DRMAHMStrategy(BaseStrategy):
                         time.sleep(self.config.poll_interval_sec)
                         continue
 
-                    # Check if 5m bars file has updated on disk before re-reading CSV & recomputing indicators
+                    # Check if 5m bars file or indicator config has changed before recomputing
                     day_csv = os.path.join(data_root, today.isoformat(), 'SPX_5m.csv')
                     current_mtime = os.path.getmtime(day_csv) if os.path.isfile(day_csv) else None
+                    cache_key = (
+                        current_mtime,
+                        self.config.ma_type,
+                        self.config.ma_len,
+                        self.config.orb_minutes,
+                        self.config.min_slope_pts,
+                        self.config.max_extension_pts,
+                        self.config.pullback_tol_pts,
+                    )
 
-                    if current_mtime is not None and current_mtime == last_bars_mtime and cached_snapshots:
+                    if current_mtime is not None and cache_key == last_cache_key and cached_snapshots:
                         snapshots = cached_snapshots
                     else:
                         # Load 5m bars
@@ -369,7 +378,7 @@ class DRMAHMStrategy(BaseStrategy):
                             onl=self._levels.get('onl'),
                         )
                         if snapshots:
-                            last_bars_mtime = current_mtime
+                            last_cache_key = cache_key
                             cached_snapshots = snapshots
 
                     if not snapshots:
