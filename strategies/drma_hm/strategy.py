@@ -1478,11 +1478,32 @@ class DRMAHMStrategy(BaseStrategy):
                     est_close_price = exit_price if exit_price is not None else (trade.get('current_mark') or 0.05)
                     qty = int(trade.get('quantity') or 1)
 
+                    # Determine if this structure is a debit spread (long option > short option, closing yields net credit)
+                    # or credit spread / iron condor (short option > long option, closing costs net debit).
+                    # In Tastytrade:
+                    #   - Debit (paying cash) = NEGATIVE price
+                    #   - Credit (receiving cash) = POSITIVE price
+                    # Closing a debit spread sells the higher value long leg and buys back the short leg -> NET CREDIT (+price).
+                    # Closing a credit spread buys back the higher value short leg and sells the long leg -> NET DEBIT (-price).
+                    is_debit = (
+                        str(trade.get('structure_type', '')).lower() == 'debit_spread'
+                        or str(trade.get('trade_type', '')).upper() == 'DIRECTIONAL'
+                        or str(trade.get('sub_strategy', '')).upper() == 'DRMA_HM_DIR'
+                        or 'net_debit' in trade
+                        or 'net_debit' in struct
+                    )
+                    raw_px = max(0.05, round(abs(float(est_close_price)), 2))
+                    close_price = raw_px if is_debit else -raw_px
+
                     # If this exit was triggered by an already-filled broker OCO, skip placing a redundant order
-                    close_price = -round(abs(est_close_price), 2)
                     if reason == 'broker_oco_filled':
                         pass
                     elif not is_paper:
+                        self.logger.info(
+                            'DRMA_HM: Submitting %s close order for %s: price=%.2f qty=%d legs=%s',
+                            'DEBIT_SPREAD (CREDIT)' if is_debit else 'CREDIT_SPREAD (DEBIT)',
+                            trade.get('trade_id'), close_price, qty, [f"{l.action} {l.symbol}" for l in close_legs],
+                        )
                         res = close_broker.place_multi_leg_order(close_legs, price=close_price, order_type='LIMIT')
                         if not res or not res.success:
                             err_msg = getattr(res, 'message', 'spread close rejected')
@@ -1490,16 +1511,32 @@ class DRMAHMStrategy(BaseStrategy):
                             return None
                         raw_cid = getattr(res, 'order_id', None)
                         close_order_id = str(raw_cid) if (raw_cid is not None and not hasattr(raw_cid, '_mock_return_value')) else ('mock_close_123' if raw_cid is not None else None)
+                        if res.filled_price is not None and abs(float(res.filled_price)) > 0:
+                            filled_px = abs(float(res.filled_price))
+                            est_close_price = filled_px
+                            entry_px = float(trade.get('entry_price') or filled_px)
+                            if is_debit:
+                                trade['unrealized_pnl'] = round(filled_px - entry_px, 2)
+                            else:
+                                trade['unrealized_pnl'] = round(entry_px - filled_px, 2)
                     else:
                         try:
                             if hasattr(close_broker, 'place_multi_leg_order'):
                                 res = close_broker.place_multi_leg_order(close_legs, price=close_price, order_type='LIMIT')
                                 raw_cid = getattr(res, 'order_id', None)
                                 close_order_id = str(raw_cid) if (raw_cid is not None and not hasattr(raw_cid, '_mock_return_value')) else ('mock_close_123' if raw_cid is not None else None)
+                                if res and res.filled_price is not None and abs(float(res.filled_price)) > 0:
+                                    filled_px = abs(float(res.filled_price))
+                                    est_close_price = filled_px
+                                    entry_px = float(trade.get('entry_price') or filled_px)
+                                    if is_debit:
+                                        trade['unrealized_pnl'] = round(filled_px - entry_px, 2)
+                                    else:
+                                        trade['unrealized_pnl'] = round(entry_px - filled_px, 2)
                         except Exception:
                             pass
                     struct['status'] = 'closed'
-                    struct['realized_pnl'] = struct.get('unrealized_pnl', 0.0)
+                    struct['realized_pnl'] = trade.get('unrealized_pnl', struct.get('unrealized_pnl', 0.0))
                     struct['close_order_id'] = close_order_id
 
                 trade['status'] = 'closed'

@@ -1420,6 +1420,120 @@ class TestDRMAHMSameSideLock(unittest.TestCase):
         self.assertEqual(strat._daily_futures_signals, 1)
         self.assertEqual(strat._daily_signals, 4)
 
+    def test_live_directional_debit_spread_exit_price_is_positive_credit(self):
+        """Directional debit spread exit must place a POSITIVE limit price (net credit) on broker."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=False, dir_paper=False, trade_mode='directional_options')
+        strat = DRMAHMStrategy(cfg)
+
+        mock_live_broker = MagicMock(_is_paper=False, _is_journal=False)
+        mock_live_broker.place_multi_leg_order.return_value = MagicMock(success=True, order_id='close_debit_1', filled_price=3.80)
+        strat._live_broker = mock_live_broker
+        strat.broker = mock_live_broker
+
+        active_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        os.makedirs(active_dir, exist_ok=True)
+        trade_path = os.path.join(active_dir, 'drma_hm_2026-10-22_dir_test.json')
+
+        trade_data = {
+            'trade_id': 'dir_test_123',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_DIR',
+            'trade_type': 'DIRECTIONAL',
+            'structure_type': 'debit_spread',
+            'status': 'open',
+            'paper': False,
+            'entry_price': 2.65,
+            'net_debit': 2.65,
+            'current_mark': 3.80,
+            'unrealized_pnl': 1.15,
+            'structures': [{
+                'structure_id': 'spread_1',
+                'name': 'Directional Bear Debit Spread',
+                'status': 'open',
+                'net_debit': 2.65,
+                'legs': [
+                    {'symbol': '.SPXW261022P7645', 'action': 'BUY_TO_OPEN', 'qty': 1, 'strike': 7645},
+                    {'symbol': '.SPXW261022P7635', 'action': 'SELL_TO_OPEN', 'qty': 1, 'strike': 7635},
+                ],
+            }],
+        }
+        with open(trade_path, 'w', encoding='utf-8') as f:
+            json.dump(trade_data, f)
+
+        strat._exit_trade(tmp, trade_path, reason='profit_target_hit')
+
+        mock_live_broker.place_multi_leg_order.assert_called_once()
+        call_args = mock_live_broker.place_multi_leg_order.call_args
+        legs_sent = call_args[0][0]
+        price_sent = call_args[1]['price']
+
+        # Price must be POSITIVE (credit)
+        self.assertGreater(price_sent, 0)
+        self.assertAlmostEqual(price_sent, 3.80)
+
+        # Closing legs must invert actions: long leg sells, short leg buys
+        leg_actions = {l.symbol: l.action for l in legs_sent}
+        self.assertEqual(leg_actions['.SPXW261022P7645'], 'SELL_TO_CLOSE')
+        self.assertEqual(leg_actions['.SPXW261022P7635'], 'BUY_TO_CLOSE')
+
+    def test_live_credit_spread_exit_price_is_negative_debit(self):
+        """Non-directional credit spread exit must place a NEGATIVE limit price (net debit) on broker."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=False, non_dir_paper=False, trade_mode='non_directional')
+        strat = DRMAHMStrategy(cfg)
+
+        mock_live_broker = MagicMock(_is_paper=False, _is_journal=False)
+        mock_live_broker.place_multi_leg_order.return_value = MagicMock(success=True, order_id='close_credit_1', filled_price=0.50)
+        strat._live_broker = mock_live_broker
+        strat.broker = mock_live_broker
+
+        active_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        os.makedirs(active_dir, exist_ok=True)
+        trade_path = os.path.join(active_dir, 'drma_hm_2026-10-22_credit_test.json')
+
+        trade_data = {
+            'trade_id': 'credit_test_123',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_NONDIR',
+            'trade_type': 'NON_DIRECTIONAL',
+            'structure_type': 'credit_spread',
+            'status': 'open',
+            'paper': False,
+            'entry_price': 1.00,
+            'net_credit': 1.00,
+            'current_mark': 0.50,
+            'unrealized_pnl': 0.50,
+            'structures': [{
+                'structure_id': 'spread_1',
+                'name': 'Credit Bull Put Spread',
+                'status': 'open',
+                'net_credit': 1.00,
+                'legs': [
+                    {'symbol': '.SPXW261022P5800', 'action': 'SELL_TO_OPEN', 'qty': 1, 'strike': 5800},
+                    {'symbol': '.SPXW261022P5790', 'action': 'BUY_TO_OPEN', 'qty': 1, 'strike': 5790},
+                ],
+            }],
+        }
+        with open(trade_path, 'w', encoding='utf-8') as f:
+            json.dump(trade_data, f)
+
+        strat._exit_trade(tmp, trade_path, reason='profit_target_hit')
+
+        mock_live_broker.place_multi_leg_order.assert_called_once()
+        call_args = mock_live_broker.place_multi_leg_order.call_args
+        legs_sent = call_args[0][0]
+        price_sent = call_args[1]['price']
+
+        # Price must be NEGATIVE (debit to buy back)
+        self.assertLess(price_sent, 0)
+        self.assertAlmostEqual(price_sent, -0.50)
+
+        # Closing legs must invert actions: short leg buys back, long leg sells
+        leg_actions = {l.symbol: l.action for l in legs_sent}
+        self.assertEqual(leg_actions['.SPXW261022P5800'], 'BUY_TO_CLOSE')
+        self.assertEqual(leg_actions['.SPXW261022P5790'], 'SELL_TO_CLOSE')
+
 
 if __name__ == '__main__':
     unittest.main()
