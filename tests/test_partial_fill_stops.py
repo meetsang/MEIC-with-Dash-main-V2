@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from blocks.entry.handoff import apply_stop_snapshot
 from blocks.session.plan import SessionRow
@@ -639,7 +639,8 @@ class TestPartialFillStops(unittest.TestCase):
         mon.state = st
         mon.json_path = path
 
-        res = mon._place_long_close_limit(0.50)
+        with patch.object(state_mod, 'move_to_closed'):
+            res = mon._place_long_close_limit(0.50)
         self.assertFalse(res)
         # Never sends order to broker with 0 quantity
         broker.place_limit_order.assert_not_called()
