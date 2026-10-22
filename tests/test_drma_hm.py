@@ -1242,6 +1242,109 @@ class TestDRMAHMSameSideLock(unittest.TestCase):
             strat_b._evaluate_and_enter(tmp, '261015', snap_bull, 1)
         self.assertEqual(strat_b._dir_options_position_state, 1)
 
+    def test_nondir_blocked_when_same_side_dir_active_both_live(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=False,
+            dir_paper=False,
+            non_dir_paper=False,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_live = MagicMock(_is_journal=False, _is_paper=False)
+        mock_live.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=1.00, order_id='nd_1')
+        strat._live_broker = mock_live
+
+        # Active directional spread: Bull Call Debit Spread (state 1, live)
+        strat._dir_options_position_state = 1
+        strat._dir_options_trade_paper = False
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=4)  # Score 4 -> Non-Directional
+        with patch('strategies.drma_hm.strategy.select_non_directional_strikes', return_value=(5750, 5740, 0.15, 1.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # Non-directional options remains FLAT because blocked
+        self.assertEqual(strat._credit_options_position_state, 0)
+        mock_live.place_multi_leg_order.assert_not_called()
+
+    def test_nondir_blocked_when_same_side_dir_active_both_paper(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,
+            non_dir_paper=True,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        # Active directional spread: Bear Put Debit Spread (state -1, paper)
+        strat._dir_options_position_state = -1
+        strat._dir_options_trade_paper = True
+
+        snap_bear = self._make_snap('BEAR', 5800.0, score=4)
+        with patch('strategies.drma_hm.strategy.select_non_directional_strikes', return_value=(5850, 5860, 0.15, 1.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bear, 1)
+
+        self.assertEqual(strat._credit_options_position_state, 0)
+
+    def test_nondir_enters_when_same_side_dir_active_mixed_modes(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            dir_paper=True,       # Directional is PAPER
+            non_dir_paper=False,  # Non-directional is LIVE
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_live = MagicMock(_is_journal=False, _is_paper=False)
+        mock_live.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=1.00, order_id='nd_live_1')
+        strat._live_broker = mock_live
+
+        # Active directional spread: Bull Call Debit Spread (state 1, paper)
+        strat._dir_options_position_state = 1
+        strat._dir_options_trade_paper = True
+
+        snap_bull = self._make_snap('BULL', 5800.0, score=4)
+        with patch('strategies.drma_hm.strategy.select_non_directional_strikes', return_value=(5750, 5740, 0.15, 1.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # In mixed modes, setting does NOT kick in -> non-directional enters successfully!
+        self.assertEqual(strat._credit_options_position_state, 1)
+        mock_live.place_multi_leg_order.assert_called_once()
+
+    def test_nondir_enters_when_opposite_side_dir_active(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=False,
+            dir_paper=False,
+            non_dir_paper=False,
+            trade_mode='all_three',
+            dir_block_if_same_side_nondir=True,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_live = MagicMock(_is_journal=False, _is_paper=False)
+        mock_live.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=1.00, order_id='nd_live_opp')
+        strat._live_broker = mock_live
+
+        # Active directional spread: Bear Put Debit Spread (state -1, LIVE)
+        strat._dir_options_position_state = -1
+        strat._dir_options_trade_paper = False
+
+        # Incoming signal is BULL (opposite side!)
+        snap_bull = self._make_snap('BULL', 5800.0, score=4)
+        with patch('strategies.drma_hm.strategy.select_non_directional_strikes', return_value=(5750, 5740, 0.15, 1.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+
+        # Opposite side -> permitted!
+        self.assertEqual(strat._credit_options_position_state, 1)
+        mock_live.place_multi_leg_order.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

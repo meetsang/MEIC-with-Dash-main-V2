@@ -525,7 +525,7 @@ def _match_trade_to_slot(trade, lot, side, for_date=None):
     return True
 
 
-_RESOLVED_TRADE_PATHS: Dict[str, str] = {}
+_RESOLVED_TRADE_PATHS: dict[str, str] = {}
 
 
 def _resolve_trade_path(trade_path: str) -> str:

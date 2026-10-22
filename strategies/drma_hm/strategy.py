@@ -73,6 +73,7 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 0               # 0 = Flat, 1 = Any Open
         self._entry_bar = -999
         self._active_trade_path: Optional[str] = None
+        self._dir_options_trade_paper: Optional[bool] = None
         self._credit_options_trade_paper: Optional[bool] = None
         self._levels: Dict[str, Optional[float]] = {}
         self._paper_broker = None
@@ -288,6 +289,7 @@ class DRMAHMStrategy(BaseStrategy):
                             self._futures_position_state = 1 if open_trade_data.get('side') == 'LONG' else -1
                         elif open_trade_data.get('trade_type') == 'DIRECTIONAL':
                             self._dir_options_position_state = 1 if open_trade_data.get('side') == 'LONG' else -1
+                            self._dir_options_trade_paper = bool(open_trade_data.get('paper', self.config.is_dir_paper))
                             self.register_open_trade_streamer_legs(open_trade_data, self.logger)
                         else:
                             self._credit_options_position_state = 1 if open_trade_data.get('side') == 'LONG' else -1
@@ -459,6 +461,7 @@ class DRMAHMStrategy(BaseStrategy):
                                     has_open_futures = True
                                 elif t_chk.get('trade_type') == 'DIRECTIONAL':
                                     has_open_dir_opts = True
+                                    self._dir_options_trade_paper = bool(t_chk.get('paper', self.config.is_dir_paper))
                                 else:
                                     has_open_credit_opts = True
                                     self._credit_options_trade_paper = bool(t_chk.get('paper', self.config.is_non_dir_paper))
@@ -468,6 +471,7 @@ class DRMAHMStrategy(BaseStrategy):
 
                     if not has_open_dir_opts:
                         self._dir_options_position_state = 0
+                        self._dir_options_trade_paper = None
                     if not has_open_credit_opts:
                         self._credit_options_position_state = 0
                         self._credit_options_trade_paper = None
@@ -583,7 +587,35 @@ class DRMAHMStrategy(BaseStrategy):
 
         # 2. Non-Directional Options (SPX Credit Spread)
         if not is_directional and self.config.is_non_directional_options_enabled and self._credit_options_position_state == 0:
-            self._enter_non_directional_trade(root, expiry_yymmdd, snap, bar_idx)
+            block_same_side = bool(getattr(self.config, 'dir_block_if_same_side_nondir', True) and getattr(self.config, 'enable_debounce', True))
+            nondir_same_side_blocked = False
+            if block_same_side and self._dir_options_position_state != 0:
+                dir_same_side = (
+                    (snap.bias == 'BULL' and self._dir_options_position_state == 1) or
+                    (snap.bias == 'BEAR' and self._dir_options_position_state == -1)
+                )
+                if dir_same_side:
+                    nondir_paper = bool(self.config.is_non_dir_paper)
+                    dir_paper = (
+                        self._dir_options_trade_paper
+                        if self._dir_options_trade_paper is not None
+                        else bool(self.config.is_dir_paper)
+                    )
+                    # Setting only kicks in when BOTH are LIVE or BOTH are PAPER
+                    if dir_paper == nondir_paper:
+                        nondir_same_side_blocked = True
+                        self.logger.info(
+                            'Non-Directional %s trade blocked: active directional trade open on same side (both %s)',
+                            snap.bias, 'PAPER' if nondir_paper else 'LIVE',
+                        )
+                    else:
+                        self.logger.info(
+                            'Non-Directional %s trade permitted: active directional is %s while non-directional is %s (mixed modes)',
+                            snap.bias, 'PAPER' if dir_paper else 'LIVE', 'PAPER' if nondir_paper else 'LIVE',
+                        )
+
+            if not nondir_same_side_blocked:
+                self._enter_non_directional_trade(root, expiry_yymmdd, snap, bar_idx)
 
         # 3. Directional Futures on ES (Outright ES Futures with 5 pt stop and 5 pt target on Grade A+ setups only)
         futs_min_thresh = 5 if 'a+ only' in getattr(self.config, 'futures_min_grade', 'Grade A+ Only').lower() else min_threshold
@@ -705,6 +737,7 @@ class DRMAHMStrategy(BaseStrategy):
 
         self._active_trade_path = trade_path
         self._dir_options_position_state = 1 if snap.bias == 'BULL' else -1
+        self._dir_options_trade_paper = is_paper
         self._options_position_state = 1 if (self._dir_options_position_state != 0 or self._credit_options_position_state != 0) else 0
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
@@ -1358,6 +1391,7 @@ class DRMAHMStrategy(BaseStrategy):
                 attach_dollar_pnl_display(trade)
                 if trade.get('trade_type') == 'DIRECTIONAL':
                     self._dir_options_position_state = 0
+                    self._dir_options_trade_paper = None
                 else:
                     self._credit_options_position_state = 0
                     self._credit_options_trade_paper = None

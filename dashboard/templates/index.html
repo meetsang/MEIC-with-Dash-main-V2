@@ -1587,6 +1587,20 @@
           </table>
         </div>
       </div>
+
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Recent History</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 mean-reversion-table">
+            <thead><tr>
+              <th>Date</th><th>Side</th><th>Signal</th><th>Strikes</th><th>Entry Credit</th><th>Exit Price</th><th>Reason</th><th>P/L</th>
+            </tr></thead>
+            <tbody id="mean-reversion-history"><tr><td colspan="8" class="text-muted text-center py-3">No history</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </div><!-- /strategy-mean-reversion -->
 
     <div id="strategy-iron-fly" class="strategy-panel" data-visible="false" style="display:none;">
@@ -9452,27 +9466,29 @@ function renderMeanReversion(data, cfg) {
     `;
   }
 
-  const history = data.history || [];
-  if (!history.length) {
-    histBody.innerHTML = '<tr><td colspan="8" class="text-center py-3" style="color:#94a3b8;">No history</td></tr>';
-  } else {
-    histBody.innerHTML = history.map(h => {
-      const hStatus = String(h.status || '').toLowerCase();
-      const hBadge = hStatus === 'closed' ? 'bg-secondary' : (hStatus === 'open' ? 'bg-success' : 'bg-info');
-      const hPnl = h.realized_pnl_dollars != null ? h.realized_pnl_dollars : (h.unrealized_pnl_dollars || 0);
-      return `
-      <tr>
-        <td class="text-light">${h.date || '—'}</td>
-        <td><span class="badge bg-secondary">${h.side || 'SPREAD'}</span></td>
-        <td class="small text-muted">${h.signal || '—'}</td>
-        <td class="font-monospace text-light">${h.short_strike != null ? h.short_strike + '/' + h.long_strike : '—'}</td>
-        <td class="font-monospace text-light">${h.entry_credit != null ? '$' + Number(h.entry_credit).toFixed(2) : '—'}</td>
-        <td class="font-monospace text-light">${h.exit_price != null ? '$' + Number(h.exit_price).toFixed(2) : '—'}</td>
-        <td class="small text-muted">${h.exit_reason || '—'}</td>
-        <td class="${pnlClass(hPnl)} fw-bold font-monospace">${fmtPnl(hPnl)}</td>
-      </tr>
-      `;
-    }).join('');
+  if (histBody) {
+    const history = data.history || [];
+    if (!history.length) {
+      histBody.innerHTML = '<tr><td colspan="8" class="text-center py-3" style="color:#94a3b8;">No history</td></tr>';
+    } else {
+      histBody.innerHTML = history.map(h => {
+        const hStatus = String(h.status || '').toLowerCase();
+        const hBadge = hStatus === 'closed' ? 'bg-secondary' : (hStatus === 'open' ? 'bg-success' : 'bg-info');
+        const hPnl = h.realized_pnl_dollars != null ? h.realized_pnl_dollars : (h.unrealized_pnl_dollars || 0);
+        return `
+        <tr>
+          <td class="text-light">${h.date || '—'}</td>
+          <td><span class="badge bg-secondary">${h.side || 'SPREAD'}</span></td>
+          <td class="small text-muted">${h.signal || '—'}</td>
+          <td class="font-monospace text-light">${h.short_strike != null ? h.short_strike + '/' + h.long_strike : '—'}</td>
+          <td class="font-monospace text-light">${h.entry_credit != null ? '$' + Number(h.entry_credit).toFixed(2) : '—'}</td>
+          <td class="font-monospace text-light">${h.exit_price != null ? '$' + Number(h.exit_price).toFixed(2) : '—'}</td>
+          <td class="small text-muted">${h.exit_reason || '—'}</td>
+          <td class="${pnlClass(hPnl)} fw-bold font-monospace">${fmtPnl(hPnl)}</td>
+        </tr>
+        `;
+      }).join('');
+    }
   }
 
   const skippedTbody = document.getElementById('mean-reversion-skipped-tbody');

@@ -146,7 +146,7 @@ class DRMAHMConfig(StrategyConfig):
     wait_for_orb: bool = True              # Do not enter before 30m ORB completes (09:00 CT / 10:00 ET)
     filter_lunch_chop: bool = False        # Mute entries during 10:30-12:30 CT (11:30-13:30 ET)
     enable_debounce: bool = True           # Directional lock: 1 entry per leg until flat
-    dir_block_if_same_side_nondir: bool = True # Block Directional trade if active Non-Directional on same side (only when both Live or both Paper)
+    dir_block_if_same_side_nondir: bool = True # Block Directional/Non-Directional trade if other spread type is active on same side (only when both Live or both Paper)
     cooldown_bars: int = 5                 # Minimum bars (e.g. 25 min) between new entries
     max_daily_signals: int = 4             # Max trade entries per day (0 = unlimited)
     force_eod_exit: bool = True            # Force square-off before market close
