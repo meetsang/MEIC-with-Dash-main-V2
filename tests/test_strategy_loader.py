@@ -90,9 +90,11 @@ class TestStrategyLoader(unittest.TestCase):
         self.assertEqual(strat.schedule(), [])
 
     def test_drma_hm_loaded_when_enabled(self):
+        from unittest.mock import patch
         from strategies.loader import load_standalone_strategies
 
-        standalone = {cfg.name: (strat, cfg) for strat, cfg in load_standalone_strategies()}
+        with patch('common.strategy_modes.get_persistent_modes_for_strategy', return_value={}):
+            standalone = {cfg.name: (strat, cfg) for strat, cfg in load_standalone_strategies()}
         self.assertIn('DRMA_HM_SPX', standalone)
         strat, cfg = standalone['DRMA_HM_SPX']
         self.assertTrue(cfg.paper)
