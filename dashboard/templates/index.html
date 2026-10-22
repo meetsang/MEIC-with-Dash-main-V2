@@ -1994,13 +1994,17 @@
                 <option value="Grade B and higher">Grade B and Higher (Score 3&ndash;5)</option>
               </select>
             </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label small mb-1">Options Contracts (Qty)</label>
+            <div class="col-4 col-md-2">
+              <label class="form-label small mb-1">Options Contracts</label>
               <input type="number" id="drma-hm-ov-quantity" class="form-control form-control-sm" min="1" step="1" placeholder="1" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-4 col-md-2">
               <label class="form-label small mb-1">Max Daily Loss ($)</label>
               <input type="number" id="drma-hm-ov-max-loss" class="form-control form-control-sm" min="0" step="100" placeholder="off" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+            </div>
+            <div class="col-4 col-md-2">
+              <label class="form-label small mb-1" title="Global blanket limit across all sub-strategies combined. Set 0 to disable blanket cap, or e.g. 12.">Global Daily Cap</label>
+              <input type="number" id="drma-hm-ov-max-signals" class="form-control form-control-sm" min="0" max="50" step="1" placeholder="12 (0=off)" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
             </div>
 
             <!-- Row 2: Non-Directional Config -->
@@ -2020,21 +2024,25 @@
                     <option value="false">Live Trading (Real Orders)</option>
                   </select>
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
+                <div class="col-6 col-sm-4 col-lg-6">
                   <label class="form-label small mb-1">Credit Target ($)</label>
                   <input type="number" id="drma-hm-ov-nondir-credit" class="form-control form-control-sm" min="0.20" max="5.00" step="0.10" placeholder="1.00" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
+                <div class="col-6 col-sm-4 col-lg-6">
                   <label class="form-label small mb-1">Width (pts)</label>
                   <input type="number" id="drma-hm-ov-nondir-width" class="form-control form-control-sm" min="5" max="50" step="5" placeholder="10" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
-                  <label class="form-label small mb-1">Profit Target %</label>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1">PT %</label>
                   <input type="number" id="drma-hm-ov-nondir-pt" class="form-control form-control-sm" min="10" max="100" step="5" placeholder="50" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
-                  <label class="form-label small mb-1">Stop Loss %</label>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1">SL %</label>
                   <input type="number" id="drma-hm-ov-nondir-sl" class="form-control form-control-sm" min="20" max="300" step="10" placeholder="100" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                </div>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1" title="Max daily Non-Directional credit spread trades (0 = unlimited)">Daily Limit</label>
+                  <input type="number" id="drma-hm-ov-nondir-max-signals" class="form-control form-control-sm" min="0" max="20" step="1" placeholder="4" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
               </div>
             </div>
@@ -2063,21 +2071,25 @@
                     <option value="false">Allow Concurrent Entries (Never Block)</option>
                   </select>
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
+                <div class="col-6 col-sm-4 col-lg-6">
                   <label class="form-label small mb-1">Debit Target ($)</label>
                   <input type="number" id="drma-hm-ov-dir-debit" class="form-control form-control-sm" min="0.50" max="10.00" step="0.25" placeholder="2.50" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
+                <div class="col-6 col-sm-4 col-lg-6">
                   <label class="form-label small mb-1">Width (pts)</label>
                   <input type="number" id="drma-hm-ov-dir-width" class="form-control form-control-sm" min="5" max="50" step="5" placeholder="10" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
-                  <label class="form-label small mb-1">Profit Target %</label>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1">PT %</label>
                   <input type="number" id="drma-hm-ov-dir-pt" class="form-control form-control-sm" min="10" max="200" step="10" placeholder="50" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-6 col-sm-3 col-lg-6">
-                  <label class="form-label small mb-1">Stop Loss %</label>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1">SL %</label>
                   <input type="number" id="drma-hm-ov-dir-sl" class="form-control form-control-sm" min="10" max="100" step="5" placeholder="50" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                </div>
+                <div class="col-4 col-sm-4 col-lg-4">
+                  <label class="form-label small mb-1" title="Max daily Directional debit spread trades (0 = unlimited)">Daily Limit</label>
+                  <input type="number" id="drma-hm-ov-dir-max-signals" class="form-control form-control-sm" min="0" max="20" step="1" placeholder="4" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
               </div>
             </div>
@@ -2099,15 +2111,19 @@
                     <option value="false">Live Trading (Real Orders)</option>
                   </select>
                 </div>
-                <div class="col-4">
+                <div class="col-6">
                   <label class="form-label small mb-1">Futures Qty</label>
                   <input type="number" id="drma-hm-ov-fut-qty" class="form-control form-control-sm" min="1" step="1" placeholder="1" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-4">
+                <div class="col-6">
+                  <label class="form-label small mb-1" title="Max daily Directional Futures (/ES) trades (0 = unlimited)">Daily Limit</label>
+                  <input type="number" id="drma-hm-ov-fut-max-signals" class="form-control form-control-sm" min="0" max="20" step="1" placeholder="4" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                </div>
+                <div class="col-6">
                   <label class="form-label small mb-1">Target (pts)</label>
                   <input type="number" id="drma-hm-ov-fut-pt" class="form-control form-control-sm" min="1" max="50" step="0.5" placeholder="5.0" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
-                <div class="col-4">
+                <div class="col-6">
                   <label class="form-label small mb-1">Stop (pts)</label>
                   <input type="number" id="drma-hm-ov-fut-sl" class="form-control form-control-sm" min="1" max="50" step="0.5" placeholder="5.0" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
@@ -10344,10 +10360,12 @@ function drmaHmFillOverrideForm(cfg) {
   setVal('drma-hm-ov-min-grade', 'min_grade_to_signal');
   setVal('drma-hm-ov-quantity', 'quantity');
   setVal('drma-hm-ov-max-loss', 'max_daily_loss');
+  setVal('drma-hm-ov-max-signals', 'max_daily_signals');
 
-  // Non-dir (credit target + spread width)
+  // Non-dir (credit target + spread width + limit)
   setVal('drma-hm-ov-nondir-credit', 'non_dir_target_credit');
   setVal('drma-hm-ov-nondir-width', 'non_dir_spread_width');
+  setVal('drma-hm-ov-nondir-max-signals', 'non_dir_max_daily_signals');
   const ndPt = ov['non_dir_profit_target_pct'] != null ? ov['non_dir_profit_target_pct'] : eff['non_dir_profit_target_pct'];
   if (document.getElementById('drma-hm-ov-nondir-pt')) {
     document.getElementById('drma-hm-ov-nondir-pt').value = ndPt != null ? Math.round(ndPt * (ndPt <= 1 ? 100 : 1)) : 50;
@@ -10357,9 +10375,10 @@ function drmaHmFillOverrideForm(cfg) {
     document.getElementById('drma-hm-ov-nondir-sl').value = ndSl != null ? Math.round(ndSl * (ndSl <= 1 ? 100 : 1)) : 100;
   }
 
-  // Dir (debit target + spread width)
+  // Dir (debit target + spread width + limit)
   setVal('drma-hm-ov-dir-debit', 'dir_target_debit');
   setVal('drma-hm-ov-dir-width', 'dir_spread_width');
+  setVal('drma-hm-ov-dir-max-signals', 'dir_max_daily_signals');
   const dPt = ov['dir_profit_target_pct'] != null ? ov['dir_profit_target_pct'] : eff['dir_profit_target_pct'];
   if (document.getElementById('drma-hm-ov-dir-pt')) {
     document.getElementById('drma-hm-ov-dir-pt').value = dPt != null ? Math.round(dPt * (dPt <= 1 ? 100 : 1)) : 50;
@@ -10369,10 +10388,11 @@ function drmaHmFillOverrideForm(cfg) {
     document.getElementById('drma-hm-ov-dir-sl').value = dSl != null ? Math.round(dSl * (dSl <= 1 ? 100 : 1)) : 50;
   }
 
-  // Directional Futures on ES (5pt PT / 5pt SL)
+  // Directional Futures on ES (5pt PT / 5pt SL + limit)
   setVal('drma-hm-ov-fut-qty', 'futures_quantity');
   setVal('drma-hm-ov-fut-pt', 'futures_profit_target_pts');
   setVal('drma-hm-ov-fut-sl', 'futures_stop_loss_pts');
+  setVal('drma-hm-ov-fut-max-signals', 'futures_max_daily_signals');
 
   // Levels
   setVal('drma-hm-ov-onh', 'manual_onh');
@@ -10499,6 +10519,24 @@ function renderDrmaHm(data, cfg) {
   const allTodayTrades = data.trades || (trade ? [trade] : []);
   const openTrades = allTodayTrades.filter(t => t.status === 'open');
 
+  const stratSt = data.strat_status || {};
+  const dirSig = ind.daily_dir_signals ?? stratSt.daily_dir_signals ?? session.daily_dir_signals ?? 0;
+  const nonDirSig = ind.daily_nondir_signals ?? stratSt.daily_nondir_signals ?? session.daily_nondir_signals ?? 0;
+  const futSig = ind.daily_futures_signals ?? stratSt.daily_futures_signals ?? session.daily_futures_signals ?? 0;
+  const totSig = ind.daily_signals ?? stratSt.daily_signals ?? session.daily_signals ?? session.signal_count ?? (dirSig + nonDirSig + futSig);
+
+  const dirLimit = (ov.dir_max_daily_signals != null ? ov.dir_max_daily_signals : eff.dir_max_daily_signals) ?? 4;
+  const nonDirLimit = (ov.non_dir_max_daily_signals != null ? ov.non_dir_max_daily_signals : eff.non_dir_max_daily_signals) ?? 4;
+  const futLimit = (ov.futures_max_daily_signals != null ? ov.futures_max_daily_signals : eff.futures_max_daily_signals) ?? 4;
+  const globalLimit = (ov.max_daily_signals != null ? ov.max_daily_signals : eff.max_daily_signals) ?? 12;
+
+  const dirLimStr = dirLimit > 0 ? `${dirSig}/${dirLimit}` : `${dirSig} (unlim)`;
+  const nonDirLimStr = nonDirLimit > 0 ? `${nonDirSig}/${nonDirLimit}` : `${nonDirSig} (unlim)`;
+  const futLimStr = futLimit > 0 ? `${futSig}/${futLimit}` : `${futSig} (unlim)`;
+  const globLimStr = globalLimit > 0 ? `Total: ${totSig}/${globalLimit}` : `Total: ${totSig}`;
+
+  const sigBreakdown = `Dir: ${dirLimStr} &bull; Non-Dir: ${nonDirLimStr} &bull; Fut: ${futLimStr} &bull; ${globLimStr}`;
+
   if (session.skip_reason) {
     if (statusEl) statusEl.textContent = 'Skipped Today';
     if (skipEl) skipEl.textContent = session.skip_reason;
@@ -10507,13 +10545,13 @@ function renderDrmaHm(data, cfg) {
     if (skipEl) skipEl.textContent = 'Disabled via operator override';
   } else if (openTrades.length > 0) {
     if (statusEl) statusEl.textContent = `${openTrades.length} Position${openTrades.length === 1 ? '' : 's'} Open`;
-    if (skipEl) skipEl.textContent = openTrades.map(t => `${t.side} ${t.trade_type}`).join(' &bull; ');
+    if (skipEl) skipEl.innerHTML = `${openTrades.map(t => `${t.side} ${t.trade_type}`).join(' &bull; ')} <span class="text-muted ms-2">(${sigBreakdown})</span>`;
   } else if (data.strat_status && data.strat_status.state) {
     if (statusEl) statusEl.textContent = data.strat_status.state;
-    if (skipEl) skipEl.textContent = `Active Monitoring &bull; ${data.strat_status.daily_signals || 0} signals today`;
+    if (skipEl) skipEl.innerHTML = `Active Monitoring &bull; ${sigBreakdown}`;
   } else {
     if (statusEl) statusEl.textContent = 'Ready / Monitoring';
-    if (skipEl) skipEl.textContent = 'Waiting for high-confluence 5m setup';
+    if (skipEl) skipEl.innerHTML = `Waiting for high-confluence 5m setup &bull; ${sigBreakdown}`;
   }
 
   // P/L Calculation
@@ -10868,6 +10906,8 @@ async function drmaHmSaveOverrides() {
   if (qty !== '') body.quantity = Number(qty);
   const ml = getVal('drma-hm-ov-max-loss');
   if (ml !== '') body.max_daily_loss = Number(ml);
+  const ms = getVal('drma-hm-ov-max-signals');
+  if (ms !== '') body.max_daily_signals = parseInt(ms, 10);
 
   // Non-dir: mode is always credit
   body.non_dir_selection_mode = 'credit';
@@ -10879,6 +10919,8 @@ async function drmaHmSaveOverrides() {
   if (ndpt !== '') body.non_dir_profit_target_pct = Number(ndpt) / 100.0;
   const ndsl = getVal('drma-hm-ov-nondir-sl');
   if (ndsl !== '') body.non_dir_stop_loss_pct = Number(ndsl) / 100.0;
+  const ndms = getVal('drma-hm-ov-nondir-max-signals');
+  if (ndms !== '') body.non_dir_max_daily_signals = parseInt(ndms, 10);
 
   // Dir: mode is always debit
   body.dir_selection_mode = 'debit';
@@ -10890,6 +10932,8 @@ async function drmaHmSaveOverrides() {
   if (dpt !== '') body.dir_profit_target_pct = Number(dpt) / 100.0;
   const dsl = getVal('drma-hm-ov-dir-sl');
   if (dsl !== '') body.dir_stop_loss_pct = Number(dsl) / 100.0;
+  const dms = getVal('drma-hm-ov-dir-max-signals');
+  if (dms !== '') body.dir_max_daily_signals = parseInt(dms, 10);
 
   // Directional Futures on ES (5pt PT / 5pt SL)
   const fqty = getVal('drma-hm-ov-fut-qty');
@@ -10898,6 +10942,8 @@ async function drmaHmSaveOverrides() {
   if (fpt !== '') body.futures_profit_target_pts = Number(fpt);
   const fsl = getVal('drma-hm-ov-fut-sl');
   if (fsl !== '') body.futures_stop_loss_pts = Number(fsl);
+  const fms = getVal('drma-hm-ov-fut-max-signals');
+  if (fms !== '') body.futures_max_daily_signals = parseInt(fms, 10);
 
   // Sub-strategy execution modes
   const dirPVal = getVal('drma-hm-ov-dir-paper');

@@ -65,6 +65,9 @@ class DRMAHMStrategy(BaseStrategy):
         self._running = False
         self._status: Dict[str, Any] = {'running': False, 'state': 'INIT'}
         self._daily_signals = 0
+        self._daily_dir_signals = 0
+        self._daily_non_dir_signals = 0
+        self._daily_futures_signals = 0
         self._last_signal_bar = -999
         self._dir_options_position_state = 0   # 0 = Flat, 1 = Long CDS/Call, -1 = Long PDS/Put
         self._credit_options_position_state = 0 # 0 = Flat, 1 = Bull PCS, -1 = Bear CCS, 2 = Neutral IC
@@ -218,6 +221,53 @@ class DRMAHMStrategy(BaseStrategy):
         t = now_ct.time()
         return datetime.time(8, 30) <= t <= datetime.time(15, 0)
 
+    def _recount_daily_signals(self, root: str, today: date) -> None:
+        """Scan active and history trades for today to count entries per sub-strategy."""
+        dir_count = 0
+        nondir_count = 0
+        fut_count = 0
+        seen_trade_ids = set()
+
+        prefix = f'drma_hm_{today.isoformat()}_'
+        search_dirs = [
+            active_dir_for_strategy(self.config.name, root),
+            history_dir_for_strategy(self.config.name, root),
+        ]
+        date_hist = os.path.join(history_dir_for_strategy(self.config.name, root), today.isoformat())
+        if os.path.isdir(date_hist):
+            search_dirs.append(date_hist)
+
+        for s_dir in search_dirs:
+            if not os.path.isdir(s_dir):
+                continue
+            for fname in os.listdir(s_dir):
+                if (fname.startswith(prefix) or today.isoformat() in fname) and fname.endswith('.json'):
+                    fpath = os.path.join(s_dir, fname)
+                    try:
+                        with open(fpath, encoding='utf-8') as f:
+                            t_data = json.load(f)
+                        tid = t_data.get('trade_id') or fname
+                        if tid in seen_trade_ids or t_data.get('status') == 'skipped':
+                            continue
+                        seen_trade_ids.add(tid)
+                        sub_strat = str(t_data.get('sub_strategy') or '').upper()
+                        struct_type = str(t_data.get('structure_type') or '').lower()
+                        trade_type = str(t_data.get('trade_type') or '').upper()
+
+                        if sub_strat == 'DRMA_HM_DIR' or trade_type == 'DIRECTIONAL':
+                            dir_count += 1
+                        elif sub_strat == 'DRMA_HM_FUT' or struct_type == 'futures' or trade_type == 'DIRECTIONAL_FUTURES':
+                            fut_count += 1
+                        else:
+                            nondir_count += 1
+                    except Exception:
+                        pass
+
+        self._daily_dir_signals = dir_count
+        self._daily_non_dir_signals = nondir_count
+        self._daily_futures_signals = fut_count
+        self._daily_signals = dir_count + nondir_count + fut_count
+
     # --- Main Strategy Lifecycle ---
     def run(self) -> None:
         self._running = True
@@ -267,6 +317,7 @@ class DRMAHMStrategy(BaseStrategy):
                 self._levels.get('onl'),
                 self._levels.get('source'),
             )
+            self._recount_daily_signals(root, today)
 
             # 3. Resume open trade if already entered today
             active_dir = active_dir_for_strategy(self.config.name, root)
@@ -419,6 +470,9 @@ class DRMAHMStrategy(BaseStrategy):
                         'futures_position_state': self._futures_position_state,
                         'position_state': self._position_state,
                         'daily_signals': self._daily_signals,
+                        'daily_dir_signals': self._daily_dir_signals,
+                        'daily_nondir_signals': self._daily_non_dir_signals,
+                        'daily_futures_signals': self._daily_futures_signals,
                     })
                     self._save_session_state(
                         root, today,
@@ -485,17 +539,36 @@ class DRMAHMStrategy(BaseStrategy):
                         time.sleep(self.config.poll_interval_sec)
                         continue
 
-                    # Check daily signal limit, cooldown, and lunch chop filter
-                    daily_limit_ok = (self.config.max_daily_signals == 0) or (self._daily_signals < self.config.max_daily_signals)
+                    # Check sub-strategy daily signal limits
+                    if (
+                        self._daily_dir_signals == 0
+                        and self._daily_non_dir_signals == 0
+                        and self._daily_futures_signals == 0
+                        and self._daily_signals > 0
+                    ):
+                        self._recount_daily_signals(root, today)
+
+                    dir_max = getattr(self.config, 'dir_max_daily_signals', 0)
+                    dir_limit_ok = (dir_max == 0) or (self._daily_dir_signals < dir_max)
+
+                    nondir_max = getattr(self.config, 'non_dir_max_daily_signals', 0)
+                    nondir_limit_ok = (nondir_max == 0) or (self._daily_non_dir_signals < nondir_max)
+
+                    fut_max = getattr(self.config, 'futures_max_daily_signals', 0)
+                    futs_limit_ok = (fut_max == 0) or (self._daily_futures_signals < fut_max)
+
+                    global_max = getattr(self.config, 'max_daily_signals', 0)
+                    global_limit_ok = (global_max == 0) or (self._daily_signals < global_max)
+
                     is_cooled_down = (bar_idx - self._last_signal_bar) >= self.config.cooldown_bars
                     lunch_blocked = self.config.filter_lunch_chop and self._is_lunch_window(now_ct)
 
                     # Check if directional options, credit options, or futures can enter
-                    can_enter_dir_opts = self.config.is_directional_options_enabled and (self._dir_options_position_state == 0)
-                    can_enter_credit_opts = self.config.is_non_directional_options_enabled and (self._credit_options_position_state == 0)
-                    can_enter_futs = self.config.is_directional_futures_enabled and (self._futures_position_state == 0)
+                    can_enter_dir_opts = self.config.is_directional_options_enabled and (self._dir_options_position_state == 0) and dir_limit_ok and global_limit_ok
+                    can_enter_credit_opts = self.config.is_non_directional_options_enabled and (self._credit_options_position_state == 0) and nondir_limit_ok and global_limit_ok
+                    can_enter_futs = self.config.is_directional_futures_enabled and (self._futures_position_state == 0) and futs_limit_ok and global_limit_ok
 
-                    if (can_enter_dir_opts or can_enter_credit_opts or can_enter_futs) and daily_limit_ok and is_cooled_down and not lunch_blocked:
+                    if (can_enter_dir_opts or can_enter_credit_opts or can_enter_futs) and is_cooled_down and not lunch_blocked:
                         self._evaluate_and_enter(root, expiry_yymmdd, latest_snap, bar_idx)
 
                     time.sleep(self.config.poll_interval_sec)
@@ -529,12 +602,26 @@ class DRMAHMStrategy(BaseStrategy):
         elif 'grade b' in self.config.min_grade_to_signal.lower():
             min_threshold = 3
 
+        dir_max = getattr(self.config, 'dir_max_daily_signals', 0)
+        dir_limit_ok = (dir_max == 0) or (self._daily_dir_signals < dir_max)
+
+        nondir_max = getattr(self.config, 'non_dir_max_daily_signals', 0)
+        nondir_limit_ok = (nondir_max == 0) or (self._daily_non_dir_signals < nondir_max)
+
+        fut_max = getattr(self.config, 'futures_max_daily_signals', 0)
+        futs_limit_ok = (fut_max == 0) or (self._daily_futures_signals < fut_max)
+
+        global_max = getattr(self.config, 'max_daily_signals', 0)
+        global_limit_ok = (global_max == 0) or (self._daily_signals < global_max)
+
         if score < min_threshold or bias == 'NEUTRAL':
             # Check if neutral Iron Condor is allowed
             if (
                 self.config.is_non_directional_options_enabled
                 and self._credit_options_position_state == 0
                 and self.config.non_dir_allow_iron_condor
+                and nondir_limit_ok
+                and global_limit_ok
                 and snap.orb_formed
                 and snap.orb_low is not None
                 and snap.orb_high is not None
@@ -554,7 +641,7 @@ class DRMAHMStrategy(BaseStrategy):
             is_directional = False
 
         # 1. Directional Options (SPX Debit Spread)
-        if is_directional and self.config.is_directional_options_enabled and self._dir_options_position_state == 0:
+        if is_directional and self.config.is_directional_options_enabled and self._dir_options_position_state == 0 and dir_limit_ok and global_limit_ok:
             block_same_side = bool(getattr(self.config, 'dir_block_if_same_side_nondir', True) and getattr(self.config, 'enable_debounce', True))
             dir_same_side_blocked = False
             if block_same_side and self._credit_options_position_state != 0:
@@ -586,7 +673,7 @@ class DRMAHMStrategy(BaseStrategy):
                 self._enter_directional_trade(root, expiry_yymmdd, snap, bar_idx)
 
         # 2. Non-Directional Options (SPX Credit Spread)
-        if not is_directional and self.config.is_non_directional_options_enabled and self._credit_options_position_state == 0:
+        if not is_directional and self.config.is_non_directional_options_enabled and self._credit_options_position_state == 0 and nondir_limit_ok and global_limit_ok:
             block_same_side = bool(getattr(self.config, 'dir_block_if_same_side_nondir', True) and getattr(self.config, 'enable_debounce', True))
             nondir_same_side_blocked = False
             if block_same_side and self._dir_options_position_state != 0:
@@ -619,7 +706,7 @@ class DRMAHMStrategy(BaseStrategy):
 
         # 3. Directional Futures on ES (Outright ES Futures with 5 pt stop and 5 pt target on Grade A+ setups only)
         futs_min_thresh = 5 if 'a+ only' in getattr(self.config, 'futures_min_grade', 'Grade A+ Only').lower() else min_threshold
-        if self.config.is_directional_futures_enabled and self._futures_position_state == 0:
+        if self.config.is_directional_futures_enabled and self._futures_position_state == 0 and futs_limit_ok and global_limit_ok:
             if score >= futs_min_thresh:
                 self._enter_directional_futures_trade(root, expiry_yymmdd, snap, bar_idx)
 
@@ -742,8 +829,17 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
         self._last_signal_bar = bar_idx
+        self._daily_dir_signals += 1
         self._daily_signals += 1
-        self._save_session_state(root, util.central_date(), entered=True, signal_count=self._daily_signals)
+        self._save_session_state(
+            root, util.central_date(),
+            entered=True,
+            signal_count=self._daily_signals,
+            daily_signals=self._daily_signals,
+            daily_dir_signals=self._daily_dir_signals,
+            daily_nondir_signals=self._daily_non_dir_signals,
+            daily_futures_signals=self._daily_futures_signals,
+        )
 
     def _enter_directional_futures_trade(
         self,
@@ -871,8 +967,17 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
         self._last_signal_bar = bar_idx
+        self._daily_futures_signals += 1
         self._daily_signals += 1
-        self._save_session_state(root, util.central_date(), entered=True, signal_count=self._daily_signals)
+        self._save_session_state(
+            root, util.central_date(),
+            entered=True,
+            signal_count=self._daily_signals,
+            daily_signals=self._daily_signals,
+            daily_dir_signals=self._daily_dir_signals,
+            daily_nondir_signals=self._daily_non_dir_signals,
+            daily_futures_signals=self._daily_futures_signals,
+        )
         return trade_data
 
     def _enter_non_directional_trade(
@@ -1011,8 +1116,17 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
         self._last_signal_bar = bar_idx
+        self._daily_non_dir_signals += 1
         self._daily_signals += 1
-        self._save_session_state(root, util.central_date(), entered=True, signal_count=self._daily_signals)
+        self._save_session_state(
+            root, util.central_date(),
+            entered=True,
+            signal_count=self._daily_signals,
+            daily_signals=self._daily_signals,
+            daily_dir_signals=self._daily_dir_signals,
+            daily_nondir_signals=self._daily_non_dir_signals,
+            daily_futures_signals=self._daily_futures_signals,
+        )
 
     def _enter_iron_condor(
         self,
@@ -1099,8 +1213,17 @@ class DRMAHMStrategy(BaseStrategy):
         self._position_state = 1 if (self._options_position_state != 0 or self._futures_position_state != 0) else 0
         self._entry_bar = bar_idx
         self._last_signal_bar = bar_idx
+        self._daily_non_dir_signals += 1
         self._daily_signals += 1
-        self._save_session_state(root, util.central_date(), entered=True, signal_count=self._daily_signals)
+        self._save_session_state(
+            root, util.central_date(),
+            entered=True,
+            signal_count=self._daily_signals,
+            daily_signals=self._daily_signals,
+            daily_dir_signals=self._daily_dir_signals,
+            daily_nondir_signals=self._daily_non_dir_signals,
+            daily_futures_signals=self._daily_futures_signals,
+        )
 
     # --- Position Management & Exit Logic ---
     def _manage_open_trade(

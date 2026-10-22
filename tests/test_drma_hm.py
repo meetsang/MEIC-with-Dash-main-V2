@@ -1345,6 +1345,81 @@ class TestDRMAHMSameSideLock(unittest.TestCase):
         self.assertEqual(strat._credit_options_position_state, 1)
         mock_live.place_multi_leg_order.assert_called_once()
 
+    def test_sub_strategy_daily_limits_independent(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(
+            root=tmp,
+            paper=True,
+            trade_mode='all_three',
+            dir_max_daily_signals=1,
+            non_dir_max_daily_signals=2,
+            futures_max_daily_signals=1,
+            max_daily_signals=0,
+        )
+        strat = DRMAHMStrategy(cfg)
+        mock_paper = MagicMock(_is_journal=False, _is_paper=True)
+        mock_paper.place_multi_leg_order.return_value = MagicMock(success=True, filled_price=2.00, order_id='dir_1')
+        strat._paper_broker = mock_paper
+
+        # 1. First Directional Trade (Score 5 -> Directional Options + Futures in all_three mode)
+        snap_bull = self._make_snap('BULL', 5800.0, score=5)
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.50, 2.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 1)
+        self.assertEqual(strat._daily_dir_signals, 1)
+        self.assertEqual(strat._daily_futures_signals, 1)
+        self.assertEqual(strat._daily_signals, 2)
+
+        # Clear position state so trade slot is open
+        strat._dir_options_position_state = 0
+        strat._futures_position_state = 0
+
+        # 2. Second Directional Trade attempted -> Both dir options and futures BLOCKED by limits (1 each)
+        mock_paper.place_multi_leg_order.reset_mock()
+        with patch('strategies.drma_hm.strategy.select_directional_strikes', return_value=(5800, 5810, 0.50, 2.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_bull, 2)
+        mock_paper.place_multi_leg_order.assert_not_called()
+        self.assertEqual(strat._daily_dir_signals, 1)
+        self.assertEqual(strat._daily_futures_signals, 1)
+
+        # 3. Non-Directional Trade attempted (Score 4) -> Should ENTER because non_dir_max_daily_signals=2 (0 used)
+        snap_nd = self._make_snap('BULL', 5800.0, score=4)
+        with patch('strategies.drma_hm.strategy.select_non_directional_strikes', return_value=(5750, 5740, 0.15, 1.00)):
+            strat._evaluate_and_enter(tmp, '261015', snap_nd, 3)
+        mock_paper.place_multi_leg_order.assert_called_once()
+        self.assertEqual(strat._daily_non_dir_signals, 1)
+        self.assertEqual(strat._daily_signals, 3)
+
+    def test_recount_daily_signals_sub_strategies(self):
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True)
+        strat = DRMAHMStrategy(cfg)
+        today = date(2026, 10, 22)
+
+        act_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        hist_dir = os.path.join(tmp, 'trades', 'history', 'DRMA_HM_SPX')
+        os.makedirs(act_dir, exist_ok=True)
+        os.makedirs(hist_dir, exist_ok=True)
+
+        # Write 1 active DIR trade
+        with open(os.path.join(act_dir, f'drma_hm_{today.isoformat()}_dir_1.json'), 'w') as f:
+            json.dump({'trade_id': 't1', 'trade_type': 'DIRECTIONAL', 'sub_strategy': 'DRMA_HM_DIR'}, f)
+
+        # Write 2 history NONDIR trades
+        with open(os.path.join(hist_dir, f'drma_hm_{today.isoformat()}_nd_1.json'), 'w') as f:
+            json.dump({'trade_id': 't2', 'trade_type': 'NON_DIRECTIONAL', 'sub_strategy': 'DRMA_HM_NONDIR'}, f)
+        with open(os.path.join(hist_dir, f'drma_hm_{today.isoformat()}_nd_2.json'), 'w') as f:
+            json.dump({'trade_id': 't3', 'structure_type': 'credit_spread', 'sub_strategy': 'DRMA_HM_NONDIR'}, f)
+
+        # Write 1 active FUTURES trade
+        with open(os.path.join(act_dir, f'drma_hm_{today.isoformat()}_fut_1.json'), 'w') as f:
+            json.dump({'trade_id': 't4', 'structure_type': 'futures', 'sub_strategy': 'DRMA_HM_FUT'}, f)
+
+        strat._recount_daily_signals(tmp, today)
+        self.assertEqual(strat._daily_dir_signals, 1)
+        self.assertEqual(strat._daily_non_dir_signals, 2)
+        self.assertEqual(strat._daily_futures_signals, 1)
+        self.assertEqual(strat._daily_signals, 4)
+
 
 if __name__ == '__main__':
     unittest.main()

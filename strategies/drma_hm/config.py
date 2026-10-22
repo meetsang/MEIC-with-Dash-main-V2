@@ -148,7 +148,10 @@ class DRMAHMConfig(StrategyConfig):
     enable_debounce: bool = True           # Directional lock: 1 entry per leg until flat
     dir_block_if_same_side_nondir: bool = True # Block Directional/Non-Directional trade if other spread type is active on same side (only when both Live or both Paper)
     cooldown_bars: int = 5                 # Minimum bars (e.g. 25 min) between new entries
-    max_daily_signals: int = 4             # Max trade entries per day (0 = unlimited)
+    max_daily_signals: int = 0             # Global blanket cap across all sub-strategies (0 = disabled/unlimited, sub-strategy caps govern)
+    dir_max_daily_signals: int = 4         # Max Directional Options trades per day (0 = unlimited)
+    non_dir_max_daily_signals: int = 4     # Max Non-Directional Options trades per day (0 = unlimited)
+    futures_max_daily_signals: int = 4     # Max Directional Futures trades per day (0 = unlimited)
     force_eod_exit: bool = True            # Force square-off before market close
     eod_exit_time_cst: str = '14:50'       # 14:50 CT (15:50 ET / 10 min before close)
 
