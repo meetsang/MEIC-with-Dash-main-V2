@@ -525,12 +525,18 @@ def _match_trade_to_slot(trade, lot, side, for_date=None):
     return True
 
 
+_RESOLVED_TRADE_PATHS: Dict[str, str] = {}
+
+
 def _resolve_trade_path(trade_path: str) -> str:
     """Resolve session CSV trade_path — active file or archived copy under history/."""
     if not trade_path:
         return ''
     if os.path.isfile(trade_path):
         return trade_path
+    cached = _RESOLVED_TRADE_PATHS.get(trade_path)
+    if cached and os.path.isfile(cached):
+        return cached
     base = os.path.basename(trade_path)
     from common import trades_layout
     for rel in (trades_layout.MEIC_HISTORY, trades_layout.MANUAL_HISTORY):
@@ -539,10 +545,12 @@ def _resolve_trade_path(trade_path: str) -> str:
             continue
         direct = os.path.join(hist_root, base)
         if os.path.isfile(direct):
+            _RESOLVED_TRADE_PATHS[trade_path] = direct
             return direct
         for day_dir in sorted(glob.glob(os.path.join(hist_root, '*')), reverse=True):
             candidate = os.path.join(day_dir, base)
             if os.path.isfile(candidate):
+                _RESOLVED_TRADE_PATHS[trade_path] = candidate
                 return candidate
     return trade_path
 

@@ -37,11 +37,14 @@ def load_strategies_yaml_raw() -> list:
     return list(data.get('strategies', []))
 
 
+_MODULE_MTIMES: dict[str, float] = {}
+
+
 def _resolve_classes(module_path: str, entry: dict) -> Tuple[Type[BaseStrategy], Type[StrategyConfig]]:
     class_name = entry.get('class')
     config_name = entry.get('config_class')
 
-    # Reload strategy modules if already loaded so long-running 24/7 processes pick up fresh code & schemas
+    # Reload strategy modules only if their source file has changed on disk
     import sys
     pkg_prefix = module_path.rsplit('.', 1)[0]
     for mod_name in list(sys.modules.keys()):
@@ -49,6 +52,12 @@ def _resolve_classes(module_path: str, entry: dict) -> Tuple[Type[BaseStrategy],
             try:
                 mod_ref = sys.modules.get(mod_name)
                 if mod_ref is not None:
+                    filepath = getattr(mod_ref, '__file__', None)
+                    if filepath and os.path.isfile(filepath):
+                        mtime = os.path.getmtime(filepath)
+                        if _MODULE_MTIMES.get(mod_name) == mtime:
+                            continue
+                        _MODULE_MTIMES[mod_name] = mtime
                     importlib.reload(mod_ref)
             except Exception:
                 pass

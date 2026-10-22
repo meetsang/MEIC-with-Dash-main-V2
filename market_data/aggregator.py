@@ -5,7 +5,7 @@ import csv
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from common.market_watch import symbol_has_volume_column
 from market_data import config
@@ -72,6 +72,7 @@ class SymbolState:
     closes_1m: List[float] = field(default_factory=list)
     partial_bars: Dict[int, OhlcBar] = field(default_factory=dict)
     closes_by_interval: Dict[int, List[float]] = field(default_factory=dict)
+    _polls_header_written: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         for interval in config.BAR_INTERVALS_MIN:
@@ -96,10 +97,14 @@ class SymbolState:
     def _load_1m_closes(self) -> None:
         self.closes_1m = self._load_closes(1)
 
+    def _close_polls_file(self) -> None:
+        pass
+
     def ensure_day(self, day_path: str) -> None:
         if self.day_path == day_path:
             return
         self.day_path = day_path
+        self._polls_header_written = False
         os.makedirs(day_path, exist_ok=True)
         self.minute_prices.clear()
         self.minute_volume = 0
@@ -140,12 +145,12 @@ class SymbolState:
 
     def _append_tick_row(self, ts: datetime, price: float) -> None:
         path = config.polls_path(self.day_path, self.symbol)
-        exists = os.path.isfile(path)
-        with open(path, 'a', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            if not exists:
-                writer.writerow(['timestamp', 'price'])
-            writer.writerow([ts.strftime('%Y-%m-%d %H:%M:%S'), round(price, 4)])
+        header_needed = not getattr(self, '_polls_header_written', False) and not os.path.isfile(path)
+        with open(path, 'a', encoding='utf-8', newline='', buffering=65536) as f:
+            if header_needed:
+                f.write('timestamp,price\r\n')
+            f.write(f'{ts.strftime("%Y-%m-%d %H:%M:%S")},{round(price, 4)}\r\n')
+        self._polls_header_written = True
 
     def _append_poll_row(self, ts: datetime, price: float) -> None:
         self._append_tick_row(ts, price)
@@ -176,6 +181,7 @@ class SymbolState:
             self.minute_prices = []
             self.minute_volume = 0
             self.minute_start = None
+        self._close_polls_file()
 
     def _write_bar(self, bar: OhlcBar, interval_min: int) -> None:
         if interval_min == 1:

@@ -95,6 +95,7 @@ class StopSupervisor:
         self._loop_count = 0
         self._alert_order_paths: Dict[str, str] = {}
         self._last_pending_sync = 0.0
+        self._last_heartbeat_time = 0.0
         self._ownership_conflict_paths: set[str] = set()
 
     def run_forever(self) -> None:
@@ -137,7 +138,11 @@ class StopSupervisor:
             self.alert_listener.stop()
         log.info('StopSupervisor stopped')
 
-    def _write_heartbeat(self, active_trades: int) -> None:
+    def _write_heartbeat(self, active_trades: int, *, force: bool = False) -> None:
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_heartbeat_time) < 1.5:
+            return
+        self._last_heartbeat_time = now_mono
         try:
             root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
             hb_path = os.path.join(root, 'trades', 'heartbeat.json')
@@ -158,7 +163,14 @@ class StopSupervisor:
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(payload, f)
                 f.flush()
-            os.replace(tmp, hb_path)
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, hb_path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        break
+                    time.sleep(0.02 * (attempt + 1))
             write_mqtt_cache_health(self.prices, root=root)
             write_metrics_snapshot(root=root)
         except Exception:
