@@ -1,0 +1,29 @@
+{
+  "tickers": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "MU",
+      "name": "Micron Technology Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "AMZN",
+      "name": "Amazon.com Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "SPCX",
+      "name": "CrossingBridge Pre-Merger SPAC ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "MSTR",
+      "name": "MicroStrategy Inc",
+      "enabled": true
+    }
+  ]
+}

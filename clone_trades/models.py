@@ -255,6 +255,35 @@ class ClosedLeg:
         )
 
 
+def extract_called_by(payload: Dict[str, Any]) -> str:
+    """Extract 'calledBy' / 'called_by' / 'Called By' from payload or empty string if missing."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("calledBy", "called_by", "Called By", "calledby", "caller", "source"):
+        val = payload.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def classify_sub_strategy(called_by: Optional[str]) -> str:
+    """Classify incoming called_by string into sub-strategy bucket: 'PC', 'Genie', or 'Others'.
+
+    Only exact 'pc' (case-insensitive, trimmed) routes to 'PC'.
+    Variants of PC (e.g. 'pc2', 'pc3', 'pc_2', 'pc-2', etc.) route to 'Others'.
+    Only exact 'genie' (case-insensitive, trimmed) routes to 'Genie'.
+    Missing key, empty string, or any other value routes to 'Others'.
+    """
+    if not called_by:
+        return "Others"
+    clean = str(called_by).strip().lower()
+    if clean == "pc":
+        return "PC"
+    if clean == "genie":
+        return "Genie"
+    return "Others"
+
+
 @dataclass
 class CloneTrade:
     id: str
@@ -269,7 +298,7 @@ class CloneTrade:
     initial_quantity: int  # Initial contracts entered
     remaining_quantity: int  # Current open contracts
     current_price: float  # Latest market price per share
-    highest_price: float  # Highest market price seen
+    highest_price: float  # Highest market price seen (Peak)
     highest_profit_pct: float
     status: str  # 'OPEN', 'CLOSED', 'CANCELLED'
     status_reason: str
@@ -285,13 +314,39 @@ class CloneTrade:
     order_id: Optional[str] = None
     close_order_id: Optional[str] = None
     closed_at: Optional[str] = None
+    called_by: str = ""
+    sub_strategy: str = "Others"
+    paper_mode: bool = False
+    ladder_tiers: List[Dict[str, Any]] = field(default_factory=list)
+    lowest_price: float = 0.0  # Lowest market price seen (Bottom)
+
+    def __post_init__(self):
+        if self.lowest_price <= 0.0 and self.entry_price > 0.0:
+            self.lowest_price = self.entry_price
+
+    @property
+    def created_at_cst(self) -> Optional[str]:
+        return iso_to_cst(self.created_at)
+
+    @property
+    def closed_at_cst(self) -> Optional[str]:
+        return iso_to_cst(self.closed_at)
+
+    @property
+    def date_cst(self) -> Optional[str]:
+        return iso_to_date_cst(self.created_at)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["closed_legs"] = [leg.to_dict() if isinstance(leg, ClosedLeg) else leg for leg in self.closed_legs]
-        d["created_at_cst"] = iso_to_cst(self.created_at)
-        d["closed_at_cst"] = iso_to_cst(self.closed_at)
-        d["date_cst"] = iso_to_date_cst(self.created_at)
+        d["created_at_cst"] = self.created_at_cst
+        d["closed_at_cst"] = self.closed_at_cst
+        d["date_cst"] = self.date_cst
+        d["called_by"] = self.called_by
+        d["sub_strategy"] = self.sub_strategy
+        d["paper_mode"] = self.paper_mode
+        d["ladder_tiers"] = self.ladder_tiers
+        d["lowest_price"] = self.lowest_price
         return d
 
     @classmethod
@@ -304,7 +359,29 @@ class CloneTrade:
         spec = OptionSpec(**spec_data) if isinstance(spec_data, dict) else spec_data
         raw_legs = raw.pop("closed_legs", [])
         legs = [ClosedLeg.from_dict(l) if isinstance(l, dict) else l for l in raw_legs]
-        return cls(spec=spec, closed_legs=legs, **raw)
+
+        called_by = raw.pop("called_by", None)
+        sub_strategy = raw.pop("sub_strategy", None)
+        # Requirement 4: Historical trades without sub_strategy default to PC
+        if not sub_strategy:
+            sub_strategy = "PC"
+        if not called_by:
+            called_by = "PC" if sub_strategy == "PC" else ""
+
+        paper_mode = bool(raw.pop("paper_mode", False))
+        ladder_tiers = raw.pop("ladder_tiers", [])
+        lowest_price = float(raw.pop("lowest_price", raw.get("entry_price", 0.0)))
+
+        return cls(
+            spec=spec,
+            closed_legs=legs,
+            called_by=called_by,
+            sub_strategy=sub_strategy,
+            paper_mode=paper_mode,
+            ladder_tiers=ladder_tiers,
+            lowest_price=lowest_price,
+            **raw
+        )
 
 
 @dataclass
@@ -316,15 +393,35 @@ class CloneSignal:
     alert_price: float
     market_price: Optional[float] = None
     premium_pct: Optional[float] = None
-    status: str = "PENDING"  # 'TAKEN', 'SKIPPED', 'CHASE_EXCEEDED', 'FLOOR_EXCEEDED', 'DISMISSED_MANUAL', 'REJECTED_ERROR'
+    status: str = "PENDING"  # 'TRACKING', 'TAKEN', 'SKIPPED', 'CHASE_EXCEEDED', 'FLOOR_EXCEEDED', 'DISMISSED_MANUAL', 'REJECTED_ERROR'
     status_reason: str = ""
     trade_id: Optional[str] = None
     manual_decision: Optional[Dict[str, Any]] = None
+    called_by: str = ""
+    sub_strategy: str = "Others"
+    current_price: Optional[float] = None
+    peak_price: Optional[float] = None
+    bottom_price: Optional[float] = None
+    last_quote_time: Optional[str] = None
+
+    @property
+    def received_at_cst(self) -> Optional[str]:
+        return iso_to_cst(self.received_at)
+
+    @property
+    def date_cst(self) -> Optional[str]:
+        return iso_to_date_cst(self.received_at)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["received_at_cst"] = iso_to_cst(self.received_at)
-        d["date_cst"] = iso_to_date_cst(self.received_at)
+        d["received_at_cst"] = self.received_at_cst
+        d["date_cst"] = self.date_cst
+        d["called_by"] = self.called_by
+        d["sub_strategy"] = self.sub_strategy
+        d["current_price"] = self.current_price
+        d["peak_price"] = self.peak_price
+        d["bottom_price"] = self.bottom_price
+        d["last_quote_time"] = self.last_quote_time
         return d
 
     @classmethod
@@ -334,7 +431,40 @@ class CloneSignal:
         raw.pop("date_cst", None)
         spec_data = raw.pop("spec", None)
         spec = OptionSpec(**spec_data) if isinstance(spec_data, dict) else None
-        return cls(spec=spec, **raw)
+
+        raw_payload = raw.get("raw_payload") or {}
+        called_by = raw.pop("called_by", None)
+        sub_strategy = raw.pop("sub_strategy", None)
+        if not sub_strategy:
+            if isinstance(raw_payload, dict):
+                caller = extract_called_by(raw_payload)
+                if caller:
+                    called_by = caller
+                    sub_strategy = classify_sub_strategy(caller)
+                else:
+                    called_by = "PC"
+                    sub_strategy = "PC"
+            else:
+                called_by = "PC"
+                sub_strategy = "PC"
+        if not called_by:
+            called_by = "PC" if sub_strategy == "PC" else ""
+
+        current_price = raw.pop("current_price", None)
+        peak_price = raw.pop("peak_price", None)
+        bottom_price = raw.pop("bottom_price", None)
+        last_quote_time = raw.pop("last_quote_time", None)
+
+        return cls(
+            spec=spec,
+            called_by=called_by,
+            sub_strategy=sub_strategy,
+            current_price=current_price,
+            peak_price=peak_price,
+            bottom_price=bottom_price,
+            last_quote_time=last_quote_time,
+            **raw
+        )
 
 
 def distribute_contracts_across_tiers(

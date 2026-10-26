@@ -47,6 +47,14 @@ def load_session_state(strategy_name: str, root: str) -> Dict[str, Any]:
         return {'entered': False, 'skip_reason': None, 'overrides': dict(persisted)}
     if 'overrides' not in state:
         state['overrides'] = {}
+    try:
+        from common.strategy_modes import get_persistent_modes_for_strategy
+        persisted = get_persistent_modes_for_strategy(strategy_name, root)
+        for k, v in persisted.items():
+            if k not in state['overrides']:
+                state['overrides'][k] = v
+    except Exception:
+        pass
     return state
 
 
@@ -68,6 +76,9 @@ def save_session_state(strategy_name: str, root: str, state: Dict[str, Any]) -> 
 
 def get_overrides(strategy_name: str, root: str) -> Dict[str, Any]:
     return dict(load_session_state(strategy_name, root).get('overrides') or {})
+
+
+load_overrides = get_overrides
 
 
 def set_overrides(strategy_name: str, root: str, updates: Dict[str, Any], cfg_cls: Type[StrategyConfig]) -> Dict[str, Any]:
@@ -161,6 +172,14 @@ def effective_config(cfg: StrategyConfig, strategy_name: str, root: str) -> Stra
     overrides = get_overrides(strategy_name, root)
     if overrides:
         apply_config_overrides(merged, overrides)
+    # Ensure DRMA_HM sub-strategy paper properties are resolved to explicit booleans
+    if strategy_name == 'DRMA_HM_SPX':
+        if getattr(merged, 'dir_paper', None) is None:
+            merged.dir_paper = getattr(merged, 'is_dir_paper', merged.paper)
+        if getattr(merged, 'non_dir_paper', None) is None:
+            merged.non_dir_paper = getattr(merged, 'is_non_dir_paper', merged.paper)
+        if getattr(merged, 'futures_paper', None) is None:
+            merged.futures_paper = getattr(merged, 'is_futures_paper', merged.paper)
     return merged
 
 

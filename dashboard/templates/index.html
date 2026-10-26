@@ -1203,6 +1203,11 @@
   .hist-strat-pill[data-strat="DRMA_HM_NONDIR"].active, .cal-sub-pill[data-cal-sub="DRMA_HM_NONDIR"].active, .cal-sub-pill[data-tbl-sub="DRMA_HM_NONDIR"].active, .hist-drma-sub-pill[data-substrat="DRMA_HM_NONDIR"].active { border-color: #10b981; color: #10b981; background: rgba(16, 185, 129, 0.18); }
   .hist-strat-pill[data-strat="DRMA_HM_FUT"].active, .cal-sub-pill[data-cal-sub="DRMA_HM_FUT"].active, .cal-sub-pill[data-tbl-sub="DRMA_HM_FUT"].active, .hist-drma-sub-pill[data-substrat="DRMA_HM_FUT"].active { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
   .cal-sub-pill[data-cal-sub="DRMA_HM_SPX"].active, .cal-sub-pill[data-tbl-sub="DRMA_HM_SPX"].active, .hist-drma-sub-pill[data-substrat="DRMA_HM_SPX"].active { border-color: #10b981; color: #10b981; background: rgba(16, 185, 129, 0.18); }
+  .hist-strat-pill[data-strat="DRMA_HM_STOCKS"].active { border-color: #34d399; color: #34d399; }
+  .hist-strat-pill[data-strat="DRMA_STOCK_EQUITY"].active, .hist-drma-stocks-sub-pill[data-stocks-sub="DRMA_STOCK_EQUITY"].active { border-color: #f59e0b; color: #fbbf24; background: rgba(245, 158, 11, 0.18); }
+  .hist-strat-pill[data-strat="DRMA_STOCK_DIR"].active, .hist-drma-stocks-sub-pill[data-stocks-sub="DRMA_STOCK_DIR"].active { border-color: #0284c7; color: #38bdf8; background: rgba(2, 132, 199, 0.18); }
+  .hist-strat-pill[data-strat="DRMA_STOCK_NONDIR"].active, .hist-drma-stocks-sub-pill[data-stocks-sub="DRMA_STOCK_NONDIR"].active { border-color: #8b5cf6; color: #c084fc; background: rgba(139, 92, 246, 0.18); }
+  .hist-drma-stocks-sub-pill[data-stocks-sub="DRMA_HM_STOCKS"].active { border-color: #10b981; color: #10b981; background: rgba(16, 185, 129, 0.18); }
   .hist-strat-pill[data-strat="IRON_FLY_SPX"].active { border-color: #8b5cf6; color: #a78bfa; }
   .hist-strat-pill[data-strat="IRON_FLY_XSP"].active { border-color: #06b6d4; color: #22d3ee; }
   .hist-strat-pill[data-strat="MEAN_REVERSION_SPX"].active { border-color: #f59e0b; color: #fbbf24; }
@@ -1390,6 +1395,8 @@
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('iron_fly');return false;">Iron Fly <span class="badge bg-secondary" id="iron-fly-nav-badge">PAPER</span></a></li>
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('iron_fly_xsp');return false;">Iron Fly XSP <span class="badge bg-secondary" id="iron-fly-xsp-nav-badge">PAPER</span></a></li>
       <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('drma_hm');return false;">DRMA + H-M <span class="badge bg-secondary ms-1" id="drma-hm-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('drma_stocks');return false;">DRMA Stocks <span class="badge bg-secondary ms-1" id="drma-stocks-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('inverse_meic');return false;">Inverse MEIC <span class="badge bg-secondary ms-1" id="inverse-meic-nav-badge">PAPER</span></a></li>
     </ul>
     <div id="manual-meic-banner" class="alert alert-warning mb-3 d-none" style="border-radius:10px;"></div>
 
@@ -1838,6 +1845,8 @@
           <span class="ms-2 small text-muted" id="drma-hm-header-subtitle">Daily Reset 21 EMA + MTF RSI/WMA Matrix + 30m ORB &amp; Overnight Levels.</span>
         </div>
         <div class="d-flex align-items-center gap-2 flex-wrap">
+          <!-- Session Phase Badge -->
+          <span class="badge fs-6 border" id="drma-hm-session-phase-badge" style="background:#1e293b; color:#fbbf24; border-color:#f59e0b;" title="Current Trading Session Phase">OVERNIGHT TRADING</span>
           <!-- Global Master Toggle -->
           <span class="badge bg-secondary fs-6" id="drma-hm-mode-badge" title="Master Strategy Paper/Live Fallback">PAPER</span>
           <button class="btn btn-sm btn-outline-light" id="drma-hm-mode-toggle-btn" onclick="drmaHmTogglePaper()" title="Switch All Sub-Strategies">
@@ -2127,10 +2136,42 @@
                   <label class="form-label small mb-1">Stop (pts)</label>
                   <input type="number" id="drma-hm-ov-fut-sl" class="form-control form-control-sm" min="1" max="50" step="0.5" placeholder="5.0" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
                 </div>
+                <div class="col-12">
+                  <label class="form-label small mb-1" title="Allow Directional ES Futures to trade overnight until 07:00 CST before flattening for market open">Overnight ES Futures Trading</label>
+                  <select id="drma-hm-ov-overnight-futures" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                    <option value="true">Enabled (Trade overnight until 7:00 CST)</option>
+                    <option value="false">Disabled (Regular session only)</option>
+                  </select>
+                </div>
               </div>
             </div>
 
-            <!-- Row 4: Manual Level Feeds & Actions -->
+            <!-- Row 5: Session Timing & Overnight Schedule -->
+            <div class="col-12 mt-3 pt-3 border-top border-secondary">
+              <div class="text-secondary fw-semibold small mb-2 d-flex align-items-center">
+                <i class="bi bi-clock-history me-1 text-warning"></i>Session Lifecycle Schedule (CST)
+              </div>
+              <div class="row g-2 align-items-end">
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" title="CST time to automatically flatten overnight ES futures positions before market open (default 07:00 CST).">Overnight Flatten (CST)</label>
+                  <input type="text" id="drma-hm-ov-overnight-flatten" class="form-control form-control-sm" placeholder="07:00" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" title="CST time for market open prep and ORB formation (08:30 CST / 09:30 ET).">Market Open (CST)</label>
+                  <input type="text" id="drma-hm-ov-market-open" class="form-control form-control-sm" placeholder="08:30" readonly style="background:#161922;color:#94a3b8;border-color:#2d3148;">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" title="CST time to start active regular daytime trading signals (options &amp; futures) after market open (default 09:30 CST).">Trading Start (CST)</label>
+                  <input type="text" id="drma-hm-ov-trading-start" class="form-control form-control-sm" placeholder="09:30" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" title="CST time to force-exit all daytime positions before close (14:50 CST).">EOD Flatten (CST)</label>
+                  <input type="text" id="drma-hm-ov-eod-exit" class="form-control form-control-sm" placeholder="14:50" readonly style="background:#161922;color:#94a3b8;border-color:#2d3148;">
+                </div>
+              </div>
+            </div>
+
+            <!-- Row 6: Manual Level Feeds & Actions -->
             <div class="col-12 mt-3 pt-3 border-top border-secondary">
               <div class="row g-2 align-items-end">
                 <div class="col-6 col-md-2">
@@ -2192,6 +2233,197 @@
         </div>
       </div>
     </div><!-- /strategy-drma-hm -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+    <!-- ── DRMA STOCKS PRO STRATEGY PANEL (MULTI-STOCK TRACKER) ────────────────── -->
+    <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+    <div id="strategy-drma-stocks" class="strategy-panel" data-visible="false" style="display:none;">
+      <div id="control-bar-DRMA_HM_STOCKS" class="strategy-control-bar-container"></div>
+      
+      <!-- Weekend Note -->
+      <div class="alert alert-secondary mb-3 d-none" style="border-radius:10px;border-color:#2d3148;background:#22263a;color:#e2e8f0;" id="drma-stocks-weekend-note">
+        <i class="bi bi-calendar-week me-2"></i>Dashboard active on weekends — review paper history on the History tab. New live paper entries execute during regular equity hours (08:30–15:00 CT).
+      </div>
+
+      <!-- Strategy Header Alert -->
+      <div class="alert alert-info mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2" style="border-radius:10px;background:#132a22;border:1px solid #10b981;color:#f1f5f9;" id="drma-stocks-header-alert">
+        <div>
+          <strong style="color:#34d399;"><i class="bi bi-collection-play-fill me-2"></i>DRMA Stocks Pro</strong> &mdash; Multi-Stock Directional Spreads &amp; Direct Equity Engine.
+          <span class="ms-2 small text-muted">Daily Reset 21 EMA + Hilega-Milega Momentum + 30m ORB (08:30–09:00 CST) across tracked stocks (NVDA, MU, AMZN, SPCX, MSTR).</span>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="badge bg-success fs-6" id="drma-stocks-mode-badge" title="Simulation Paper Mode">PAPER ONLY</span>
+          <span class="badge bg-dark border border-secondary text-info fs-6">10-Wide Options</span>
+          <span class="badge bg-dark border border-secondary text-warning fs-6">$5K Equity Sizing</span>
+          <button class="btn btn-sm btn-outline-light" onclick="loadDrmaStocks()" title="Refresh All Stocks Now">
+            <i class="bi bi-arrow-clockwise me-1"></i>Refresh Matrix
+          </button>
+        </div>
+      </div>
+
+      <!-- Watchlist Maintenance Toolbar -->
+      <div class="card mb-3" style="background:#141824;border:1px solid #2d3148;border-radius:10px;">
+        <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1a1e2e;border-bottom:1px solid #2d3148;">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-bookmark-star-fill text-warning"></i>
+            <span class="fw-bold text-light small text-uppercase" style="letter-spacing:0.04em;">Tracked Watchlist Management</span>
+            <span class="badge bg-secondary ms-1" id="drma-stocks-watchlist-count">5 Tickers</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <input type="text" id="drma-stocks-add-input" class="form-control form-control-sm" placeholder="Add Ticker (e.g. TSLA, AMD)" style="width:180px;background:#0d111a;color:#f8fafc;border-color:#334155;text-transform:uppercase;" onkeydown="if(event.key==='Enter')drmaStocksAddTicker()">
+            <button class="btn btn-sm btn-success px-3" onclick="drmaStocksAddTicker()">
+              <i class="bi bi-plus-circle me-1"></i>Add
+            </button>
+          </div>
+        </div>
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-center gap-2 flex-wrap" id="drma-stocks-watchlist-pills">
+            <span class="text-muted small"><i class="bi bi-hourglass-split me-1"></i>Loading watchlist...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Row KPI Cards -->
+      <div class="row g-3 mb-3">
+        <!-- P/L Card -->
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Today's Clubbed Paper P/L</div>
+            <div id="drma-stocks-pnl" class="fs-4 fw-bold mt-1 text-light">$0.00</div>
+            <small class="text-muted d-block mt-1" id="drma-stocks-pnl-sub">Realized: $0.00 | Open: $0.00</small>
+          </div>
+        </div>
+
+        <!-- Active Positions Count -->
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Active Positions</div>
+            <div id="drma-stocks-open-count" class="fs-4 fw-bold mt-1 text-info">0 Open</div>
+            <small class="text-muted d-block mt-1" id="drma-stocks-open-sub">Clubbed across all stocks</small>
+          </div>
+        </div>
+
+        <!-- Top Momentum Setup -->
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Top Momentum Stock</div>
+            <div id="drma-stocks-top-setup" class="fs-5 fw-bold mt-1 text-warning">Scanning...</div>
+            <small class="text-muted d-block mt-1" id="drma-stocks-top-sub">Highest confluence score</small>
+          </div>
+        </div>
+
+        <!-- Watchlist Sentiment -->
+        <div class="col-md-3">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
+            <div class="section-title">Watchlist Sentiment</div>
+            <div id="drma-stocks-sentiment" class="fs-5 fw-bold mt-1 text-light">&ndash;</div>
+            <small class="text-muted d-block mt-1" id="drma-stocks-sentiment-sub">Trend distribution</small>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clubbed Live Ticker Signal Matrix (Hero View) -->
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+        <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1e2433;border-bottom:1px solid #2d3148;">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-grid-3x3-gap-fill text-success"></i>
+            <span class="fw-bold text-light">Clubbed Live Ticker Signal Matrix</span>
+            <small class="text-muted ms-2">(Real-Time 21 EMA, Hilega-Milega Fast/Slow, &amp; Confluence Grades)</small>
+          </div>
+          <span class="badge bg-secondary" id="drma-stocks-matrix-last-bar">Last Bar: &ndash;</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover mb-0" style="font-size:0.875rem;">
+            <thead>
+              <tr class="text-secondary small text-uppercase" style="background:#141722;border-bottom:1px solid #283049;">
+                <th style="width:110px;">Ticker</th>
+                <th>Price</th>
+                <th>21 EMA</th>
+                <th>Distance to EMA</th>
+                <th>Hilega-Milega (Fast / Slow)</th>
+                <th>RSI (9)</th>
+                <th>Setup Score</th>
+                <th>Grade</th>
+                <th>Bias</th>
+                <th>Recommended Trade</th>
+                <th class="text-end">Status</th>
+              </tr>
+            </thead>
+            <tbody id="drma-stocks-matrix-tbody">
+              <tr><td colspan="11" class="text-center text-muted py-4"><i class="bi bi-hourglass-split me-2"></i>Loading live stock signals...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Clubbed Active Positions Card -->
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+        <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1e2433;border-bottom:1px solid #2d3148;">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-play-circle-fill text-primary"></i>
+            <span class="fw-bold text-light">Active Open Positions (Clubbed)</span>
+            <span class="badge bg-secondary ms-1" id="drma-stocks-active-badge">0 Open</span>
+          </div>
+          <small class="text-muted">Options: 10-Wide (0-7 DTE) | Equity: Fixed $5K Buy/Sell</small>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover mb-0" style="font-size:0.85rem;">
+            <thead>
+              <tr class="small text-uppercase" style="background:#141722;color:#94a3b8;border-bottom:1px solid #283049;">
+                <th>Ticker</th>
+                <th>Sub-Strategy</th>
+                <th>Side</th>
+                <th>Structure / Strikes / Shares</th>
+                <th>Expiry</th>
+                <th>Qty</th>
+                <th>Entry Price</th>
+                <th>Current Mark</th>
+                <th>Unrealized P/L</th>
+                <th>Targets (PT / SL)</th>
+                <th>Open Time</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody id="drma-stocks-active-tbody">
+              <tr><td colspan="12" class="text-center text-muted py-3">No active open positions across tracked stocks</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Today's Closed Trades History Feed -->
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+        <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1e2433;border-bottom:1px solid #2d3148;">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-clock-history text-secondary"></i>
+            <span class="fw-bold text-light">Today's Completed Stock Trades</span>
+          </div>
+          <span class="small text-muted" id="drma-stocks-history-count">0 Completed</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover table-sm mb-0" style="font-size:0.85rem;">
+            <thead>
+              <tr class="small text-uppercase" style="background:#141722;color:#94a3b8;border-bottom:1px solid #283049;">
+                <th>Ticker</th>
+                <th>Type</th>
+                <th>Side</th>
+                <th>Structure / Strikes</th>
+                <th>Expiry</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>Exit Reason</th>
+                <th>Realized P/L ($)</th>
+                <th>Opened At</th>
+                <th>Closed At</th>
+              </tr>
+            </thead>
+            <tbody id="drma-stocks-history-tbody">
+              <tr><td colspan="11" class="text-center text-muted py-3">No closed trades recorded today</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /strategy-drma-stocks -->
 
     <div id="strategy-meic" class="strategy-panel" data-visible="true">
       <div id="control-bar-MEIC_IC" class="strategy-control-bar-container"></div>
@@ -2551,6 +2783,36 @@
             </div>
           </div>
         </div>
+
+        <!-- Sub-Strategy Filter Bar (PC / Genie / Others) -->
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 pt-2" style="border-top:1px solid #23293f;">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <span class="text-muted fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">SUB-STRATEGIES:</span>
+            <div class="btn-group btn-group-sm" role="group" id="clone-substrat-filter-group">
+              <button type="button" class="btn btn-info active fw-bold" id="btn-substrat-all" onclick="setCloneSubStrategyFilter('ALL')">
+                <i class="bi bi-grid-fill me-1"></i>All Sub-Strategies
+                <span class="badge bg-secondary ms-1" id="badge-substrat-all-count">0</span>
+              </button>
+              <button type="button" class="btn btn-outline-primary fw-semibold" id="btn-substrat-pc" onclick="setCloneSubStrategyFilter('PC')">
+                <i class="bi bi-cpu me-1"></i>PC (Live)
+                <span class="badge bg-danger ms-1" id="badge-substrat-pc-count">0</span>
+              </button>
+              <button type="button" class="btn btn-outline-success fw-semibold" id="btn-substrat-genie" onclick="setCloneSubStrategyFilter('Genie')">
+                <i class="bi bi-magic me-1"></i>Genie
+                <span class="badge bg-info text-dark ms-1" id="badge-substrat-genie-mode">TRACKING</span>
+                <span class="badge bg-secondary ms-1" id="badge-substrat-genie-count">0</span>
+              </button>
+              <button type="button" class="btn btn-outline-secondary fw-semibold" id="btn-substrat-others" onclick="setCloneSubStrategyFilter('Others')">
+                <i class="bi bi-collection me-1"></i>Others
+                <span class="badge bg-dark border border-secondary text-info ms-1" id="badge-substrat-others-mode">TRACKING</span>
+                <span class="badge bg-secondary ms-1" id="badge-substrat-others-count">0</span>
+              </button>
+            </div>
+          </div>
+          <div class="text-muted" style="font-size:0.73rem;">
+            <i class="bi bi-funnel me-1 text-info"></i>Filter: <span class="text-light fw-bold" id="clone-current-filter-label">All Sub-Strategies</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2574,22 +2836,66 @@
       <!-- Screen Configurable Parameters Card (#3, #4, #5, #6) -->
       <div class="col-lg-8">
         <div class="card h-100" style="background:#1a1d27;border:1px solid #2d3148;">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <span><i class="bi bi-sliders me-2 text-primary"></i>Configurable Trade &amp; Ladder Settings</span>
-            <button class="btn btn-sm btn-primary" onclick="saveCloneConfig()">
-              <i class="bi bi-check2-circle me-1"></i>Save Settings
+          <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Ladder &amp; Risk Settings:</span>
+              <div class="btn-group btn-group-sm" role="group" id="clone-cfg-tab-group">
+                <button type="button" class="btn btn-primary fw-bold" id="cfg-tab-pc" onclick="switchCloneConfigSubStrat('PC')">
+                  <i class="bi bi-cpu me-1"></i>PC
+                </button>
+                <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-genie" onclick="switchCloneConfigSubStrat('Genie')">
+                  <i class="bi bi-magic me-1"></i>Genie
+                </button>
+                <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-others" onclick="switchCloneConfigSubStrat('Others')">
+                  <i class="bi bi-collection me-1"></i>Others
+                </button>
+              </div>
+            </div>
+            <button class="btn btn-sm btn-primary px-3 fw-bold" onclick="saveCloneConfig()">
+              <i class="bi bi-check2-circle me-1"></i>Save Settings (<span id="clone-cfg-current-strat-label">PC</span>)
             </button>
           </div>
+
+          <!-- Active Sub-Strategy Description Banner -->
+          <div class="px-3 pt-2 pb-0">
+            <div id="clone-cfg-sub-strat-banner" class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#131620;border:1px solid #2d3148;font-size:0.75rem;">
+              <div id="clone-cfg-sub-strat-desc">
+                <span class="badge bg-danger me-2">LIVE TRADING</span> Active live broker execution engine with 5-tier scaling ladder.
+              </div>
+            </div>
+          </div>
+
           <div class="card-body">
-            <!-- Top Controls: Allocation, Chase Guard, Floor Guard, Initial SL, Execution Mode -->
+            <!-- Top Controls: Sizing Limit Mode (Either-Or: Budget vs Contracts), Chase Guard, Floor Guard, Initial SL, Execution Mode -->
             <div class="row g-2 mb-3">
+              <!-- Sizing Mode Selector -->
               <div class="col-6 col-md-2">
+                <label class="section-title mb-1 d-block text-info">Sizing Limit Mode</label>
+                <select id="clone-cfg-entry-limit-mode" class="form-select form-select-sm bg-dark text-info border-secondary font-monospace fw-bold" onchange="onCloneEntryModeChange(this.value)">
+                  <option value="dollar">$ Dollar Budget</option>
+                  <option value="contracts"># Contracts Fixed</option>
+                </select>
+                <small class="text-muted" style="font-size:0.67rem;">Either $ or # ctrs</small>
+              </div>
+
+              <!-- Budget ($) Input -->
+              <div class="col-6 col-md-2" id="clone-cfg-budget-container">
                 <label class="section-title mb-1 d-block">Budget ($)</label>
                 <div class="input-group input-group-sm">
                   <span class="input-group-text bg-dark text-muted border-secondary">$</span>
-                  <input type="number" id="clone-cfg-allocation" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" value="500" step="50" min="50"/>
+                  <input type="number" id="clone-cfg-allocation" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" value="500" step="50" min="10"/>
                 </div>
-                <small class="text-muted" style="font-size:0.68rem;">Allocation budget</small>
+                <small class="text-muted" style="font-size:0.67rem;">Max allocation budget</small>
+              </div>
+
+              <!-- Fixed Contracts (#) Input (Toggleable) -->
+              <div class="col-6 col-md-2" id="clone-cfg-contracts-container" style="display:none;">
+                <label class="section-title mb-1 d-block text-warning">Contracts (#)</label>
+                <div class="input-group input-group-sm">
+                  <input type="number" id="clone-cfg-contracts" class="form-control bg-dark text-warning border-secondary font-monospace fw-bold" value="1" step="1" min="1"/>
+                  <span class="input-group-text bg-dark text-muted border-secondary">ctrs</span>
+                </div>
+                <small class="text-muted" style="font-size:0.67rem;">Fixed contracts limit</small>
               </div>
 
               <div class="col-6 col-md-2">
@@ -2598,7 +2904,7 @@
                   <input type="number" id="clone-cfg-max-premium" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" value="25" step="1" min="0"/>
                   <span class="input-group-text bg-dark text-muted border-secondary">%</span>
                 </div>
-                <small class="text-muted" style="font-size:0.68rem;">Max slippage</small>
+                <small class="text-muted" style="font-size:0.67rem;">Max slippage</small>
               </div>
 
               <div class="col-6 col-md-2">
@@ -2607,25 +2913,26 @@
                   <input type="number" id="clone-cfg-floor-guard" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" value="75" step="1" min="0" max="100"/>
                   <span class="input-group-text bg-dark text-muted border-secondary">%</span>
                 </div>
-                <small class="text-muted" style="font-size:0.68rem;">Drop protection</small>
+                <small class="text-muted" style="font-size:0.67rem;">Drop protection</small>
               </div>
 
-              <div class="col-6 col-md-2">
-                <label class="section-title mb-1 d-block">Initial SL (%)</label>
+              <div class="col-6 col-md-1">
+                <label class="section-title mb-1 d-block">Initial SL</label>
                 <div class="input-group input-group-sm">
-                  <input type="number" id="clone-cfg-initial-sl" class="form-control bg-dark text-light border-secondary font-monospace fw-bold text-danger" value="-50" step="5" max="0"/>
-                  <span class="input-group-text bg-dark text-muted border-secondary">%</span>
+                  <input type="number" id="clone-cfg-initial-sl" class="form-control bg-dark text-light border-secondary font-monospace fw-bold text-danger px-1" value="-50" step="5" max="0"/>
+                  <span class="input-group-text bg-dark text-muted border-secondary px-1">%</span>
                 </div>
-                <small class="text-muted" style="font-size:0.68rem;">Initial position SL</small>
+                <small class="text-muted" style="font-size:0.67rem;">Initial SL</small>
               </div>
 
-              <div class="col-12 col-md-4">
+              <div class="col-12 col-md-3">
                 <label class="section-title mb-1 d-block">Execution Mode</label>
-                <select id="clone-cfg-paper-mode" class="form-select form-select-sm bg-dark text-light border-secondary font-monospace fw-bold">
-                  <option value="false">LIVE (TastyTrade Broker Orders)</option>
-                  <option value="true">PAPER (Simulated Journal Only)</option>
+                <select id="clone-cfg-execution-mode" class="form-select form-select-sm bg-dark text-light border-secondary font-monospace fw-bold" onchange="onCloneExecutionModeChange(this.value)">
+                  <option value="tracking">TRACKING MODE (Watch Alerts &amp; Quotes, Manual Entry)</option>
+                  <option value="paper">PAPER (Simulated Auto-Trade Journal)</option>
+                  <option value="live">LIVE (TastyTrade Broker Orders)</option>
                 </select>
-                <small class="text-muted" style="font-size:0.68rem;">Live sends real limit orders to TastyTrade</small>
+                <small class="text-muted" id="clone-cfg-exec-mode-subtext" style="font-size:0.67rem;">Tracking mode monitors quotes with Buy / Get In button</small>
               </div>
             </div>
 
@@ -2708,7 +3015,7 @@
                   <input type="text" id="sim-exp" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="Exp (YYYY-MM-DD)" value="2026-09-25"/>
                 </div>
               </div>
-              <div class="row g-1 mb-2">
+              <div class="row g-1 mb-1">
                 <div class="col-4">
                   <input type="number" id="sim-strike" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace" placeholder="Strike" value="771"/>
                 </div>
@@ -2722,11 +3029,59 @@
                   <input type="number" id="sim-price" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace" placeholder="Alert Px" value="0.80" step="0.05"/>
                 </div>
               </div>
+              <div class="row g-1 mb-2">
+                <div class="col-12">
+                  <select id="sim-calledby" class="form-select form-select-sm bg-dark text-info border-secondary font-monospace fw-semibold" title="Select Called By key">
+                    <option value="PC">calledBy: "PC" (Live PC Sub-Strategy)</option>
+                    <option value="genie">calledBy: "genie" (Genie Sub-Strategy)</option>
+                    <option value="Daemon">calledBy: "Daemon" (Others Bucket - Paper Only)</option>
+                    <option value="custom_caller">calledBy: custom (Others Bucket)</option>
+                  </select>
+                </div>
+              </div>
               <button class="btn btn-sm btn-outline-success w-100 py-1" onclick="sendSimulatedSignal()">
                 <i class="bi bi-send me-1"></i>Send Test Webhook Signal
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TRACKED ALERTS & REAL-TIME WATCHLIST (TRACKING MODE) ═══ -->
+    <div class="card mb-3" id="clone-tracked-container" style="background:#131826;border:1px solid #1e3a8a;">
+      <div class="card-header d-flex justify-content-between align-items-center py-2" style="background:#0f172a;border-bottom:1px solid #1e3a8a;">
+        <div class="d-flex align-items-center gap-2">
+          <span class="fw-bold text-light">
+            <i class="bi bi-radar text-info me-2"></i>Live Tracked Alerts (Tracking Mode)
+          </span>
+          <span class="badge bg-info text-dark font-monospace fw-bold" id="clone-tracked-count-badge">0 TRACKING</span>
+        </div>
+        <small class="text-muted" style="font-size:0.74rem;">
+          <i class="bi bi-lightning-charge me-1 text-warning"></i>Live quotes streaming. Click <strong>"Buy / Get In"</strong> to enter trade with ladder exit.
+        </small>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" style="font-size:0.83rem;">
+            <thead style="background:#141b2d;border-bottom:2px solid #233154;color:#cbd5e1;font-size:0.75rem;letter-spacing:0.03em;">
+              <tr>
+                <th class="text-nowrap">Sub-Strat</th>
+                <th>Option / Spec</th>
+                <th class="text-nowrap">Alert Time (CST)</th>
+                <th class="text-nowrap">Alert Px</th>
+                <th class="text-nowrap">Broker @ Alert</th>
+                <th class="text-nowrap">Current Px</th>
+                <th class="text-nowrap">Peak Px (Max)</th>
+                <th class="text-nowrap">Bottom Px (Min)</th>
+                <th class="text-nowrap">Net vs Alert</th>
+                <th class="text-end text-nowrap">Action</th>
+              </tr>
+            </thead>
+            <tbody id="clone-tracked-tbody">
+              <tr><td colspan="10" class="text-center text-muted py-3">No alerts currently in Tracking Mode</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -2742,12 +3097,15 @@
           <table class="table table-hover mb-0" style="font-size:0.84rem;">
             <thead style="background:#181c28;border-bottom:2px solid #3b4061;">
               <tr>
+                <th>Sub-Strat</th>
                 <th>Symbol / Option</th>
                 <th>Entry (CST)</th>
                 <th>Contracts</th>
                 <th>Alert Px</th>
-                <th>Entry Fill</th>
+                <th>Broker @ Alert</th>
                 <th>Current Px</th>
+                <th>Peak Px</th>
+                <th>Bottom Px</th>
                 <th>Unrealized P&amp;L</th>
                 <th>Next Profit Target</th>
                 <th>Active Stop Loss</th>
@@ -2756,7 +3114,7 @@
               </tr>
             </thead>
             <tbody id="clone-trades-tbody">
-              <tr><td colspan="11" class="text-center text-muted py-4">No active clone trades open</td></tr>
+              <tr><td colspan="14" class="text-center text-muted py-4">No active clone trades open</td></tr>
             </tbody>
           </table>
         </div>
@@ -2777,6 +3135,7 @@
           <table class="table table-hover mb-0 history-table" style="font-size:0.83rem;">
             <thead>
               <tr>
+                <th>Sub-Strat</th>
                 <th>Date &amp; Time (CST)</th>
                 <th>Option / Spec</th>
                 <th>Alert Px</th>
@@ -2789,13 +3148,179 @@
               </tr>
             </thead>
             <tbody id="clone-today-tbody">
-              <tr><td colspan="9" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today</td></tr>
+              <tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today</td></tr>
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- ═══ HISTORICAL ARCHIVED SIGNALS & TRADES ═══ -->
+    <div class="card mb-3" id="clone-history-container" style="background:#141722;border:1px solid #23293d;">
+      <div class="card-header d-flex justify-content-between align-items-center py-2" style="background:#10131d;cursor:pointer;" onclick="const el=document.getElementById('clone-hist-collapse');el.classList.toggle('d-none');">
+        <div class="d-flex align-items-center gap-2">
+          <span class="fw-bold text-muted" style="font-size:0.85rem;"><i class="bi bi-archive me-2 text-secondary"></i>Historical Archived Signals &amp; Closed Trades</span>
+          <span class="badge bg-secondary font-monospace" id="clone-hist-badge">0 HISTORICAL ARCHIVED</span>
+        </div>
+        <small class="text-info" style="font-size:0.75rem;"><i class="bi bi-chevron-expand me-1"></i>Toggle Past Sessions</small>
+      </div>
+      <div id="clone-hist-collapse" class="d-none">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0 history-table" style="font-size:0.82rem;">
+              <thead style="background:#181c28;border-bottom:2px solid #3b4061;">
+                <tr>
+                  <th>Sub-Strat</th>
+                  <th>Date &amp; Time (CST)</th>
+                  <th>Option / Spec</th>
+                  <th>Alert Px</th>
+                  <th>Market @ Signal</th>
+                  <th>Premium Diff</th>
+                  <th>Status</th>
+                  <th>Realized P&amp;L</th>
+                  <th>Exit Reason &amp; Time (CST)</th>
+                  <th class="text-end">Manual Action</th>
+                </tr>
+              </thead>
+              <tbody id="clone-history-tbody">
+                <tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div><!-- /strategy-clone-trades -->
+
+  <!-- ═══ INVERSE MEIC STRATEGY PANEL ═══ -->
+  <div id="strategy-inverse-meic" class="strategy-panel" data-visible="false" style="display:none;">
+    <div id="control-bar-INVERSE_MEIC_SPX" class="strategy-control-bar-container"></div>
+
+    <!-- ── TOP CONDITIONS MONITOR BANNER (Design Spec §5) ── -->
+    <div class="card mb-3" style="background:#111522; border:1px solid #1e293b; border-radius:12px; overflow:hidden;">
+      <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1a2133; border-bottom:1px solid #334155;">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-shield-shaded text-primary fs-5"></i>
+          <span class="fw-bold text-light" style="letter-spacing:0.5px; font-size:0.95rem;">INVERSE MEIC — MARKET REGIME MONITOR</span>
+          <span class="badge bg-secondary ms-1 font-monospace" style="font-size:0.75rem;">SPX 0DTE TWIN DEBIT SPREADS</span>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span id="inv-regime-badge" class="badge bg-success px-3 py-1 fs-6 fw-bold">STATUS: ARMED</span>
+          <button class="btn btn-sm btn-outline-secondary py-1 px-2" onclick="loadInverseMeic()" title="Refresh Regime Evaluation">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
+        </div>
+      </div>
+      <div class="card-body p-3">
+        <div class="row g-3">
+          <!-- Card 1: Pre-market Gap -->
+          <div class="col-md-3">
+            <div class="p-3 rounded h-100" style="background:#0b0f19; border:1px solid #1e293b;" id="inv-card-gap">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-secondary small fw-semibold">PRE-MARKET GAP</span>
+                <span id="inv-gap-icon" class="badge bg-success-subtle text-success fw-bold">✓ MET</span>
+              </div>
+              <div class="h4 fw-bold mb-1 text-light font-monospace" id="inv-gap-val">-0.68%</div>
+              <div class="text-secondary small">Threshold: &le; -0.50%</div>
+            </div>
+          </div>
+          <!-- Card 2: 30m ORB Range -->
+          <div class="col-md-3">
+            <div class="p-3 rounded h-100" style="background:#0b0f19; border:1px solid #1e293b;" id="inv-card-orb">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-secondary small fw-semibold">30M ORB RANGE</span>
+                <span id="inv-orb-icon" class="badge bg-success-subtle text-success fw-bold">✓ MET</span>
+              </div>
+              <div class="h4 fw-bold mb-1 text-light font-monospace" id="inv-orb-val">31.5 pts</div>
+              <div class="text-secondary small">Threshold: &ge; 25.0 pts (08:30-09:00 CT)</div>
+            </div>
+          </div>
+          <!-- Card 3: Spot VIX -->
+          <div class="col-md-3">
+            <div class="p-3 rounded h-100" style="background:#0b0f19; border:1px solid #1e293b;" id="inv-card-vix">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-secondary small fw-semibold">SPOT VIX LEVEL</span>
+                <span id="inv-vix-icon" class="badge bg-secondary-subtle text-secondary fw-bold">STANDBY</span>
+              </div>
+              <div class="h4 fw-bold mb-1 text-light font-monospace" id="inv-vix-val">17.20</div>
+              <div class="text-secondary small">Threshold: &ge; 18.00 or +5% Surge</div>
+            </div>
+          </div>
+          <!-- Card 4: Realized ATR -->
+          <div class="col-md-3">
+            <div class="p-3 rounded h-100" style="background:#0b0f19; border:1px solid #1e293b;" id="inv-card-atr">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-secondary small fw-semibold">REALIZED ATR (14)</span>
+                <span id="inv-atr-icon" class="badge bg-success-subtle text-success fw-bold">✓ MET</span>
+              </div>
+              <div class="h4 fw-bold mb-1 text-light font-monospace" id="inv-atr-val">28.4 pts</div>
+              <div class="text-secondary small">Threshold: &ge; 25.0 pts (Elevated)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Sub-bar -->
+        <div class="d-flex flex-wrap justify-content-between align-items-center mt-3 pt-2 px-2" style="border-top:1px solid #1e293b; font-size:0.85rem;">
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <div><span class="text-secondary">Today's Mode:</span> <strong id="inv-today-mode" class="text-success">ACTIVE TRADING</strong></div>
+            <div><span class="text-secondary">Next Tranche:</span> <strong id="inv-next-tranche" class="text-info font-monospace">10-30 CT</strong></div>
+            <div><span class="text-secondary">Profit Target:</span> <strong id="inv-target-mult" class="text-warning font-monospace">3.0x Multiple</strong></div>
+            <div class="text-secondary"><span id="inv-summary-msg" class="text-light">Regime: ARMED — Volatility expansion active.</span></div>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-info py-0 px-2" style="font-size:0.75rem;" onclick="testToggleInverseMeicRegime(true)" title="Force regime ARMED for testing">
+              <i class="bi bi-lightning-charge me-1"></i>Arm Bot
+            </button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:0.75rem;" onclick="testToggleInverseMeicRegime(false)" title="Force regime STANDBY for testing">
+              <i class="bi bi-pause-circle me-1"></i>Standby
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TRANCHES & TWIN WINGS GRID TABLE ── -->
+    <div class="card mb-3" style="background:#141824; border:1px solid #2d3148; border-radius:12px; overflow:hidden;">
+      <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1a1e2e; border-bottom:1px solid #2d3148;">
+        <div>
+          <span class="fw-bold text-light"><i class="bi bi-calendar3-range me-2 text-info"></i>Today's Scheduled Tranches (Twin Debit Spreads: CDS + PDS, 25-Wide)</span>
+          <span class="text-secondary small ms-2">"Let it bleed" loss cap: Entry Debit ($80–$100). Target: 3.0×. EOD Square-Off: 14:50 CT.</span>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-secondary small">Total P&amp;L:</span>
+          <span id="inv-total-pnl" class="h5 fw-bold font-monospace text-success mb-0">$0.00</span>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-dark table-hover mb-0" style="font-size:0.85rem;">
+          <thead>
+            <tr class="text-secondary text-uppercase small" style="background:#0f121d; border-bottom:1px solid #283049;">
+              <th style="width:110px;">Tranche</th>
+              <th style="width:140px;">Window (CT)</th>
+              <th>Call Debit Spread (CDS) — Wing 1</th>
+              <th>Put Debit Spread (PDS) — Wing 2</th>
+              <th class="text-end" style="width:140px;">Tranche Net P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody id="inv-tranches-tbody">
+            <tr><td colspan="5" class="text-center text-muted py-4"><i class="bi bi-hourglass-split me-2"></i>Loading Inverse MEIC tranches...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── STRATEGY PAYOFF REFERENCE CARD ── -->
+    <div class="card mb-3" style="background:#111522; border:1px solid #1e293b; border-radius:10px;">
+      <div class="card-body py-2 px-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 text-secondary small">
+          <div><strong class="text-light"><i class="bi bi-info-circle text-info me-1"></i>Payoff Math:</strong> Cost per tranche = ~$2.00 ($1.00 CDS + $1.00 PDS). Exit at 3.0× ($3.00) locks in <strong>+$1.00 net (+50% ROI)</strong> after fully absorbing losing leg.</div>
+          <div><strong class="text-warning"><i class="bi bi-arrow-left-right me-1"></i>Whipsaw Double-Winner:</strong> On violent reversals, both wings can hit 3.0× sequentially for up to <strong>+200% ROI</strong>.</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /strategy-inverse-meic -->
 
   </div><!-- /tab-today -->
 
@@ -2829,6 +3354,9 @@
             <button type="button" class="hist-strat-pill" data-strat="DRMA_HM_SPX" onclick="setHistoryStrategyFilter('DRMA_HM_SPX')" title="Filter DRMA + H-M SPX trades">
               <span class="pill-dot" style="background:#10b981;"></span> DRMA + H-M
             </button>
+            <button type="button" class="hist-strat-pill" data-strat="DRMA_HM_STOCKS" onclick="setHistoryStrategyFilter('DRMA_HM_STOCKS')" title="Filter DRMA Stocks trades">
+              <span class="pill-dot" style="background:#34d399;"></span> DRMA Stocks
+            </button>
             <button type="button" class="hist-strat-pill" data-strat="IRON_FLY_SPX" onclick="setHistoryStrategyFilter('IRON_FLY_SPX')" title="Filter Iron Fly SPX trades">
               <span class="pill-dot" style="background:#8b5cf6;"></span> Iron Fly
             </button>
@@ -2838,6 +3366,12 @@
             <button type="button" class="hist-strat-pill" data-strat="MEAN_REVERSION_SPX" onclick="setHistoryStrategyFilter('MEAN_REVERSION_SPX')" title="Filter Mean Reversion SPX trades">
               <span class="pill-dot" style="background:#f59e0b;"></span> Mean Rev
             </button>
+            <button type="button" class="hist-strat-pill" data-strat="CLONE_TRADES" onclick="setHistoryStrategyFilter('CLONE_TRADES')" title="Filter Discretionary Clone trades">
+              <span class="pill-dot" style="background:#06b6d4;"></span> Discretionary
+            </button>
+            <button type="button" class="hist-strat-pill" data-strat="INVERSE_MEIC_SPX" onclick="setHistoryStrategyFilter('INVERSE_MEIC_SPX')" title="Filter Inverse MEIC trades">
+              <span class="pill-dot" style="background:#ec4899;"></span> Inverse MEIC
+            </button>
           </div>
         </div>
         <div class="d-flex align-items-center gap-2">
@@ -2845,15 +3379,21 @@
             <option value="">All strategies</option>
             <option value="MEIC_IC">MEIC only</option>
             <option value="MANUAL_SPREAD">Manual only</option>
+            <option value="INVERSE_MEIC_SPX">Inverse MEIC only</option>
             <option value="PERMA_BULL_PCS">Perma Bull only</option>
             <option value="SKYLINE_SPX">Skyline only</option>
             <option value="DRMA_HM_SPX">DRMA + H-M (All)</option>
             <option value="DRMA_HM_DIR">── DRMA: Directional Spreads</option>
             <option value="DRMA_HM_NONDIR">── DRMA: Non-Directional Spreads</option>
             <option value="DRMA_HM_FUT">── DRMA: Directional Futures</option>
+            <option value="DRMA_HM_STOCKS">DRMA Stocks (All)</option>
+            <option value="DRMA_STOCK_EQUITY">── Stocks: Direct Equity</option>
+            <option value="DRMA_STOCK_DIR">── Stocks: Directional Spreads</option>
+            <option value="DRMA_STOCK_NONDIR">── Stocks: Non-Directional Spreads</option>
             <option value="IRON_FLY_SPX">Iron Fly only</option>
             <option value="IRON_FLY_XSP">Iron Fly XSP only</option>
             <option value="MEAN_REVERSION_SPX">Mean Reversion only</option>
+            <option value="CLONE_TRADES">Discretionary only</option>
           </select>
           <select id="hist-nav-money" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3550;width:140px;" onchange="onHistoryMoneyChange(this.value)">
             <option value="all" selected>All $ (live+paper)</option>
@@ -2881,6 +3421,40 @@
           <button type="button" class="hist-strat-pill hist-drma-sub-pill" data-substrat="DRMA_HM_FUT" onclick="setHistoryStrategyFilter('DRMA_HM_FUT')" title="Directional Futures (/ES Outright with 5 pt target & stop)">
             <span class="pill-dot" style="background:#f59e0b;"></span> Directional Futures
           </button>
+        </div>
+      </div>
+
+      <!-- DRMA Stocks Sub-Category & Ticker Quick Selector Bar -->
+      <div id="drma-stocks-subcategory-bar" class="d-flex align-items-center justify-content-between gap-2 flex-wrap mb-2 pb-2" style="border-bottom:1px solid #283049; display:none;">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="text-uppercase fw-bold text-muted small d-flex align-items-center" style="font-size:0.75rem;letter-spacing:0.04em;">
+            <i class="bi bi-collection-play-fill text-success me-1"></i>DRMA Stocks Sub-Category:
+          </span>
+          <div class="d-flex align-items-center gap-1 flex-wrap">
+            <button type="button" class="hist-strat-pill hist-drma-stocks-sub-pill active" data-stocks-sub="DRMA_HM_STOCKS" onclick="setHistoryStrategyFilter('DRMA_HM_STOCKS')" title="All DRMA Stock Trades Combined">
+              <span class="pill-dot" style="background:#34d399;"></span> All Stocks (Combined)
+            </button>
+            <button type="button" class="hist-strat-pill hist-drma-stocks-sub-pill" data-stocks-sub="DRMA_STOCK_EQUITY" onclick="setHistoryStrategyFilter('DRMA_STOCK_EQUITY')" title="Direct Stock Equity Trades (Fixed $5K Buy/Short)">
+              <span class="pill-dot" style="background:#fbbf24;"></span> Direct Equity
+            </button>
+            <button type="button" class="hist-strat-pill hist-drma-stocks-sub-pill" data-stocks-sub="DRMA_STOCK_DIR" onclick="setHistoryStrategyFilter('DRMA_STOCK_DIR')" title="Directional Spreads (10-wide Call/Put Debits)">
+              <span class="pill-dot" style="background:#38bdf8;"></span> Directional Spreads
+            </button>
+            <button type="button" class="hist-strat-pill hist-drma-stocks-sub-pill" data-stocks-sub="DRMA_STOCK_NONDIR" onclick="setHistoryStrategyFilter('DRMA_STOCK_NONDIR')" title="Non-Directional Spreads (10-wide Credit / IC)">
+              <span class="pill-dot" style="background:#a78bfa;"></span> Non-Directional Spreads
+            </button>
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-muted small fw-bold"><i class="bi bi-funnel text-info me-1"></i>Ticker:</span>
+          <select id="hist-stocks-ticker-filter" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3550;width:130px;" onchange="setHistoryTickerFilter(this.value)">
+            <option value="">All Tickers</option>
+            <option value="NVDA">NVDA</option>
+            <option value="MU">MU</option>
+            <option value="AMZN">AMZN</option>
+            <option value="SPCX">SPCX</option>
+            <option value="MSTR">MSTR</option>
+          </select>
         </div>
       </div>
 
@@ -3020,6 +3594,26 @@
           <div class="text-muted" id="hist-sub-drma-hm" style="font-size:0.7rem;">&ndash;</div>
         </div>
       </div>
+      <div class="col-6 col-md-4 col-lg">
+        <div class="stat-card hist-strat-card" id="card-strat-DRMA_HM_STOCKS" onclick="filterHistoryByCard('DRMA_HM_STOCKS')" style="cursor:pointer;border-left:3px solid #34d399;" title="Click to filter DRMA Stocks">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="section-title mb-0" style="font-size:0.75rem;">DRMA Stocks</span>
+            <span class="badge" style="background:#34d399;color:#000;font-size:0.65rem;">STOCKS</span>
+          </div>
+          <div class="stat-val" id="hist-pnl-drma-stocks" style="font-size:1.1rem;">&ndash;</div>
+          <div class="text-muted" id="hist-sub-drma-stocks" style="font-size:0.7rem;">&ndash;</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4 col-lg">
+        <div class="stat-card hist-strat-card" id="card-strat-CLONE_TRADES" onclick="filterHistoryByCard('CLONE_TRADES')" style="cursor:pointer;border-left:3px solid #06b6d4;" title="Click to filter Discretionary">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="section-title mb-0" style="font-size:0.75rem;">Discretionary</span>
+            <span class="badge" style="background:#06b6d4;color:#000;font-size:0.65rem;">CLONE</span>
+          </div>
+          <div class="stat-val" id="hist-pnl-clone-trades" style="font-size:1.1rem;">&ndash;</div>
+          <div class="text-muted" id="hist-sub-clone-trades" style="font-size:0.7rem;">&ndash;</div>
+        </div>
+      </div>
     </div>
     <!-- Stats row -->
     <div class="row g-3 mb-3" id="stats-row">
@@ -3052,9 +3646,14 @@
               <option value="DRMA_HM_DIR">── DRMA: Directional Spreads</option>
               <option value="DRMA_HM_NONDIR">── DRMA: Non-Directional Spreads</option>
               <option value="DRMA_HM_FUT">── DRMA: Directional Futures</option>
+              <option value="DRMA_HM_STOCKS">DRMA Stocks (All)</option>
+              <option value="DRMA_STOCK_EQUITY">── Stocks: Direct Equity</option>
+              <option value="DRMA_STOCK_DIR">── Stocks: Directional Spreads</option>
+              <option value="DRMA_STOCK_NONDIR">── Stocks: Non-Directional Spreads</option>
               <option value="IRON_FLY_SPX">Iron Fly only</option>
               <option value="IRON_FLY_XSP">Iron Fly XSP only</option>
               <option value="MEAN_REVERSION_SPX">Mean Reversion only</option>
+              <option value="CLONE_TRADES">Discretionary only</option>
             </select>
             <select id="hist-money-filter-cal" class="form-select form-select-sm"
               style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
@@ -3118,9 +3717,14 @@
               <option value="DRMA_HM_DIR">── DRMA: Directional Spreads</option>
               <option value="DRMA_HM_NONDIR">── DRMA: Non-Directional Spreads</option>
               <option value="DRMA_HM_FUT">── DRMA: Directional Futures</option>
+              <option value="DRMA_HM_STOCKS">DRMA Stocks (All)</option>
+              <option value="DRMA_STOCK_EQUITY">── Stocks: Direct Equity</option>
+              <option value="DRMA_STOCK_DIR">── Stocks: Directional Spreads</option>
+              <option value="DRMA_STOCK_NONDIR">── Stocks: Non-Directional Spreads</option>
               <option value="IRON_FLY_SPX">Iron Fly only</option>
               <option value="IRON_FLY_XSP">Iron Fly XSP only</option>
               <option value="MEAN_REVERSION_SPX">Mean Reversion only</option>
+              <option value="CLONE_TRADES">Discretionary only</option>
             </select>
             <select id="hist-money-filter" class="form-select form-select-sm"
               style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;width:120px;"
@@ -3137,6 +3741,39 @@
         </div>
       </div>
     </div><!-- /hist-overview-collapsible -->
+
+    <!-- DRMA Stocks Performance Matrix Card (Per Sub-Strategy & Per Ticker) -->
+    <div class="card mb-3" id="drma-stocks-performance-matrix-card" style="display:none;background:#141824;border:1px solid #2d3148;border-radius:10px;">
+      <div class="card-header d-flex justify-content-between align-items-center py-2 px-3" style="background:#1a1e2e;border-bottom:1px solid #2d3148;">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-grid-3x3-gap-fill text-success"></i>
+          <span class="fw-bold text-light">DRMA Stocks Performance Matrix (Per Sub-Strategy &amp; Per Ticker)</span>
+          <span class="badge bg-secondary ms-1" id="drma-stocks-matrix-badge">Tracked Watchlist</span>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="loadDrmaStocksHistoryBreakdown()" title="Refresh breakdown stats">
+          <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+        </button>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-dark table-hover table-sm mb-0" style="font-size:0.85rem;">
+          <thead>
+            <tr class="text-secondary small text-uppercase" style="background:#0f121d;border-bottom:1px solid #283049;">
+              <th>Ticker</th>
+              <th>Total Trades</th>
+              <th>Win Rate</th>
+              <th>Direct Equity P/L ($)</th>
+              <th>Directional Spreads ($)</th>
+              <th>Non-Directional ($)</th>
+              <th>Total Realized P/L ($)</th>
+              <th class="text-end">Filter Trades</th>
+            </tr>
+          </thead>
+          <tbody id="drma-stocks-breakdown-tbody">
+            <tr><td colspan="8" class="text-center text-muted py-3">Loading stocks performance breakdown...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
     <!-- Trade History Table Card -->
     <div class="card" id="history-trades-card">
@@ -3777,38 +4414,76 @@
     </div>
   </div>
 
-  <!-- Modal: Manual Take Trade (#4) -->
+  <!-- Modal: Manual Take / Buy Trade (Tracking Mode & Chase Exceeded) -->
   <div class="modal fade" id="modal-clone-take-manual" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content bg-dark text-light border-secondary">
-        <div class="modal-header border-secondary">
-          <h6 class="modal-title fw-bold"><i class="bi bi-play-circle text-primary me-2"></i>Take Trade Manually</h6>
+        <div class="modal-header border-secondary py-2">
+          <h6 class="modal-title fw-bold" id="modal-take-title">
+            <i class="bi bi-cart-plus text-success me-2"></i>Buy / Enter Trade
+          </h6>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
           <input type="hidden" id="modal-take-sig-id"/>
+          <input type="hidden" id="modal-take-sub-strat"/>
           <div class="p-2 mb-3 rounded" style="background:#171a25;border:1px solid #2d3148;">
-            <div class="fw-bold text-light fs-6" id="modal-take-symbol">SPY ...</div>
-            <div class="d-flex justify-content-between mt-1 text-muted" style="font-size:0.8rem;">
-              <span>Alert Price: <strong class="text-light" id="modal-take-alert-px">$0.00</strong></span>
-              <span>Live Market: <strong class="text-warning" id="modal-take-market-px">$0.00</strong></span>
-              <span>Slippage: <strong class="text-danger" id="modal-take-diff">+0.0%</strong></span>
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="fw-bold text-light fs-6" id="modal-take-symbol">SPY ...</div>
+              <span class="badge bg-info text-dark fw-bold font-monospace" id="modal-take-substrat-badge">PC</span>
+            </div>
+            <!-- 5 Price Points Row -->
+            <div class="row g-1 mt-2 text-center" style="font-size:0.75rem;">
+              <div class="col-4 p-1 rounded" style="background:#0f121b;border:1px solid #222738;">
+                <span class="text-muted d-block" style="font-size:0.67rem;">Alert Px</span>
+                <strong class="text-light font-monospace" id="modal-take-alert-px">$0.00</strong>
+              </div>
+              <div class="col-4 p-1 rounded" style="background:#0f121b;border:1px solid #222738;">
+                <span class="text-muted d-block" style="font-size:0.67rem;">Broker @ Alert</span>
+                <strong class="text-info font-monospace" id="modal-take-market-px">$0.00</strong>
+              </div>
+              <div class="col-4 p-1 rounded" style="background:#0f121b;border:1px solid #222738;">
+                <span class="text-muted d-block" style="font-size:0.67rem;">Current Live Px</span>
+                <strong class="text-warning font-monospace" id="modal-take-current-px">$0.00</strong>
+              </div>
+              <div class="col-6 p-1 mt-1 rounded" style="background:#0c1712;border:1px solid #14532d;">
+                <span class="text-muted d-block" style="font-size:0.67rem;">Peak Px (Max Since Alert)</span>
+                <strong class="text-success font-monospace" id="modal-take-peak-px">$0.00</strong>
+              </div>
+              <div class="col-6 p-1 mt-1 rounded" style="background:#1c1012;border:1px solid #7f1d1d;">
+                <span class="text-muted d-block" style="font-size:0.67rem;">Bottom Px (Min Since Alert)</span>
+                <strong class="text-danger font-monospace" id="modal-take-bottom-px">$0.00</strong>
+              </div>
+            </div>
+            <div class="d-flex justify-content-between mt-2 pt-1 text-muted" style="border-top:1px solid #23293f;font-size:0.72rem;">
+              <span>Premium Diff: <strong class="text-info font-monospace" id="modal-take-diff">+0.0%</strong></span>
+              <span id="modal-take-timing-label">Live streaming</span>
+            </div>
+          </div>
+
+          <div class="row g-2 mb-2">
+            <div class="col-7">
+              <label class="section-title mb-1 d-block">Limit Execution Price ($)</label>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-secondary text-light border-secondary">$</span>
+                <input type="number" id="modal-take-custom-px" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" step="0.01"/>
+              </div>
+              <small class="text-muted" style="font-size:0.68rem;">Default is latest market ask</small>
+            </div>
+            <div class="col-5">
+              <label class="section-title mb-1 d-block">Contracts to Buy</label>
+              <input type="number" id="modal-take-custom-qty" class="form-control form-control-sm bg-dark text-warning border-secondary font-monospace fw-bold" min="1" step="1" oninput="updateModalTakeLadderPreview()"/>
+              <small class="text-muted" style="font-size:0.68rem;" id="modal-take-qty-subtext">Configured quantity</small>
             </div>
           </div>
 
           <div class="mb-3">
-            <label class="section-title mb-1 d-block">Limit Execution Price ($)</label>
-            <div class="input-group input-group-sm">
-              <span class="input-group-text bg-secondary text-light border-secondary">$</span>
-              <input type="number" id="modal-take-custom-px" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" step="0.01"/>
-            </div>
-            <small class="text-muted" style="font-size:0.72rem;">Default is latest market ask. You can adjust to any level.</small>
-          </div>
-
-          <div class="mb-3">
-            <label class="section-title mb-1 d-block">Contracts to Buy</label>
-            <input type="number" id="modal-take-custom-qty" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace fw-bold" min="1" step="1" oninput="updateModalTakeLadderPreview()"/>
-            <small class="text-muted" style="font-size:0.72rem;">Calculated from configured budget, or override with custom quantity.</small>
+            <label class="section-title mb-1 d-block">Order Execution Mode</label>
+            <select id="modal-take-exec-mode" class="form-select form-select-sm bg-dark text-light border-secondary font-monospace fw-bold">
+              <option value="live">LIVE (TastyTrade Broker Orders)</option>
+              <option value="paper">PAPER (Simulated Journal Only)</option>
+            </select>
+            <small class="text-muted" id="modal-take-mode-subtext" style="font-size:0.68rem;">Live sends real limit order to broker</small>
           </div>
 
           <!-- Ladder Scaling Out Plan Preview -->
@@ -3824,10 +4499,10 @@
             </div>
           </div>
         </div>
-        <div class="modal-footer border-secondary">
+        <div class="modal-footer border-secondary py-2">
           <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-sm btn-success fw-bold px-3" onclick="confirmTakeManual()">
-            <i class="bi bi-check2-circle me-1"></i>Confirm &amp; Execute Order
+          <button type="button" class="btn btn-sm btn-success fw-bold px-3 shadow-sm" onclick="confirmTakeManual()">
+            <i class="bi bi-cart-check-fill me-1"></i>Confirm &amp; Execute Order
           </button>
         </div>
       </div>
@@ -4402,6 +5077,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setStrategyPanelVisible(document.getElementById('strategy-iron-fly'), activeStrategy === 'iron_fly');
   setStrategyPanelVisible(document.getElementById('strategy-iron-fly-xsp'), activeStrategy === 'iron_fly_xsp');
   setStrategyPanelVisible(document.getElementById('strategy-drma-hm'), activeStrategy === 'drma_hm');
+  setStrategyPanelVisible(document.getElementById('strategy-drma-stocks'), activeStrategy === 'drma_stocks');
   const planWrap = document.getElementById('session-plan-table-wrap');
   if (planWrap) {
     planWrap.addEventListener('input', onPlanFieldEdit);
@@ -4431,7 +5107,9 @@ function showTab(tab) {
   if (tab === 'today' && activeStrategy === 'iron_fly') loadIronFly();
   if (tab === 'today' && activeStrategy === 'iron_fly_xsp') loadIronFlyXsp();
   if (tab === 'today' && activeStrategy === 'drma_hm') loadDrmaHm();
+  if (tab === 'today' && activeStrategy === 'drma_stocks') loadDrmaStocks();
   if (tab === 'today' && activeStrategy === 'clone_trades') loadCloneTrades();
+  if (tab === 'today' && activeStrategy === 'inverse_meic') loadInverseMeic();
 }
 
 function showStrategy(s) {
@@ -4446,6 +5124,8 @@ function showStrategy(s) {
   const ironFlyEl = document.getElementById('strategy-iron-fly');
   const ironFlyXspEl = document.getElementById('strategy-iron-fly-xsp');
   const drmaHmEl = document.getElementById('strategy-drma-hm');
+  const drmaStocksEl = document.getElementById('strategy-drma-stocks');
+  const inverseMeicEl = document.getElementById('strategy-inverse-meic');
   const pnlRow = document.getElementById('pnl-by-strategy-row');
   setStrategyPanelVisible(meicEl, s === 'meic');
   setStrategyPanelVisible(manualEl, s === 'manual');
@@ -4456,6 +5136,8 @@ function showStrategy(s) {
   setStrategyPanelVisible(ironFlyEl, s === 'iron_fly');
   setStrategyPanelVisible(ironFlyXspEl, s === 'iron_fly_xsp');
   setStrategyPanelVisible(drmaHmEl, s === 'drma_hm');
+  setStrategyPanelVisible(drmaStocksEl, s === 'drma_stocks');
+  setStrategyPanelVisible(inverseMeicEl, s === 'inverse_meic');
   if (!skylineEl && s === 'skyline') {
     toast('Skyline panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
   }
@@ -4474,9 +5156,15 @@ function showStrategy(s) {
   if (!drmaHmEl && s === 'drma_hm') {
     toast('DRMA + H-M panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
   }
+  if (!drmaStocksEl && s === 'drma_stocks') {
+    toast('DRMA Stocks panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
+  }
+  if (!inverseMeicEl && s === 'inverse_meic') {
+    toast('Inverse MEIC panel missing — hard refresh (Ctrl+F5) to load latest dashboard', 'warning');
+  }
   // Keep summary row visible so the tab never looks empty below the sub-tabs
   if (pnlRow) pnlRow.style.display = '';
-  const strategyKeys = ['meic', 'manual', 'clone_trades', 'skyline', 'perma-bull', 'mean_reversion', 'iron_fly', 'iron_fly_xsp', 'drma_hm'];
+  const strategyKeys = ['meic', 'manual', 'clone_trades', 'skyline', 'perma-bull', 'mean_reversion', 'iron_fly', 'iron_fly_xsp', 'drma_hm', 'drma_stocks', 'inverse_meic'];
   document.querySelectorAll('#strategyTabs .nav-link').forEach((el, i) => {
     el.classList.toggle('active', strategyKeys[i] === s);
   });
@@ -4488,6 +5176,8 @@ function showStrategy(s) {
     stopIronFlyPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'skyline') {
     setSkylineLoading(true);
     loadSkyline();
@@ -4497,6 +5187,8 @@ function showStrategy(s) {
     stopIronFlyPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'perma-bull') {
     setPermaBullLoading(true);
     loadPermaBull();
@@ -4506,6 +5198,8 @@ function showStrategy(s) {
     stopIronFlyPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'mean_reversion') {
     setMeanReversionLoading(true);
     loadMeanReversion();
@@ -4515,6 +5209,8 @@ function showStrategy(s) {
     stopIronFlyPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'iron_fly') {
     setIronFlyLoading(true);
     loadIronFly();
@@ -4524,6 +5220,8 @@ function showStrategy(s) {
     stopMeanReversionPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'iron_fly_xsp') {
     setIronFlyXspLoading(true);
     loadIronFlyXsp();
@@ -4533,6 +5231,8 @@ function showStrategy(s) {
     stopMeanReversionPolling();
     stopIronFlyPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   } else if (s === 'drma_hm') {
     setDrmaHmLoading(true);
     loadDrmaHm();
@@ -4542,6 +5242,29 @@ function showStrategy(s) {
     stopMeanReversionPolling();
     stopIronFlyPolling();
     stopIronFlyXspPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
+  } else if (s === 'drma_stocks') {
+    setDrmaStocksLoading(true);
+    loadDrmaStocks();
+    startDrmaStocksPolling();
+    stopSkylinePolling();
+    stopPermaBullPolling();
+    stopMeanReversionPolling();
+    stopIronFlyPolling();
+    stopIronFlyXspPolling();
+    stopDrmaHmPolling();
+    stopInverseMeicPolling();
+  } else if (s === 'inverse_meic') {
+    loadInverseMeic();
+    startInverseMeicPolling();
+    stopSkylinePolling();
+    stopPermaBullPolling();
+    stopMeanReversionPolling();
+    stopIronFlyPolling();
+    stopIronFlyXspPolling();
+    stopDrmaHmPolling();
+    stopDrmaStocksPolling();
   } else {
     stopSkylinePolling();
     stopPermaBullPolling();
@@ -4549,6 +5272,8 @@ function showStrategy(s) {
     stopIronFlyPolling();
     stopIronFlyXspPolling();
     stopDrmaHmPolling();
+    stopDrmaStocksPolling();
+    stopInverseMeicPolling();
   }
   if (lastData) render(lastData);
 }
@@ -7473,9 +8198,15 @@ const STRATEGY_DISPLAY_NAMES = {
   'DRMA_HM_DIR': 'DRMA: Directional Spreads',
   'DRMA_HM_NONDIR': 'DRMA: Non-Directional Spreads',
   'DRMA_HM_FUT': 'DRMA: Directional Futures',
+  'DRMA_HM_STOCKS': 'DRMA Stocks (All)',
+  'DRMA_STOCK_EQUITY': 'DRMA: Direct Equity',
+  'DRMA_STOCK_DIR': 'DRMA: Directional Spreads',
+  'DRMA_STOCK_NONDIR': 'DRMA: Non-Directional Spreads',
   'IRON_FLY_SPX': 'Iron Fly SPX',
   'IRON_FLY_XSP': 'Iron Fly XSP',
   'MEAN_REVERSION_SPX': 'Mean Reversion',
+  'CLONE_TRADES': 'Discretionary',
+  'INVERSE_MEIC_SPX': 'Inverse MEIC',
 };
 
 function getHistoryStrategyFilter() {
@@ -7496,18 +8227,21 @@ function syncHistoryStrategyFilters(value) {
     const el = document.getElementById(id);
     if (el) el.value = activeHistoryStrategy;
   });
-  const isDrma = activeHistoryStrategy.startsWith('DRMA_HM_');
+  const isDrma = (activeHistoryStrategy.startsWith('DRMA_HM_') && activeHistoryStrategy !== 'DRMA_HM_STOCKS');
+  const isDrmaStocks = (activeHistoryStrategy === 'DRMA_HM_STOCKS' || activeHistoryStrategy.startsWith('DRMA_STOCK_'));
   // Update strategy pill active states
   document.querySelectorAll('.hist-strat-pill[data-strat]').forEach(pill => {
     const pillStrat = pill.getAttribute('data-strat') || '';
     if (isDrma && pillStrat === 'DRMA_HM_SPX') {
+      pill.classList.add('active');
+    } else if (isDrmaStocks && pillStrat === 'DRMA_HM_STOCKS') {
       pill.classList.add('active');
     } else {
       pill.classList.toggle('active', pillStrat === activeHistoryStrategy);
     }
   });
 
-  // DRMA sub-category bars display & active states
+  // DRMA SPX sub-category bars display & active states
   const subBar = document.getElementById('drma-subcategory-bar');
   const calSubBar = document.getElementById('cal-drma-sub-bar');
   const tblSubBar = document.getElementById('table-drma-sub-bar');
@@ -7527,12 +8261,29 @@ function syncHistoryStrategyFilters(value) {
     });
   }
 
+  // DRMA Stocks sub-category bar & breakdown card display
+  const stocksSubBar = document.getElementById('drma-stocks-subcategory-bar');
+  const stocksMatrixCard = document.getElementById('drma-stocks-performance-matrix-card');
+  if (stocksSubBar) stocksSubBar.style.display = isDrmaStocks ? 'flex' : 'none';
+  if (stocksMatrixCard) {
+    stocksMatrixCard.style.display = isDrmaStocks ? 'block' : 'none';
+    if (isDrmaStocks) loadDrmaStocksHistoryBreakdown();
+  }
+
+  if (isDrmaStocks) {
+    document.querySelectorAll('.hist-drma-stocks-sub-pill').forEach(pill => {
+      pill.classList.toggle('active', pill.getAttribute('data-stocks-sub') === activeHistoryStrategy);
+    });
+  }
+
   // Highlight active strategy card
   document.querySelectorAll('.hist-strat-card').forEach(c => {
     c.style.boxShadow = 'none';
     c.style.background = '#151824';
   });
-  const activeCardId = isDrma ? 'card-strat-DRMA_HM_SPX' : (activeHistoryStrategy ? `card-strat-${activeHistoryStrategy}` : 'card-strat-all');
+  const activeCardId = isDrma ? 'card-strat-DRMA_HM_SPX'
+    : (isDrmaStocks ? 'card-strat-DRMA_HM_STOCKS'
+    : (activeHistoryStrategy ? `card-strat-${activeHistoryStrategy}` : 'card-strat-all'));
   const activeCard = document.getElementById(activeCardId);
   if (activeCard) {
     activeCard.style.boxShadow = '0 0 10px rgba(56, 189, 248, 0.35)';
@@ -7632,6 +8383,9 @@ function resetAllHistoryFilters() {
   syncHistoryStrategyFilters('');
   syncHistoryMoneyFilters('all');
   syncHistoryDateFilters('');
+  activeHistoryTicker = '';
+  const tickerSel = document.getElementById('hist-stocks-ticker-filter');
+  if (tickerSel) tickerSel.value = '';
   if (histTransactionsPulled) {
     loadHistoryTrades();
   } else {
@@ -8099,6 +8853,7 @@ async function loadHistoryTrades() {
   if (activeHistoryStrategy) url += `&strategy=${encodeURIComponent(activeHistoryStrategy)}`;
   if (activeHistoryDate) url += `&date=${encodeURIComponent(activeHistoryDate)}`;
   if (activeHistoryMoney) url += `&money=${encodeURIComponent(activeHistoryMoney)}`;
+  if (activeHistoryTicker) url += `&ticker=${encodeURIComponent(activeHistoryTicker)}`;
 
   try {
     const res = await fetch(url);
@@ -8165,6 +8920,16 @@ async function loadHistoryStats() {
         : activeHistoryStrategy === 'DRMA_HM_FUT' ? 'DRMA Futures'
         : 'DRMA + H-M';
     }
+    const drmaStocksStats = (activeHistoryStrategy && (activeHistoryStrategy.startsWith('DRMA_STOCK_') || activeHistoryStrategy === 'DRMA_HM_STOCKS'))
+      ? (breakdown[activeHistoryStrategy] || stats)
+      : (breakdown.DRMA_HM_STOCKS || (activeHistoryStrategy === 'DRMA_HM_STOCKS' ? stats : {}));
+    const drmaStocksCardTitle = document.querySelector('#card-strat-DRMA_HM_STOCKS .section-title');
+    if (drmaStocksCardTitle) {
+      drmaStocksCardTitle.textContent = activeHistoryStrategy === 'DRMA_STOCK_DIR' ? 'Stocks Dir'
+        : activeHistoryStrategy === 'DRMA_STOCK_NONDIR' ? 'Stocks Non-Dir'
+        : activeHistoryStrategy === 'DRMA_STOCK_EQUITY' ? 'Stocks Equity'
+        : 'DRMA Stocks';
+    }
     const allStats = breakdown.all || breakdown;
     const rowStats = activeHistoryStrategy ? stats : allStats;
 
@@ -8188,6 +8953,9 @@ async function loadHistoryStats() {
     setCard('hist-pnl-iron-fly', 'hist-sub-iron-fly', ironFlyStats);
     setCard('hist-pnl-iron-fly-xsp', 'hist-sub-iron-fly-xsp', ironFlyXspStats);
     setCard('hist-pnl-drma-hm', 'hist-sub-drma-hm', drmaHmStats);
+    setCard('hist-pnl-drma-stocks', 'hist-sub-drma-stocks', drmaStocksStats);
+    const cloneStats = breakdown.CLONE_TRADES || (activeHistoryStrategy === 'CLONE_TRADES' ? stats : {});
+    setCard('hist-pnl-clone-trades', 'hist-sub-clone-trades', cloneStats);
 
     const sPnl = document.getElementById('s-pnl');
     if (sPnl) {
@@ -10394,6 +11162,16 @@ function drmaHmFillOverrideForm(cfg) {
   setVal('drma-hm-ov-fut-sl', 'futures_stop_loss_pts');
   setVal('drma-hm-ov-fut-max-signals', 'futures_max_daily_signals');
 
+  // Overnight ES Futures Trading & Session Timing
+  const ovFut = ov['enable_overnight_futures'] != null ? ov['enable_overnight_futures'] : eff['enable_overnight_futures'];
+  if (document.getElementById('drma-hm-ov-overnight-futures')) {
+    document.getElementById('drma-hm-ov-overnight-futures').value = ovFut !== false ? 'true' : 'false';
+  }
+  setVal('drma-hm-ov-overnight-flatten', 'overnight_flatten_time_cst');
+  setVal('drma-hm-ov-market-open', 'market_open_time_cst');
+  setVal('drma-hm-ov-trading-start', 'regular_trading_start_time_cst');
+  setVal('drma-hm-ov-eod-exit', 'eod_exit_time_cst');
+
   // Levels
   setVal('drma-hm-ov-onh', 'manual_onh');
   setVal('drma-hm-ov-onl', 'manual_onl');
@@ -10404,18 +11182,17 @@ function drmaHmFillOverrideForm(cfg) {
   setVal('drma-hm-ov-pdc', 'manual_pdc');
 
   // Sub-strategy Execution Modes (Paper vs Live)
-  const fallbackPaper = (ov['paper'] != null ? ov['paper'] : eff['paper']) !== false;
-  const dPaper = ov['dir_paper'] != null ? ov['dir_paper'] : (eff['dir_paper'] != null ? eff['dir_paper'] : fallbackPaper);
+  const dPaper = ov['dir_paper'] !== undefined ? (ov['dir_paper'] !== false) : (eff['dir_paper'] !== undefined ? (eff['dir_paper'] !== false) : (lastDrmaHmData ? lastDrmaHmData.dir_paper !== false : true));
   if (document.getElementById('drma-hm-ov-dir-paper')) {
-    document.getElementById('drma-hm-ov-dir-paper').value = dPaper !== false ? 'true' : 'false';
+    document.getElementById('drma-hm-ov-dir-paper').value = dPaper ? 'true' : 'false';
   }
-  const ndPaper = ov['non_dir_paper'] != null ? ov['non_dir_paper'] : (eff['non_dir_paper'] != null ? eff['non_dir_paper'] : fallbackPaper);
+  const ndPaper = ov['non_dir_paper'] !== undefined ? (ov['non_dir_paper'] !== false) : (eff['non_dir_paper'] !== undefined ? (eff['non_dir_paper'] !== false) : (lastDrmaHmData ? lastDrmaHmData.non_dir_paper !== false : true));
   if (document.getElementById('drma-hm-ov-nondir-paper')) {
-    document.getElementById('drma-hm-ov-nondir-paper').value = ndPaper !== false ? 'true' : 'false';
+    document.getElementById('drma-hm-ov-nondir-paper').value = ndPaper ? 'true' : 'false';
   }
-  const fPaper = ov['futures_paper'] != null ? ov['futures_paper'] : (eff['futures_paper'] != null ? eff['futures_paper'] : fallbackPaper);
+  const fPaper = ov['futures_paper'] !== undefined ? (ov['futures_paper'] !== false) : (eff['futures_paper'] !== undefined ? (eff['futures_paper'] !== false) : (lastDrmaHmData ? lastDrmaHmData.futures_paper !== false : true));
   if (document.getElementById('drma-hm-ov-fut-paper')) {
-    document.getElementById('drma-hm-ov-fut-paper').value = fPaper !== false ? 'true' : 'false';
+    document.getElementById('drma-hm-ov-fut-paper').value = fPaper ? 'true' : 'false';
   }
 
   // Directional same-side non-directional trade lock
@@ -10537,6 +11314,55 @@ function renderDrmaHm(data, cfg) {
 
   const sigBreakdown = `Dir: ${dirLimStr} &bull; Non-Dir: ${nonDirLimStr} &bull; Fut: ${futLimStr} &bull; ${globLimStr}`;
 
+  // Session Phase & Timing Badge
+  const timing = data.timing || stratSt.timing || {};
+  const sessionPhase = timing.session_phase || stratSt.session_phase || 'REGULAR_TRADING';
+  const phaseBadge = document.getElementById('drma-hm-session-phase-badge');
+  if (phaseBadge) {
+    if (sessionPhase === 'OVERNIGHT_TRADING') {
+      phaseBadge.textContent = 'OVERNIGHT FUTURES (UNTIL 7:00 CST)';
+      phaseBadge.style.background = '#272010';
+      phaseBadge.style.color = '#fbbf24';
+      phaseBadge.style.borderColor = '#f59e0b';
+      phaseBadge.title = 'Overnight session active. Trading Directional ES Futures only until 07:00 CST flattening cutoff.';
+    } else if (sessionPhase === 'PRE_MARKET_PREP') {
+      phaseBadge.textContent = 'PRE-MARKET PREP (07:00–08:30 CST)';
+      phaseBadge.style.background = '#0c2233';
+      phaseBadge.style.color = '#38bdf8';
+      phaseBadge.style.borderColor = '#0284c7';
+      phaseBadge.title = 'Overnight positions flattened. Preparing reference levels for market open at 08:30 CST.';
+    } else if (sessionPhase === 'MARKET_OPEN_PREP') {
+      phaseBadge.textContent = 'MARKET OPEN PREP (08:30–09:00 CST)';
+      phaseBadge.style.background = '#261438';
+      phaseBadge.style.color = '#c084fc';
+      phaseBadge.style.borderColor = '#9333ea';
+      phaseBadge.title = 'Market open. 30m ORB forming and indicators warming up. Active trading starts at 09:00 CST.';
+    } else if (sessionPhase === 'REGULAR_TRADING') {
+      phaseBadge.textContent = 'REGULAR SESSION (09:00–14:50 CST)';
+      phaseBadge.style.background = '#0a2e1d';
+      phaseBadge.style.color = '#34d399';
+      phaseBadge.style.borderColor = '#10b981';
+      phaseBadge.title = 'Regular trading session active for all configured vehicles (Options & ES Futures).';
+    } else if (sessionPhase === 'EOD_FLATTEN') {
+      phaseBadge.textContent = 'EOD FLATTEN (14:50–15:00 CST)';
+      phaseBadge.style.background = '#301317';
+      phaseBadge.style.color = '#f87171';
+      phaseBadge.style.borderColor = '#ef4444';
+      phaseBadge.title = 'EOD session cutoff reached. All daytime positions force-flattened.';
+    } else if (sessionPhase === 'DAILY_HALT') {
+      phaseBadge.textContent = 'DAILY CME HALT (15:00–17:00 CST)';
+      phaseBadge.style.background = '#1e293b';
+      phaseBadge.style.color = '#94a3b8';
+      phaseBadge.style.borderColor = '#475569';
+      phaseBadge.title = 'CME Globex maintenance halt. Standby until next overnight session opens at 17:00 CST.';
+    } else {
+      phaseBadge.textContent = sessionPhase;
+      phaseBadge.style.background = '#1e293b';
+      phaseBadge.style.color = '#e2e8f0';
+      phaseBadge.style.borderColor = '#475569';
+    }
+  }
+
   if (session.skip_reason) {
     if (statusEl) statusEl.textContent = 'Skipped Today';
     if (skipEl) skipEl.textContent = session.skip_reason;
@@ -10550,8 +11376,25 @@ function renderDrmaHm(data, cfg) {
     if (statusEl) statusEl.textContent = data.strat_status.state;
     if (skipEl) skipEl.innerHTML = `Active Monitoring &bull; ${sigBreakdown}`;
   } else {
-    if (statusEl) statusEl.textContent = 'Ready / Monitoring';
-    if (skipEl) skipEl.innerHTML = `Waiting for high-confluence 5m setup &bull; ${sigBreakdown}`;
+    if (sessionPhase === 'OVERNIGHT_TRADING') {
+      if (statusEl) statusEl.textContent = 'Overnight ES Trading';
+      if (skipEl) skipEl.innerHTML = `Trading /ES futures until 7:00 AM CST &bull; ${sigBreakdown}`;
+    } else if (sessionPhase === 'PRE_MARKET_PREP') {
+      if (statusEl) statusEl.textContent = 'Pre-Market Prep';
+      if (skipEl) skipEl.innerHTML = `Overnight flat &bull; Ready for 08:30 CST open &bull; ${sigBreakdown}`;
+    } else if (sessionPhase === 'MARKET_OPEN_PREP') {
+      if (statusEl) statusEl.textContent = 'Market Open Warmup';
+      if (skipEl) skipEl.innerHTML = `ORB forming &bull; Trading starts at 09:30 CST &bull; ${sigBreakdown}`;
+    } else if (sessionPhase === 'EOD_FLATTEN') {
+      if (statusEl) statusEl.textContent = 'EOD Cutoff';
+      if (skipEl) skipEl.innerHTML = `Daytime trades flattened &bull; ${sigBreakdown}`;
+    } else if (sessionPhase === 'DAILY_HALT') {
+      if (statusEl) statusEl.textContent = 'Daily Globex Halt';
+      if (skipEl) skipEl.innerHTML = `Maintenance halt until 17:00 CST &bull; ${sigBreakdown}`;
+    } else {
+      if (statusEl) statusEl.textContent = 'Ready / Monitoring';
+      if (skipEl) skipEl.innerHTML = `Waiting for high-confluence 5m setup &bull; ${sigBreakdown}`;
+    }
   }
 
   // P/L Calculation
@@ -10606,7 +11449,20 @@ function renderDrmaHm(data, cfg) {
     gammaEl.className = 'fw-bold fs-6 ' + (isRisky ? 'text-danger' : 'text-success');
   }
   if (lastBarEl) {
-    lastBarEl.textContent = ind.last_bar ? `Last Bar: ${ind.last_bar}` : 'Waiting for bars';
+    const isOv = ind.is_overnight || sessionPhase === 'OVERNIGHT_TRADING';
+    lastBarEl.textContent = ind.last_bar ? `Last Bar: ${ind.last_bar}${isOv ? ' (Overnight /ES)' : ''}` : 'Waiting for bars';
+  }
+  const rulesStatus = document.getElementById('drma-hm-rules-status');
+  if (rulesStatus) {
+    if (sessionPhase === 'OVERNIGHT_TRADING') {
+      rulesStatus.innerHTML = '<span class="text-warning"><i class="bi bi-moon-stars me-1"></i>Overnight Session Active: /ES Futures Only until 7:00 CST</span>';
+    } else if (sessionPhase === 'PRE_MARKET_PREP') {
+      rulesStatus.innerHTML = '<span class="text-info"><i class="bi bi-clock me-1"></i>Pre-Market Prep: Flattened, Market Open at 08:30 CST</span>';
+    } else if (sessionPhase === 'MARKET_OPEN_PREP') {
+      rulesStatus.innerHTML = '<span class="text-primary"><i class="bi bi-hourglass-split me-1"></i>Market Open: 30m ORB Forming, Trading starts at 09:00 CST</span>';
+    } else {
+      rulesStatus.textContent = 'Checking 5m bars';
+    }
   }
 
   // Setup Grade & Bias Badge
@@ -10775,6 +11631,12 @@ async function drmaHmTogglePaper() {
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || 'Failed to toggle mode');
     toast(`All DRMA + H-M sub-strategies switched to ${targetMode} mode`, 'success');
+    const dirSel = document.getElementById('drma-hm-ov-dir-paper');
+    if (dirSel) dirSel.value = makePaper ? 'true' : 'false';
+    const nonDirSel = document.getElementById('drma-hm-ov-nondir-paper');
+    if (nonDirSel) nonDirSel.value = makePaper ? 'true' : 'false';
+    const futSel = document.getElementById('drma-hm-ov-fut-paper');
+    if (futSel) futSel.value = makePaper ? 'true' : 'false';
     await loadDrmaHm();
     refreshSummary();
   } catch (err) {
@@ -10945,6 +11807,17 @@ async function drmaHmSaveOverrides() {
   const fms = getVal('drma-hm-ov-fut-max-signals');
   if (fms !== '') body.futures_max_daily_signals = parseInt(fms, 10);
 
+  // Overnight ES Futures & Session Timing
+  const ovFutVal = getVal('drma-hm-ov-overnight-futures');
+  if (ovFutVal === 'true') body.enable_overnight_futures = true;
+  else if (ovFutVal === 'false') body.enable_overnight_futures = false;
+
+  const ovFlatVal = getVal('drma-hm-ov-overnight-flatten');
+  if (ovFlatVal) body.overnight_flatten_time_cst = ovFlatVal;
+
+  const regStartVal = getVal('drma-hm-ov-trading-start');
+  if (regStartVal) body.regular_trading_start_time_cst = regStartVal;
+
   // Sub-strategy execution modes
   const dirPVal = getVal('drma-hm-ov-dir-paper');
   if (dirPVal === 'true') body.dir_paper = true;
@@ -11011,6 +11884,528 @@ async function drmaHmClearOverrides() {
     toast(`Clear failed: ${err.message || err}`, 'error');
   }
 }
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── DRMA Stocks Pro Strategy JavaScript ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+let drmaStocksPollTimer = null;
+const DRMA_STOCKS_POLL_MS = 5000;
+let lastDrmaStocksData = null;
+let activeHistoryTicker = '';
+
+function formatStockExpiry(exp) {
+  if (!exp) return '—';
+  const s = String(exp).trim();
+  if (/^\d{6}$/.test(s)) {
+    return `20${s.slice(0, 2)}-${s.slice(2, 4)}-${s.slice(4, 6)}`;
+  }
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  return s;
+}
+
+function startDrmaStocksPolling() {
+  if (drmaStocksPollTimer) return;
+  drmaStocksPollTimer = setInterval(() => {
+    if (activeTab === 'today' && activeStrategy === 'drma_stocks') loadDrmaStocks();
+  }, DRMA_STOCKS_POLL_MS);
+}
+
+function stopDrmaStocksPolling() {
+  if (!drmaStocksPollTimer) return;
+  clearInterval(drmaStocksPollTimer);
+  drmaStocksPollTimer = null;
+}
+
+function setDrmaStocksLoading(loading, errText) {
+  const topSetup = document.getElementById('drma-stocks-top-setup');
+  if (!topSetup) return;
+  if (loading) {
+    topSetup.textContent = 'Scanning...';
+  } else if (errText) {
+    topSetup.textContent = 'Error';
+  }
+}
+
+async function loadDrmaStocks() {
+  try {
+    const res = await fetch('/api/drma_stocks/today');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    lastDrmaStocksData = data;
+    renderDrmaStocks(data);
+    setDrmaStocksLoading(false);
+  } catch (err) {
+    console.error('DRMA Stocks load failed:', err);
+    setDrmaStocksLoading(false, String(err.message || err));
+    toast('DRMA Stocks load failed: ' + (err.message || err), 'error');
+  }
+}
+
+function renderDrmaStocks(data) {
+  if (!data) return;
+  const rawStocks = data.stocks;
+  const stocks = Array.isArray(rawStocks) ? rawStocks : Object.values(rawStocks || {});
+  const watchlist = Array.isArray(data.watchlist) ? data.watchlist : [];
+  const activeTrades = Array.isArray(data.active_trades) ? data.active_trades : [];
+  const historyTrades = Array.isArray(data.history_trades) ? data.history_trades : [];
+
+  // 1. KPI Cards
+  const pnlEl = document.getElementById('drma-stocks-pnl');
+  const pnlSubEl = document.getElementById('drma-stocks-pnl-sub');
+  if (pnlEl) {
+    const tot = data.total_pnl || 0;
+    pnlEl.textContent = fmtPnl(tot);
+    pnlEl.className = `fs-4 fw-bold mt-1 ${tot >= 0 ? 'text-success' : 'text-danger'}`;
+  }
+  if (pnlSubEl) {
+    pnlSubEl.textContent = `Realized: ${fmtPnl(data.realized_pnl || 0)} | Open: ${fmtPnl(data.open_pnl || 0)}`;
+  }
+
+  const openCountEl = document.getElementById('drma-stocks-open-count');
+  const openSubEl = document.getElementById('drma-stocks-open-sub');
+  if (openCountEl) {
+    openCountEl.textContent = `${activeTrades.length} Open`;
+  }
+  if (openSubEl) {
+    const activeWatchlistCount = watchlist.filter(w => w.enabled !== false).length;
+    openSubEl.textContent = `Clubbed across ${activeWatchlistCount} active stocks`;
+  }
+
+  // Top Momentum Setup
+  const topSetupEl = document.getElementById('drma-stocks-top-setup');
+  const topSubEl = document.getElementById('drma-stocks-top-sub');
+  if (topSetupEl) {
+    if (stocks.length > 0) {
+      const sorted = [...stocks].sort((a, b) => (b.score || 0) - (a.score || 0));
+      const best = sorted[0];
+      topSetupEl.textContent = `${best.symbol} (${best.grade || 'Grade A'} · Score ${best.score || 0}/5)`;
+      if (topSubEl) {
+        topSubEl.textContent = `${best.recommended_bias || 'Neutral'} Momentum`;
+      }
+    } else {
+      topSetupEl.textContent = 'None';
+      if (topSubEl) topSubEl.textContent = 'Highest confluence score';
+    }
+  }
+
+  // Sentiment
+  const sentimentEl = document.getElementById('drma-stocks-sentiment');
+  const sentimentSubEl = document.getElementById('drma-stocks-sentiment-sub');
+  if (sentimentEl) {
+    let bulls = 0, bears = 0, neutrals = 0;
+    stocks.forEach(s => {
+      const b = (s.recommended_bias || s.hm_bias || '').toUpperCase();
+      if (b === 'BULLISH') bulls++;
+      else if (b === 'BEARISH') bears++;
+      else neutrals++;
+    });
+    sentimentEl.textContent = `${bulls} Bull / ${bears} Bear / ${neutrals} Neut`;
+    sentimentEl.className = `fs-5 fw-bold mt-1 ${bulls > bears ? 'text-success' : (bears > bulls ? 'text-danger' : 'text-light')}`;
+    if (sentimentSubEl) {
+      sentimentSubEl.textContent = `${watchlist.length} Tracked Tickers`;
+    }
+  }
+
+  // 2. Watchlist Pills
+  const pillsEl = document.getElementById('drma-stocks-watchlist-pills');
+  const countBadge = document.getElementById('drma-stocks-watchlist-count');
+  if (countBadge) {
+    const activeCount = watchlist.filter(w => w.enabled !== false).length;
+    countBadge.textContent = `${watchlist.length} Tickers (${activeCount} Active)`;
+  }
+  if (pillsEl) {
+    if (!watchlist.length) {
+      pillsEl.innerHTML = '<span class="text-muted small">No tickers tracked yet. Add one above.</span>';
+    } else {
+      pillsEl.innerHTML = watchlist.map(w => {
+        const isEn = w.enabled !== false;
+        return `
+          <div class="d-inline-flex align-items-center gap-2 px-2 py-1 rounded" style="background:#1a1e2e;border:1px solid ${isEn ? '#34d399' : '#475569'};font-size:0.82rem;">
+            <span class="fw-bold ${isEn ? 'text-light' : 'text-muted'}">${w.symbol}</span>
+            <span class="badge ${isEn ? 'bg-success' : 'bg-secondary'}" style="cursor:pointer;font-size:0.65rem;" onclick="drmaStocksToggleTicker('${w.symbol}', ${!isEn})" title="Click to toggle Active/Paused">${isEn ? 'ACTIVE' : 'PAUSED'}</span>
+            <button class="btn btn-link text-danger p-0 ms-1 text-decoration-none" style="font-size:0.9rem;line-height:1;" onclick="drmaStocksRemoveTicker('${w.symbol}')" title="Remove ${w.symbol} from watchlist">&times;</button>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  // 3. Clubbed Live Ticker Signal Matrix
+  const matrixTbody = document.getElementById('drma-stocks-matrix-tbody');
+  const lastBarBadge = document.getElementById('drma-stocks-matrix-last-bar');
+  if (lastBarBadge && stocks.length > 0) {
+    lastBarBadge.textContent = `Last Bar: ${stocks[0].last_bar || 'Market Open'}`;
+  }
+  if (matrixTbody) {
+    if (!stocks.length) {
+      matrixTbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No active stock symbols found in watchlist</td></tr>';
+    } else {
+      matrixTbody.innerHTML = stocks.map(st => {
+        const price = Number(st.price || 0);
+        const ema = Number(st.ema_21 || 0);
+        const dist = Number(st.distance_ema || 0);
+        const distPct = Number(st.distance_ema_pct || 0);
+        const hmFast = Number(st.hm_fast || 0);
+        const hmSlow = Number(st.hm_slow || 0);
+        const rsi = Number(st.rsi_9 || 0);
+        const score = Number(st.score || 0);
+        const grade = st.grade || 'Grade C';
+        const bias = st.recommended_bias || 'NEUTRAL';
+        const tradeRec = st.recommended_trade || 'Standby';
+        const status = st.status || 'ACTIVE';
+
+        const biasClass = bias === 'BULLISH' ? 'text-success' : (bias === 'BEARISH' ? 'text-danger' : 'text-muted');
+        const distClass = dist >= 0 ? 'text-success' : 'text-danger';
+        const gradeBadgeClass = grade === 'Grade A+' ? 'bg-success' : (grade === 'Grade A' ? 'bg-primary' : (grade === 'Grade B' ? 'bg-warning text-dark' : 'bg-secondary'));
+
+        return `
+          <tr style="border-bottom:1px solid #1e2433;">
+            <td>
+              <span class="font-monospace fw-bold text-warning fs-6">${st.symbol}</span>
+              <small class="text-muted d-block" style="font-size:0.72rem;">${st.name || ''}</small>
+            </td>
+            <td class="font-monospace fw-bold text-light">$${price.toFixed(2)}</td>
+            <td class="font-monospace text-light">$${ema.toFixed(2)}</td>
+            <td class="font-monospace ${distClass}">${dist >= 0 ? '+' : ''}${dist.toFixed(2)} (${distPct.toFixed(1)}%)</td>
+            <td>
+              <span class="font-monospace">${hmFast.toFixed(1)}</span> / <span class="font-monospace text-muted">${hmSlow.toFixed(1)}</span>
+              <span class="badge ${st.hm_bias === 'BULLISH' ? 'bg-success' : (st.hm_bias === 'BEARISH' ? 'bg-danger' : 'bg-secondary')} ms-1" style="font-size:0.65rem;">${st.hm_bias || 'NEUTRAL'}</span>
+            </td>
+            <td class="font-monospace">${rsi.toFixed(1)}</td>
+            <td>
+              <span class="badge bg-dark border ${score >= 4 ? 'border-success text-success' : (score >= 3 ? 'border-warning text-warning' : 'border-secondary text-light')} font-monospace fs-6">${score}/5</span>
+            </td>
+            <td><span class="badge ${gradeBadgeClass}">${grade}</span></td>
+            <td><strong class="${biasClass}">${bias}</strong></td>
+            <td><span class="small text-light">${tradeRec}</span></td>
+            <td class="text-end">
+              <span class="badge ${status === 'ACTIVE' ? 'bg-success-subtle text-success border border-success-subtle' : 'bg-secondary'}">${status}</span>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+
+  // 4. Clubbed Active Positions Table
+  const actTbody = document.getElementById('drma-stocks-active-tbody');
+  const actBadge = document.getElementById('drma-stocks-active-badge');
+  if (actBadge) actBadge.textContent = `${activeTrades.length} Open`;
+  if (actTbody) {
+    if (!activeTrades.length) {
+      actTbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">No active open positions across tracked stocks</td></tr>';
+    } else {
+      actTbody.innerHTML = activeTrades.map(t => {
+        const isEq = t.sub_strategy === 'DRMA_STOCK_EQUITY' || t.trade_type === 'DIRECT_STOCK' || t.trade_type === 'EQUITY' || t.structure_type === 'equity_stock';
+        const ticker = t.ticker || '—';
+        const side = t.side || '—';
+        const structs = t.structures || [];
+        const struct = structs[0] || {};
+        const legs = struct.legs || [];
+        const structType = String(t.structure_type || '').toLowerCase();
+        const subStrat = String(t.sub_strategy || '').toUpperCase();
+        const isDebit = structType.includes('debit') || (subStrat === 'DRMA_STOCK_DIR');
+        const spreadLabel = isDebit ? 'Debit' : 'Credit';
+
+        const subStratName = isEq ? 'Direct Equity' : (isDebit ? 'Directional Spread' : 'Non-Directional');
+        const structName = struct.name || (isDebit ? (t.opt_type === 'C' ? 'CDS' : 'PDS') : (t.opt_type === 'P' ? 'PCS' : 'CCS'));
+        const strikeText = legs.length ? legs.map(l => l.strike).join('/') : (t.long_strike ? `${t.long_strike}/${t.short_strike}` : '—');
+        const strikes = isEq
+          ? `<span class="font-monospace text-light">${t.shares || t.quantity || 1} Shares</span>`
+          : `<span class="badge ${isDebit ? 'bg-primary' : 'bg-success'} text-white me-1">${structName}</span><span class="font-monospace text-light">${strikeText}</span> <span class="badge ${isDebit ? 'bg-secondary' : 'bg-info text-dark'}" style="font-size:0.7rem;">${spreadLabel.toUpperCase()}</span>`;
+
+        const expRaw = t.expiry || (legs[0] && legs[0].symbol ? legs[0].symbol.match(/\d{6}/)?.[0] : '') || '';
+        const expDisplay = isEq
+          ? '<span class="text-muted">—</span>'
+          : `<span class="font-monospace small text-light fw-medium"><i class="bi bi-calendar3 me-1 text-info"></i>${formatStockExpiry(expRaw)}</span>`;
+
+        const qty = isEq ? (t.shares || t.quantity || 1) : (t.quantity || 1);
+        const fill = Number(t.entry_price ?? t.net_debit ?? t.net_credit ?? 0);
+        const mark = Number(t.current_mark ?? fill);
+        const pnl = Number(t.unrealized_pnl_dollars ?? 0);
+        const pnlCls = pnl > 0 ? 'text-success' : (pnl < 0 ? 'text-danger' : 'text-light');
+
+        // Dynamic, robust Profit Target and Stop Loss target prices & percentages
+        let ptStr = '—';
+        let slStr = '—';
+        if (isEq) {
+          const ptPx = t.profit_target_price ?? t.profit_target;
+          const slPx = t.stop_loss_price ?? t.stop_loss;
+          const ptPct = t.profit_target_pct != null ? ` (+${(Number(t.profit_target_pct) * 100).toFixed(1)}%)` : '';
+          const slPct = t.stop_loss_pct != null ? ` (-${(Number(t.stop_loss_pct) * 100).toFixed(1)}%)` : '';
+          if (ptPx != null) ptStr = `$${Number(ptPx).toFixed(2)}${ptPct}`;
+          if (slPx != null) slStr = `$${Number(slPx).toFixed(2)}${slPct}`;
+        } else {
+          const entryPx = Number(t.entry_price ?? t.net_debit ?? t.net_credit ?? 0);
+          const ptPct = Number(t.profit_target_pct ?? 0.50);
+          const slPct = Number(t.stop_loss_pct ?? (isDebit ? 0.50 : 1.00));
+          let ptPx = t.profit_target_price ?? t.profit_target;
+          let slPx = t.stop_loss_price ?? t.stop_loss;
+          if (ptPx == null && entryPx > 0) {
+            ptPx = isDebit ? entryPx * (1.0 + ptPct) : Math.max(0, entryPx * (1.0 - ptPct));
+          }
+          if (slPx == null && entryPx > 0) {
+            slPx = isDebit ? Math.max(0, entryPx * (1.0 - slPct)) : entryPx * (1.0 + slPct);
+          }
+          if (ptPx != null) ptStr = `$${Number(ptPx).toFixed(2)} (+${(ptPct * 100).toFixed(0)}%)`;
+          if (slPx != null) slStr = `$${Number(slPx).toFixed(2)} (-${(slPct * 100).toFixed(0)}%)`;
+        }
+
+        const entryLabel = isEq ? `$${fill.toFixed(2)}` : `$${fill.toFixed(2)} <span class="text-secondary small">(${isDebit ? 'Db' : 'Cr'})</span>`;
+
+        return `
+          <tr style="border-bottom:1px solid #1e2433;">
+            <td><span class="badge bg-warning text-dark font-monospace fw-bold">${ticker}</span></td>
+            <td><span class="badge ${isEq ? 'bg-info text-dark' : (isDebit ? 'bg-primary' : 'bg-purple text-light')}" style="${!isEq && !isDebit ? 'background:#8b5cf6;' : ''}">${subStratName}</span></td>
+            <td><span class="badge ${side === 'LONG' || side === 'BULL' ? 'bg-success' : 'bg-danger'}">${side}</span></td>
+            <td>${strikes}</td>
+            <td>${expDisplay}</td>
+            <td class="font-monospace text-center text-light">${qty}</td>
+            <td class="font-monospace text-light">${entryLabel}</td>
+            <td class="font-monospace fw-semibold text-light">$${mark.toFixed(2)}</td>
+            <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(pnl)}</td>
+            <td class="small font-monospace text-light"><span class="text-info fw-semibold">PT: ${ptStr}</span> &nbsp;|&nbsp; <span class="text-warning fw-semibold">SL: ${slStr}</span></td>
+            <td class="font-monospace small text-light fw-medium">${t.entered_at ? formatCST(t.entered_at, true) : '—'}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.75rem;" onclick="drmaStocksCloseTrade('${t.trade_id}')">
+                Close
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+
+  // 5. Today's Completed Trades History Feed
+  // NOTE: Never use 'text-muted' on dark background table cells. Always use 'text-light' or high-contrast classes.
+  const histTbody = document.getElementById('drma-stocks-history-tbody');
+  const histCount = document.getElementById('drma-stocks-history-count');
+  if (histCount) histCount.textContent = `${historyTrades.length} Completed`;
+  if (histTbody) {
+    if (!historyTrades.length) {
+      histTbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-3">No closed trades recorded today</td></tr>';
+    } else {
+      histTbody.innerHTML = historyTrades.map(h => {
+        const isEq = h.sub_strategy === 'DRMA_STOCK_EQUITY' || h.trade_type === 'DIRECT_STOCK' || h.trade_type === 'EQUITY' || h.structure_type === 'equity_stock';
+        const pnl = Number(h.realized_pnl_dollars || 0);
+        const pnlCls = pnl > 0 ? 'text-success' : (pnl < 0 ? 'text-danger' : 'text-light');
+        const entry = Number(h.entry_price || h.net_debit || h.net_credit || 0);
+        const exit = Number(h.exit_price || 0);
+        const structType = String(h.structure_type || '').toLowerCase();
+        const subStrat = String(h.sub_strategy || '').toUpperCase();
+        const isDebit = structType.includes('debit') || (subStrat === 'DRMA_STOCK_DIR');
+        const spreadLabel = isDebit ? 'Debit' : 'Credit';
+
+        const hStructs = h.structures || [];
+        const hStruct = hStructs[0] || {};
+        const hLegs = hStruct.legs || [];
+        const structName = hStruct.name || (isDebit ? (h.opt_type === 'C' ? 'CDS' : 'PDS') : (h.opt_type === 'P' ? 'PCS' : 'CCS'));
+        const strikeText = hLegs.length ? hLegs.map(l => l.strike).join('/') : (h.long_strike ? `${h.long_strike}/${h.short_strike}` : '—');
+        const strikes = isEq
+          ? `<span class="font-monospace text-light">${h.shares || h.quantity || 1} Shares</span>`
+          : `<span class="badge ${isDebit ? 'bg-primary' : 'bg-success'} text-white me-1">${structName}</span><span class="font-monospace text-light">${strikeText}</span> <span class="badge ${isDebit ? 'bg-secondary' : 'bg-info text-dark'}" style="font-size:0.7rem;">${spreadLabel.toUpperCase()}</span>`;
+
+        const expRaw = h.expiry || (hLegs[0] && hLegs[0].symbol ? hLegs[0].symbol.match(/\d{6}/)?.[0] : '') || '';
+        const expDisplay = isEq
+          ? '<span class="text-muted">—</span>'
+          : `<span class="font-monospace small text-light fw-medium"><i class="bi bi-calendar3 me-1 text-info"></i>${formatStockExpiry(expRaw)}</span>`;
+
+        const entryLabel = isEq ? `$${entry.toFixed(2)}` : `$${entry.toFixed(2)} <span class="text-secondary small">(${isDebit ? 'Db' : 'Cr'})</span>`;
+
+        return `
+          <tr style="border-bottom:1px solid #1e2433;">
+            <td><span class="badge bg-warning text-dark font-monospace">${h.ticker || '—'}</span></td>
+            <td><span class="badge bg-secondary">${h.sub_strategy || h.trade_type || 'TRADE'}</span></td>
+            <td><span class="badge ${h.side === 'LONG' || h.side === 'BULL' ? 'bg-success' : 'bg-danger'}">${h.side || '—'}</span></td>
+            <td>${strikes}</td>
+            <td>${expDisplay}</td>
+            <td class="font-monospace text-light">${entryLabel}</td>
+            <td class="font-monospace text-light">$${exit.toFixed(2)}</td>
+            <td><span class="badge ${String(h.exit_reason || '').toLowerCase().includes('profit') ? 'bg-success' : (String(h.exit_reason || '').toLowerCase().includes('stop') ? 'bg-danger' : 'bg-secondary')}">${h.exit_reason || 'Close'}</span></td>
+            <td class="font-monospace fw-bold ${pnlCls}">${fmtPnl(pnl)}</td>
+            <td class="font-monospace small text-light fw-medium">${h.entered_at ? formatCST(h.entered_at, true) : '—'}</td>
+            <td class="font-monospace small text-light fw-medium">${h.closed_at ? formatCST(h.closed_at, true) : (h.exited_at ? formatCST(h.exited_at, true) : '—')}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+}
+
+async function drmaStocksAddTicker() {
+  const input = document.getElementById('drma-stocks-add-input');
+  if (!input) return;
+  const sym = input.value.trim().toUpperCase();
+  if (!sym) return;
+  try {
+    const res = await fetch('/api/drma_stocks/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'add', symbol: sym }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || 'Add failed');
+    input.value = '';
+    toast(`Added ${sym} to watchlist`, 'success');
+    await loadDrmaStocks();
+  } catch (err) {
+    toast(`Add ticker failed: ${err.message || err}`, 'error');
+  }
+}
+
+async function drmaStocksRemoveTicker(sym) {
+  if (!confirm(`Remove ${sym} from DRMA Stocks watchlist?`)) return;
+  try {
+    const res = await fetch('/api/drma_stocks/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove', symbol: sym }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || 'Remove failed');
+    toast(`Removed ${sym} from watchlist`, 'info');
+    await loadDrmaStocks();
+  } catch (err) {
+    toast(`Remove ticker failed: ${err.message || err}`, 'error');
+  }
+}
+
+async function drmaStocksToggleTicker(sym, enabled) {
+  try {
+    const res = await fetch('/api/drma_stocks/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'toggle', symbol: sym, enabled: enabled }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || 'Toggle failed');
+    toast(`${sym} is now ${enabled ? 'ACTIVE' : 'PAUSED'}`, 'info');
+    await loadDrmaStocks();
+  } catch (err) {
+    toast(`Toggle ticker failed: ${err.message || err}`, 'error');
+  }
+}
+
+async function drmaStocksCloseTrade(tradeId) {
+  if (!confirm(`Close position ${tradeId}?`)) return;
+  try {
+    const res = await fetch('/api/drma_stocks/close_trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade_id: tradeId }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || 'Close failed');
+    toast(`Closed position ${tradeId}`, 'success');
+    await loadDrmaStocks();
+  } catch (err) {
+    toast(`Close failed: ${err.message || err}`, 'error');
+  }
+}
+
+async function loadDrmaStocksHistoryBreakdown() {
+  const tbody = document.getElementById('drma-stocks-breakdown-tbody');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/drma_stocks/history');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const byTicker = data.by_ticker || {};
+    const tickers = Object.keys(byTicker);
+
+    const sel = document.getElementById('hist-stocks-ticker-filter');
+    if (sel && tickers.length > 0) {
+      const currentVal = sel.value;
+      const opts = ['<option value="">All Tickers</option>'];
+      tickers.forEach(tk => {
+        opts.push(`<option value="${tk}" ${tk === currentVal ? 'selected' : ''}>${tk}</option>`);
+      });
+      sel.innerHTML = opts.join('');
+    }
+
+    if (!tickers.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No closed trades recorded yet for tracked stocks</td></tr>';
+      return;
+    }
+
+    let rowsHtml = '';
+    tickers.forEach(tk => {
+      const item = byTicker[tk];
+      const subs = item.sub_strategies || {};
+      const eq = subs.equity_stock || {};
+      const dir = subs.dir_spread || {};
+      const nondir = subs.nondir_spread || {};
+      const totPnl = item.total_pnl || 0;
+      const wr = item.win_rate != null ? item.win_rate : (item.trades ? Math.round((item.wins / item.trades) * 100) : 0);
+
+      const fmtCell = (s) => {
+        const p = s.total_pnl || 0;
+        const tr = s.trades || 0;
+        const w = s.wins || 0;
+        const l = s.losses || 0;
+        const pnlCls = p > 0 ? 'text-success' : (p < 0 ? 'text-danger' : 'text-light');
+        return `<div><span class="fw-bold ${pnlCls}">${fmtPnl(p)}</span> <small class="text-muted ms-1">(${tr} tr: ${w}W/${l}L)</small></div>`;
+      };
+
+      const totPnlCls = totPnl > 0 ? 'text-success' : (totPnl < 0 ? 'text-danger' : 'text-light');
+      rowsHtml += `
+        <tr style="border-bottom:1px solid #1e2433;">
+          <td class="font-monospace fw-bold text-warning">${tk}</td>
+          <td class="font-monospace">${item.trades || 0}</td>
+          <td><span class="badge ${wr >= 50 ? 'bg-success' : (wr > 0 ? 'bg-warning text-dark' : 'bg-secondary')}">${wr}%</span></td>
+          <td>${fmtCell(eq)}</td>
+          <td>${fmtCell(dir)}</td>
+          <td>${fmtCell(nondir)}</td>
+          <td class="font-monospace fw-bold ${totPnlCls}">${fmtPnl(totPnl)}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-info py-0 px-2" style="font-size:0.75rem;" onclick="setHistoryTickerFilter('${tk}')" title="Filter history table by ${tk}">
+              <i class="bi bi-funnel me-1"></i>Filter
+            </button>
+          </td>
+        </tr>
+      `;
+    });
+
+    const totAll = data.total_pnl || 0;
+    const totTrades = data.total_trades || 0;
+    const allCls = totAll > 0 ? 'text-success' : (totAll < 0 ? 'text-danger' : 'text-light');
+    rowsHtml += `
+      <tr style="background:#1a1e2e;font-weight:bold;border-top:2px solid #283049;">
+        <td class="text-uppercase text-light">Total Watchlist</td>
+        <td class="font-monospace text-light">${totTrades}</td>
+        <td class="text-muted">&ndash;</td>
+        <td>${fmtPnl(data.by_substrat?.equity_stock?.total_pnl || 0)}</td>
+        <td>${fmtPnl(data.by_substrat?.dir_spread?.total_pnl || 0)}</td>
+        <td>${fmtPnl(data.by_substrat?.nondir_spread?.total_pnl || 0)}</td>
+        <td class="font-monospace fw-bold ${allCls}">${fmtPnl(totAll)}</td>
+        <td class="text-end">
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:0.75rem;" onclick="setHistoryTickerFilter('')" title="Clear ticker filter">
+            Show All
+          </button>
+        </td>
+      </tr>
+    `;
+
+    tbody.innerHTML = rowsHtml;
+  } catch (err) {
+    console.error('Failed to load DRMA Stocks history breakdown:', err);
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-3">Failed to load breakdown (${err.message || err})</td></tr>`;
+  }
+}
+
+function setHistoryTickerFilter(ticker) {
+  activeHistoryTicker = ticker || '';
+  const sel = document.getElementById('hist-stocks-ticker-filter');
+  if (sel) sel.value = activeHistoryTicker;
+  if (histTransactionsPulled || activeHistoryDate) {
+    loadHistoryTrades();
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Discretionary Clone Trades JavaScript ─────────────────────────────────────
@@ -11018,6 +12413,127 @@ async function drmaHmClearOverrides() {
 let lastCloneStatus = null;
 let clonePollTimer = null;
 let isEditingLadder = false;
+let activeCloneSubStrategyFilter = 'ALL'; // 'ALL', 'PC', 'Genie', 'Others'
+let activeCloneConfigSubStrat = 'PC'; // 'PC', 'Genie', 'Others'
+
+function setCloneSubStrategyFilter(filterName) {
+  activeCloneSubStrategyFilter = filterName;
+  ['all', 'pc', 'genie', 'others'].forEach(k => {
+    const btn = document.getElementById(`btn-substrat-${k}`);
+    if (btn) {
+      if (k.toUpperCase() === filterName.toUpperCase() || (k === 'all' && filterName === 'ALL')) {
+        btn.className = (k === 'pc' ? 'btn btn-primary fw-bold active' : (k === 'genie' ? 'btn btn-success fw-bold active' : (k === 'others' ? 'btn btn-secondary fw-bold active' : 'btn btn-info fw-bold active')));
+      } else {
+        btn.className = (k === 'pc' ? 'btn btn-outline-primary fw-semibold' : (k === 'genie' ? 'btn btn-outline-success fw-semibold' : (k === 'others' ? 'btn btn-outline-secondary fw-semibold' : 'btn btn-outline-info fw-semibold')));
+      }
+    }
+  });
+  const lbl = document.getElementById('clone-current-filter-label');
+  if (lbl) {
+    lbl.textContent = filterName === 'ALL' ? 'All Sub-Strategies' : `${filterName} Trades & Signals`;
+  }
+  if (lastCloneStatus) {
+    renderCloneTrades(lastCloneStatus);
+  }
+}
+
+function onCloneEntryModeChange(mode) {
+  const budgetBox = document.getElementById('clone-cfg-budget-container');
+  const ctrsBox = document.getElementById('clone-cfg-contracts-container');
+  if (mode === 'contracts') {
+    if (budgetBox) budgetBox.style.display = 'none';
+    if (ctrsBox) ctrsBox.style.display = 'block';
+  } else {
+    if (budgetBox) budgetBox.style.display = 'block';
+    if (ctrsBox) ctrsBox.style.display = 'none';
+  }
+}
+
+function onCloneExecutionModeChange(mode) {
+  const subtextEl = document.getElementById('clone-cfg-exec-mode-subtext');
+  if (!subtextEl) return;
+  if (mode === 'tracking') {
+    subtextEl.textContent = 'Tracking mode monitors quotes with Buy / Get In button';
+  } else if (mode === 'paper') {
+    subtextEl.textContent = 'Paper mode auto-takes trades in simulated journal';
+  } else {
+    subtextEl.textContent = 'Live sends real limit orders to TastyTrade broker';
+  }
+}
+
+function switchCloneConfigSubStrat(stratName) {
+  activeCloneConfigSubStrat = stratName;
+  ['pc', 'genie', 'others'].forEach(k => {
+    const btn = document.getElementById(`cfg-tab-${k}`);
+    if (btn) {
+      if (k.toLowerCase() === stratName.toLowerCase()) {
+        btn.className = 'btn btn-primary fw-bold';
+      } else {
+        btn.className = 'btn btn-outline-secondary fw-semibold';
+      }
+    }
+  });
+
+  const labelEl = document.getElementById('clone-cfg-current-strat-label');
+  if (labelEl) labelEl.textContent = stratName;
+
+  const descEl = document.getElementById('clone-cfg-sub-strat-desc');
+  if (descEl) {
+    if (stratName === 'PC') {
+      descEl.innerHTML = '<span class="badge bg-danger me-2">LIVE TRADING</span> Active live broker execution engine with 5-tier scaling ladder.';
+    } else if (stratName === 'Genie') {
+      descEl.innerHTML = '<span class="badge bg-info text-dark me-2">GENIE SUB-STRATEGY</span> Independent ladder scaling. Runs in Tracking Mode by default — alerts appear in live watchlist with Buy / Get In button.';
+    } else {
+      descEl.innerHTML = '<span class="badge bg-secondary me-2">OTHERS BUCKET</span> Captures all other incoming caller keys (e.g. Daemon). Runs in Tracking / Paper simulation mode (live brokerage disabled).';
+    }
+  }
+
+  const subMap = (lastCloneStatus && lastCloneStatus.sub_strategies) || {};
+  const subCfg = subMap[stratName] || (stratName === 'PC' ? (lastCloneStatus && lastCloneStatus.config) : null) || {};
+
+  // Execution Mode selector
+  const execEl = document.getElementById('clone-cfg-execution-mode');
+  if (execEl) {
+    const liveOpt = execEl.querySelector('option[value="live"]');
+    if (stratName === 'Others') {
+      if (liveOpt) liveOpt.disabled = true;
+      execEl.value = (subCfg.execution_mode === 'paper') ? 'paper' : 'tracking';
+    } else {
+      if (liveOpt) liveOpt.disabled = false;
+      const defMode = stratName === 'PC' ? (subCfg.paper_mode ? 'paper' : 'live') : 'tracking';
+      execEl.value = subCfg.execution_mode || defMode;
+    }
+    onCloneExecutionModeChange(execEl.value);
+  }
+
+  // Entry Sizing Limit Mode (Either-Or: Budget vs Contracts)
+  const entryModeEl = document.getElementById('clone-cfg-entry-limit-mode');
+  if (entryModeEl) {
+    const defEntry = (stratName === 'Genie') ? 'contracts' : 'dollar';
+    entryModeEl.value = subCfg.entry_limit_mode || defEntry;
+    onCloneEntryModeChange(entryModeEl.value);
+  }
+
+  const allocEl = document.getElementById('clone-cfg-allocation');
+  if (allocEl && subCfg.allocation_amount != null) allocEl.value = subCfg.allocation_amount;
+
+  const ctrsEl = document.getElementById('clone-cfg-contracts');
+  if (ctrsEl && subCfg.allocation_contracts != null) ctrsEl.value = subCfg.allocation_contracts;
+
+  const maxPremEl = document.getElementById('clone-cfg-max-premium');
+  if (maxPremEl && subCfg.max_premium_pct != null) maxPremEl.value = subCfg.max_premium_pct;
+
+  const floorEl = document.getElementById('clone-cfg-floor-guard');
+  if (floorEl && subCfg.floor_guard_pct != null) floorEl.value = subCfg.floor_guard_pct;
+
+  const slEl = document.getElementById('clone-cfg-initial-sl');
+  if (slEl && subCfg.initial_stop_loss_pct != null) slEl.value = subCfg.initial_stop_loss_pct;
+
+  if (subCfg.ladder_tiers) {
+    isEditingLadder = false;
+    renderCloneLadderTable(subCfg.ladder_tiers);
+  }
+}
 
 async function loadCloneTrades() {
   try {
@@ -11125,9 +12641,19 @@ function renderCloneSignalRow(s, data, activeTrades) {
     actionBtn = `<button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.75rem;" onclick="openTakeManualModal('${s.id}')">Take Manually</button>`;
   }
 
+  const subStrat = s.sub_strategy || (s.called_by === 'genie' || s.called_by === 'Genie' ? 'Genie' : (s.called_by && s.called_by !== 'PC' ? 'Others' : 'PC'));
+  const calledBy = s.called_by || 'PC';
+  let subCell = `<span class="badge bg-primary fw-bold">PC</span>`;
+  if (subStrat === 'Genie') {
+    subCell = `<span class="badge bg-info text-dark fw-bold">Genie</span>`;
+  } else if (subStrat === 'Others') {
+    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small></div>`;
+  }
+
   const timeStr = s.received_at_cst || formatCST(s.received_at, true);
   return `
     <tr class="align-middle">
+      <td>${subCell}</td>
       <td class="font-monospace text-light" style="font-size:0.78rem;">
         <i class="bi bi-calendar3 me-1 text-muted"></i>${timeStr}
       </td>
@@ -11139,14 +12665,14 @@ function renderCloneSignalRow(s, data, activeTrades) {
           </span>
           <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
         </div>
-        <small class="text-muted font-monospace d-block" style="font-size:0.72rem;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
+        <small class="font-monospace d-block" style="font-size:0.72rem;color:#94a3b8;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
       </td>
-      <td class="font-monospace text-muted">$${alertPx}</td>
-      <td class="font-monospace text-light">${mktPx}</td>
-      <td class="font-monospace text-light">${diff}</td>
+      <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
+      <td class="font-monospace" style="color:#38bdf8;font-weight:600;">${mktPx}</td>
+      <td class="font-monospace" style="color:#cbd5e1;font-weight:600;">${diff}</td>
       <td><span class="badge ${stBadge}">${s.status}</span></td>
       <td>${pnlHtml}</td>
-      <td><small class="text-muted">${exitHtml}</small></td>
+      <td><small style="color:#cbd5e1;">${exitHtml}</small></td>
       <td class="text-end">${actionBtn}</td>
     </tr>
   `;
@@ -11172,8 +12698,20 @@ function renderCloneTradeAsRow(t, data) {
   const exitHtml = `${t.status_reason || 'Closed'} <small class="text-info d-block font-monospace" style="font-size:0.72rem;"><i class="bi bi-clock me-1"></i>${exitTimeCst}</small>`;
   const actionBtn = `<button class="btn btn-sm btn-outline-info py-1 px-2 fw-semibold" style="font-size:0.76rem;" onclick="viewTradeLadderExecution('${t.id}')" title="Check how trade executed at each ladder rung with times, quantities, and price"><i class="bi bi-layers-half me-1"></i>View Ladder</button>`;
 
+  const subStrat = t.sub_strategy || (t.called_by === 'genie' || t.called_by === 'Genie' ? 'Genie' : (t.called_by && t.called_by !== 'PC' ? 'Others' : 'PC'));
+  const calledBy = t.called_by || 'PC';
+  const isPaper = t.paper_mode ?? (subStrat !== 'PC');
+  const modeBadge = isPaper ? '<span class="badge bg-dark border border-secondary text-warning" style="font-size:0.65rem;">PAPER</span>' : '<span class="badge bg-danger" style="font-size:0.65rem;">LIVE</span>';
+  let subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-primary fw-bold">PC</span>${modeBadge}</div>`;
+  if (subStrat === 'Genie') {
+    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-info text-dark fw-bold">Genie</span>${modeBadge}</div>`;
+  } else if (subStrat === 'Others') {
+    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small>${modeBadge}</div>`;
+  }
+
   return `
     <tr class="align-middle">
+      <td>${subCell}</td>
       <td class="font-monospace text-light" style="font-size:0.78rem;">
         <i class="bi bi-calendar3 me-1 text-muted"></i>${timeStr}
       </td>
@@ -11185,14 +12723,14 @@ function renderCloneTradeAsRow(t, data) {
           </span>
           <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
         </div>
-        <small class="text-muted font-monospace d-block" style="font-size:0.72rem;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
+        <small class="font-monospace d-block" style="font-size:0.72rem;color:#94a3b8;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
       </td>
-      <td class="font-monospace text-muted">$${alertPx}</td>
-      <td class="font-monospace text-light">$${entryPx}</td>
-      <td class="font-monospace text-light">${diff}</td>
+      <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
+      <td class="font-monospace" style="color:#38bdf8;font-weight:600;">$${entryPx}</td>
+      <td class="font-monospace" style="color:#cbd5e1;font-weight:600;">${diff}</td>
       <td><span class="badge ${t.status === 'CLOSED' ? 'bg-success' : 'bg-primary'}">${t.status}</span></td>
       <td>${pnlHtml}</td>
-      <td><small class="text-muted">${exitHtml}</small></td>
+      <td><small style="color:#cbd5e1;">${exitHtml}</small></td>
       <td class="text-end">${actionBtn}</td>
     </tr>
   `;
@@ -11310,31 +12848,95 @@ function renderCloneTrades(data) {
   const secEl = document.getElementById('clone-webhook-secret');
   if (secEl && cfg.webhook_secret) secEl.value = cfg.webhook_secret;
 
-  // 4. Config input fields (only if user not currently typing)
-  if (document.activeElement !== document.getElementById('clone-cfg-paper-mode')) {
-    const el = document.getElementById('clone-cfg-paper-mode');
-    if (el && cfg.paper_mode != null) el.value = String(cfg.paper_mode);
+  // 1b. Update Sub-Strategy Filter Pill Badges
+  const subMap = data.sub_strategies || {};
+  const pcInfo = subMap.PC || {};
+  const genieInfo = subMap.Genie || {};
+  const othersInfo = subMap.Others || {};
+
+  const bAll = document.getElementById('badge-substrat-all-count');
+  if (bAll) bAll.textContent = activeTrades.length;
+
+  const bPc = document.getElementById('badge-substrat-pc-count');
+  if (bPc) bPc.textContent = pcInfo.active_trades_count || 0;
+
+  const bGenie = document.getElementById('badge-substrat-genie-count');
+  if (bGenie) bGenie.textContent = genieInfo.active_trades_count || 0;
+
+  const bGenieMode = document.getElementById('badge-substrat-genie-mode');
+  if (bGenieMode) {
+    const genieExec = (genieInfo.execution_mode || (genieInfo.paper_mode ? 'paper' : 'tracking')).toUpperCase();
+    bGenieMode.textContent = genieExec;
+    if (genieExec === 'TRACKING') {
+      bGenieMode.className = 'badge bg-warning text-dark ms-1';
+    } else if (genieExec === 'PAPER') {
+      bGenieMode.className = 'badge bg-info text-dark ms-1';
+    } else {
+      bGenieMode.className = 'badge bg-danger text-light ms-1';
+    }
   }
+
+  const bOthers = document.getElementById('badge-substrat-others-count');
+  if (bOthers) bOthers.textContent = othersInfo.active_trades_count || 0;
+
+  const bOthersMode = document.getElementById('badge-substrat-others-mode');
+  if (bOthersMode) {
+    const othersExec = (othersInfo.execution_mode || 'tracking').toUpperCase();
+    bOthersMode.textContent = othersExec;
+    bOthersMode.className = (othersExec === 'TRACKING') ? 'badge bg-dark border border-secondary text-info ms-1' : 'badge bg-secondary ms-1';
+  }
+
+  // 4. Config input fields (for currently active sub-strategy tab)
+  const curSubCfg = subMap[activeCloneConfigSubStrat] || (activeCloneConfigSubStrat === 'PC' ? cfg : {});
+  if (document.activeElement !== document.getElementById('clone-cfg-execution-mode')) {
+    const el = document.getElementById('clone-cfg-execution-mode');
+    if (el) {
+      const liveOpt = el.querySelector('option[value="live"]');
+      if (activeCloneConfigSubStrat === 'Others') {
+        if (liveOpt) liveOpt.disabled = true;
+        el.value = (curSubCfg.execution_mode === 'paper') ? 'paper' : 'tracking';
+      } else {
+        if (liveOpt) liveOpt.disabled = false;
+        const defMode = activeCloneConfigSubStrat === 'PC' ? (curSubCfg.paper_mode ? 'paper' : 'live') : 'tracking';
+        el.value = curSubCfg.execution_mode || defMode;
+      }
+      onCloneExecutionModeChange(el.value);
+    }
+  }
+
+  if (document.activeElement !== document.getElementById('clone-cfg-entry-limit-mode')) {
+    const el = document.getElementById('clone-cfg-entry-limit-mode');
+    if (el) {
+      const defEntry = (activeCloneConfigSubStrat === 'Genie') ? 'contracts' : 'dollar';
+      el.value = curSubCfg.entry_limit_mode || defEntry;
+      onCloneEntryModeChange(el.value);
+    }
+  }
+
   if (document.activeElement !== document.getElementById('clone-cfg-allocation')) {
     const el = document.getElementById('clone-cfg-allocation');
-    if (el && cfg.allocation_amount != null) el.value = cfg.allocation_amount;
+    if (el && curSubCfg.allocation_amount != null) el.value = curSubCfg.allocation_amount;
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-contracts')) {
+    const el = document.getElementById('clone-cfg-contracts');
+    if (el && curSubCfg.allocation_contracts != null) el.value = curSubCfg.allocation_contracts;
   }
   if (document.activeElement !== document.getElementById('clone-cfg-max-premium')) {
     const el = document.getElementById('clone-cfg-max-premium');
-    if (el && cfg.max_premium_pct != null) el.value = cfg.max_premium_pct;
+    if (el && curSubCfg.max_premium_pct != null) el.value = curSubCfg.max_premium_pct;
   }
   if (document.activeElement !== document.getElementById('clone-cfg-floor-guard')) {
     const el = document.getElementById('clone-cfg-floor-guard');
-    if (el && cfg.floor_guard_pct != null) el.value = cfg.floor_guard_pct;
+    if (el && curSubCfg.floor_guard_pct != null) el.value = curSubCfg.floor_guard_pct;
   }
   if (document.activeElement !== document.getElementById('clone-cfg-initial-sl')) {
     const el = document.getElementById('clone-cfg-initial-sl');
-    if (el && cfg.initial_stop_loss_pct != null) el.value = cfg.initial_stop_loss_pct;
+    if (el && curSubCfg.initial_stop_loss_pct != null) el.value = curSubCfg.initial_stop_loss_pct;
   }
 
   // 5. Render Ladder Rules Table
-  if (!isEditingLadder && cfg.ladder_tiers) {
-    renderCloneLadderTable(cfg.ladder_tiers);
+  if (!isEditingLadder && curSubCfg.ladder_tiers) {
+    renderCloneLadderTable(curSubCfg.ladder_tiers);
   }
 
   // 6. Pending Decisions Banner (Chase Guard Exceeded #4)
@@ -11357,6 +12959,7 @@ function renderCloneTrades(data) {
           : `<span class="badge bg-warning text-dark font-monospace">+${diff}% Slippage</span>`;
         const und = spec.underlying || 'OPT';
         const exp = spec.expiration || '';
+        const k = spec.strike != null ? spec.strike : '';
         const otRaw = spec.option_type || '';
         const isCall = (otRaw || '').toUpperCase().startsWith('C');
         const ot = isCall ? 'CALL' : (otRaw ? 'PUT' : 'CALL');
@@ -11395,13 +12998,113 @@ function renderCloneTrades(data) {
     }
   }
 
+  // 6b. Live Tracked Alerts Table (Tracking Mode)
+  const trackedSignals = data.tracked_signals || [];
+  const trackedTbody = document.getElementById('clone-tracked-tbody');
+  const trackedBadge = document.getElementById('clone-tracked-count-badge');
+  if (trackedBadge) {
+    trackedBadge.textContent = `${trackedSignals.length} TRACKING`;
+  }
+  if (trackedTbody) {
+    const filteredTracked = activeCloneSubStrategyFilter === 'ALL'
+      ? trackedSignals
+      : trackedSignals.filter(s => (s.sub_strategy || 'Others') === activeCloneSubStrategyFilter);
+
+    if (filteredTracked.length === 0) {
+      const note = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
+      trackedTbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">No alerts currently in Tracking Mode${note}</td></tr>`;
+    } else {
+      trackedTbody.innerHTML = filteredTracked.map(s => {
+        const spec = s.spec || {};
+        const und = spec.underlying || '—';
+        const exp = spec.expiration || '';
+        const k = spec.strike != null ? spec.strike : '';
+        const otRaw = spec.option_type || 'CALL';
+        const isCall = (otRaw || '').toUpperCase().startsWith('C');
+        const ot = isCall ? 'CALL' : 'PUT';
+        const otBadge = isCall ? 'bg-success text-light' : 'bg-danger text-light';
+        const otIcon = isCall ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
+
+        const alertPx = Number(s.alert_price || 0).toFixed(2);
+        const mktPx = Number(s.market_price || alertPx).toFixed(2);
+        const curPx = Number(s.current_price || mktPx).toFixed(2);
+        const peakPx = Number(s.peak_price || curPx).toFixed(2);
+        const bottomPx = Number(s.bottom_price || curPx).toFixed(2);
+
+        const alertNum = parseFloat(alertPx) || 0.01;
+        const curNum = parseFloat(curPx);
+        const peakNum = parseFloat(peakPx);
+        const botNum = parseFloat(bottomPx);
+        const netPct = (((curNum - alertNum) / alertNum) * 100).toFixed(1);
+        const peakPct = (((peakNum - alertNum) / alertNum) * 100).toFixed(1);
+        const botPct = (((botNum - alertNum) / alertNum) * 100).toFixed(1);
+
+        const timeStr = s.received_at_cst || formatCST(s.received_at, false);
+        const subStrat = s.sub_strategy || (s.called_by === 'genie' || s.called_by === 'Genie' ? 'Genie' : (s.called_by && s.called_by !== 'PC' ? 'Others' : 'PC'));
+        let subCell = `<span class="badge bg-primary fw-bold">PC</span>`;
+        if (subStrat === 'Genie') {
+          subCell = `<span class="badge bg-info text-dark fw-bold">Genie</span>`;
+        } else if (subStrat === 'Others') {
+          subCell = `<span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace d-block" style="font-size:0.68rem;color:#cbd5e1;">${s.called_by || 'Other'}</small>`;
+        }
+
+        const isGain = curNum >= alertNum;
+        const netBadge = `<span class="badge ${isGain ? 'bg-success' : 'bg-danger'} font-monospace px-2 py-1" style="font-size:0.82rem;font-weight:700;">${isGain ? '+' : ''}${netPct}%</span>`;
+
+        return `
+          <tr class="align-middle">
+            <td>${subCell}</td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <strong class="text-light fs-6">${und}</strong>
+                <span class="badge ${otBadge} fw-bold px-2 py-1 shadow-sm" style="font-size:0.74rem;letter-spacing:0.04em;">
+                  <i class="bi ${otIcon} me-1"></i>${ot}
+                </span>
+                <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
+              </div>
+              <small class="font-monospace d-block mt-1" style="font-size:0.73rem;color:#94a3b8;">${exp} • ${spec.streamer_symbol || ''}</small>
+            </td>
+            <td class="font-monospace text-nowrap" style="font-size:0.80rem;color:#e2e8f0;">
+              <i class="bi bi-clock me-1 text-info" style="display:inline-block;vertical-align:middle;"></i><span style="vertical-align:middle;">${timeStr}</span>
+            </td>
+            <td class="font-monospace fw-bold" style="color:#f1f5f9;font-size:0.88rem;">$${alertPx}</td>
+            <td class="font-monospace fw-bold" style="color:#38bdf8;font-size:0.88rem;">$${mktPx}</td>
+            <td class="font-monospace fw-bold fs-6" style="color:${isGain ? '#4ade80' : '#f87171'};font-size:0.95rem;">$${curPx}</td>
+            <td>
+              <span class="font-monospace fw-bold" style="color:#4ade80;font-size:0.88rem;">$${peakPx}</span>
+              <small class="d-block font-monospace fw-semibold" style="font-size:0.72rem;color:#86efac;">+${peakPct}%</small>
+            </td>
+            <td>
+              <span class="font-monospace fw-bold" style="color:#f87171;font-size:0.88rem;">$${bottomPx}</span>
+              <small class="d-block font-monospace fw-semibold" style="font-size:0.72rem;color:#fca5a5;">${Number(botPct) > 0 ? '+' : ''}${botPct}%</small>
+            </td>
+            <td>${netBadge}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-success fw-bold px-3 py-1 shadow-sm" onclick="openTakeManualModal('${s.id}')">
+                <i class="bi bi-cart-plus me-1"></i>Buy / Get In
+              </button>
+              <button class="btn btn-sm btn-outline-secondary px-2 py-1 ms-1" onclick="leaveSignal('${s.id}')" title="Dismiss / Ignore">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+
   // 7. Active Trades Table
   const trBody = document.getElementById('clone-trades-tbody');
   if (trBody) {
-    if (activeTrades.length === 0) {
-      trBody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No active clone trades open</td></tr>';
+    const filteredActiveTrades = activeCloneSubStrategyFilter === 'ALL'
+      ? activeTrades
+      : activeTrades.filter(t => (t.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+
+    if (filteredActiveTrades.length === 0) {
+      const filterNote = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
+      trBody.innerHTML = `<tr><td colspan="14" class="text-center text-muted py-4">No active clone trades open${filterNote}</td></tr>`;
     } else {
-      trBody.innerHTML = activeTrades.map(t => {
+      trBody.innerHTML = filteredActiveTrades.map(t => {
         const spec = t.spec || {};
         const und = spec.underlying || '';
         const exp = spec.expiration || '';
@@ -11416,6 +13119,16 @@ function renderCloneTrades(data) {
         const alertPx = Number(t.webhook_price || 0).toFixed(2);
         const entryPx = Number(t.entry_price || 0).toFixed(2);
         const curPx = Number(t.current_price || entryPx).toFixed(2);
+        const peakPx = Number(t.highest_price || curPx).toFixed(2);
+        const bottomPx = Number(t.lowest_price || curPx).toFixed(2);
+
+        const entryNum = parseFloat(entryPx) || 0.01;
+        const curNum = parseFloat(curPx);
+        const peakNum = parseFloat(peakPx);
+        const botNum = parseFloat(bottomPx);
+        const peakPct = (((peakNum - entryNum) / entryNum) * 100).toFixed(1);
+        const botPct = (((botNum - entryNum) / entryNum) * 100).toFixed(1);
+
         const uPnl = t.unrealized_pnl_usd || 0;
         const uPct = t.unrealized_pnl_pct || 0;
         const nextPt = Number(t.active_pt_price || 0).toFixed(2);
@@ -11446,6 +13159,17 @@ function renderCloneTrades(data) {
                <i class="bi bi-x-octagon me-1"></i>Flatten
              </button>`;
 
+        const subStrat = t.sub_strategy || (t.called_by === 'genie' || t.called_by === 'Genie' ? 'Genie' : (t.called_by && t.called_by !== 'PC' ? 'Others' : 'PC'));
+        const calledBy = t.called_by || 'PC';
+        const isPaper = t.paper_mode ?? (subStrat !== 'PC');
+        const modeBadge = isPaper ? '<span class="badge bg-dark border border-secondary text-warning" style="font-size:0.65rem;">PAPER</span>' : '<span class="badge bg-danger" style="font-size:0.65rem;">LIVE</span>';
+        let subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-primary fw-bold">PC</span>${modeBadge}</div>`;
+        if (subStrat === 'Genie') {
+          subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-info text-dark fw-bold">Genie</span>${modeBadge}</div>`;
+        } else if (subStrat === 'Others') {
+          subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small>${modeBadge}</div>`;
+        }
+
         const tierDist = t.tier_distribution || [];
         const curDist = tierDist[t.current_tier_index || 0] || {};
         const curPtPct = curDist.target_profit_pct != null ? curDist.target_profit_pct : 25;
@@ -11458,6 +13182,7 @@ function renderCloneTrades(data) {
 
         return `
           <tr class="align-middle">
+            <td>${subCell}</td>
             <td>
               <div class="d-flex align-items-center gap-2">
                 <span class="fw-bold font-monospace text-light fs-6">${und}</span>
@@ -11478,9 +13203,17 @@ function renderCloneTrades(data) {
               <span class="badge bg-primary font-monospace fs-6">${remQty}</span>
               <small class="text-muted">/ ${initQty}</small>
             </td>
-            <td class="font-monospace text-muted">$${alertPx}</td>
+            <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
             <td>${entryCell}</td>
             <td class="font-monospace text-light fw-bold">$${curPx}</td>
+            <td>
+              <span class="font-monospace text-success fw-bold">$${peakPx}</span>
+              <small class="d-block font-monospace fw-semibold" style="font-size:0.70rem;color:#86efac;">+${peakPct}%</small>
+            </td>
+            <td>
+              <span class="font-monospace text-danger fw-bold">$${bottomPx}</span>
+              <small class="d-block font-monospace fw-semibold" style="font-size:0.70rem;color:#fca5a5;">${Number(botPct) > 0 ? '+' : ''}${botPct}%</small>
+            </td>
             <td>${pnlCell}</td>
             <td>
               <span class="badge bg-primary font-monospace">Step ${stepNum}: $${nextPt} (+${curPtPct}%)</span>
@@ -11537,19 +13270,28 @@ function renderCloneTrades(data) {
   const todayClosed = data.today_closed_trades || data.closed_trades || [];
   const todaySignalTradeIds = new Set(todaySignals.map(s => s.trade_id).filter(Boolean));
   const unlinkedTodayClosed = todayClosed.filter(t => !todaySignalTradeIds.has(t.id));
-  const totalTodayCount = todaySignals.length + unlinkedTodayClosed.length;
+
+  const filteredTodaySignals = activeCloneSubStrategyFilter === 'ALL'
+    ? todaySignals
+    : todaySignals.filter(s => (s.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+  const filteredTodayClosed = activeCloneSubStrategyFilter === 'ALL'
+    ? unlinkedTodayClosed
+    : unlinkedTodayClosed.filter(t => (t.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+  const totalTodayCount = filteredTodaySignals.length + filteredTodayClosed.length;
 
   if (todayBadge) {
-    todayBadge.textContent = `${todayCst} (CST) • ${totalTodayCount} RECORD${totalTodayCount === 1 ? '' : 'S'}`;
+    const filterTag = activeCloneSubStrategyFilter !== 'ALL' ? ` • [${activeCloneSubStrategyFilter}]` : '';
+    todayBadge.textContent = `${todayCst} (CST) • ${totalTodayCount} RECORD${totalTodayCount === 1 ? '' : 'S'}${filterTag}`;
   }
   const todayBody = document.getElementById('clone-today-tbody');
   if (todayBody) {
     if (totalTodayCount === 0) {
-      todayBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today</td></tr>';
+      const filterNote = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
+      todayBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today${filterNote}</td></tr>`;
     } else {
       const rows = [
-        ...todaySignals.map(s => renderCloneSignalRow(s, data, activeTrades)),
-        ...unlinkedTodayClosed.map(t => renderCloneTradeAsRow(t, data))
+        ...filteredTodaySignals.map(s => renderCloneSignalRow(s, data, activeTrades)),
+        ...filteredTodayClosed.map(t => renderCloneTradeAsRow(t, data))
       ];
       todayBody.innerHTML = rows.join('');
     }
@@ -11701,8 +13443,11 @@ async function toggleCloneAutoTake() {
 }
 
 async function saveCloneConfig() {
-  const paperModeEl = document.getElementById('clone-cfg-paper-mode');
-  const paperMode = paperModeEl ? (paperModeEl.value === 'true') : false;
+  const execModeEl = document.getElementById('clone-cfg-execution-mode');
+  const executionMode = execModeEl ? execModeEl.value : 'live';
+  const paperMode = (executionMode !== 'live');
+  const entryLimitMode = document.getElementById('clone-cfg-entry-limit-mode')?.value || 'dollar';
+  const allocContracts = parseInt(document.getElementById('clone-cfg-contracts')?.value || 1);
   const alloc = parseFloat(document.getElementById('clone-cfg-allocation')?.value || 500);
   const maxPrem = parseFloat(document.getElementById('clone-cfg-max-premium')?.value || 25);
   const floorGuard = parseFloat(document.getElementById('clone-cfg-floor-guard')?.value || 75);
@@ -11734,6 +13479,9 @@ async function saveCloneConfig() {
 
   const payload = {
     paper_mode: paperMode,
+    execution_mode: executionMode,
+    entry_limit_mode: entryLimitMode,
+    allocation_contracts: allocContracts,
     allocation_amount: alloc,
     max_premium_pct: maxPrem,
     floor_guard_pct: floorGuard,
@@ -11742,7 +13490,8 @@ async function saveCloneConfig() {
   };
 
   try {
-    const res = await fetch('/api/clone_trades/config', {
+    const url = `/api/clone_trades/sub_strategy/${encodeURIComponent(activeCloneConfigSubStrat)}/config`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
@@ -11752,13 +13501,14 @@ async function saveCloneConfig() {
       isEditingLadder = false;
       const count = data.updated_active_trades_count || 0;
       if (count > 0) {
-        toast(`Clone Trades settings saved! Updated ladder on ${count} active position${count > 1 ? 's' : ''}.`, 'success');
+        toast(`[${activeCloneConfigSubStrat}] settings saved! Updated ladder on ${count} active position${count > 1 ? 's' : ''}.`, 'success');
       } else {
-        toast('Clone Trades settings saved successfully!', 'success');
+        toast(`[${activeCloneConfigSubStrat}] settings saved successfully!`, 'success');
       }
       loadCloneTrades();
     } else {
-      toast('Failed to save settings', 'error');
+      const data = await res.json().catch(() => ({}));
+      toast('Failed to save settings: ' + (data.error || 'Server error'), 'error');
     }
   } catch (err) {
     toast('Error saving settings: ' + err, 'error');
@@ -12008,16 +13758,39 @@ function updateModalTakeLadderPreview() {
 
 function openTakeManualModal(sigId) {
   if (!lastCloneStatus) return;
-  const sig = (lastCloneStatus.signals || []).find(s => s.id === sigId) || (lastCloneStatus.pending_decisions || []).find(s => s.id === sigId);
-  if (!sig) return;
+  const allSigs = [
+    ...(lastCloneStatus.tracked_signals || []),
+    ...(lastCloneStatus.signals || []),
+    ...(lastCloneStatus.pending_decisions || []),
+    ...(lastCloneStatus.today_signals || [])
+  ];
+  const sig = allSigs.find(s => s.id === sigId);
+  if (!sig) {
+    toast('Signal not found', 'warning');
+    return;
+  }
 
   const spec = sig.spec || {};
   const alertPx = Number(sig.alert_price || 0);
   const mktPx = Number(sig.market_price || alertPx);
+  const curPx = Number(sig.current_price || mktPx);
+  const peakPx = Number(sig.peak_price || curPx);
+  const bottomPx = Number(sig.bottom_price || curPx);
   const diff = Number(sig.premium_pct || 0);
-  const alloc = lastCloneStatus.config ? lastCloneStatus.config.allocation_amount : 500;
-  const costPerCtr = Math.max(1.0, mktPx * 100);
-  const defaultQty = Math.max(1, Math.floor(alloc / costPerCtr));
+
+  const subStrat = sig.sub_strategy || (sig.called_by === 'genie' || sig.called_by === 'Genie' ? 'Genie' : (sig.called_by && sig.called_by !== 'PC' ? 'Others' : 'PC'));
+  const subMap = (lastCloneStatus && lastCloneStatus.sub_strategies) || {};
+  const subCfg = subMap[subStrat] || {};
+
+  const entryLimitMode = subCfg.entry_limit_mode || (subStrat === 'Genie' ? 'contracts' : 'dollar');
+  let defaultQty = 1;
+  if (entryLimitMode === 'contracts') {
+    defaultQty = subCfg.allocation_contracts || 1;
+  } else {
+    const alloc = subCfg.allocation_amount || 500;
+    const costPerCtr = Math.max(1.0, curPx * 100);
+    defaultQty = Math.max(1, Math.floor(alloc / costPerCtr));
+  }
 
   const otRaw = spec.option_type || '';
   const isCall = (otRaw || '').toUpperCase().startsWith('C');
@@ -12026,12 +13799,37 @@ function openTakeManualModal(sigId) {
   const otIcon = isCall ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
 
   document.getElementById('modal-take-sig-id').value = sig.id;
+  const subInput = document.getElementById('modal-take-sub-strat');
+  if (subInput) subInput.value = subStrat;
   document.getElementById('modal-take-symbol').innerHTML = `${spec.underlying || 'OPT'} ${spec.strike ? `$${spec.strike}` : ''} <span class="${otBadgeCls}"><i class="bi ${otIcon} me-1"></i>${ot}</span> <small class="text-muted ms-1 font-monospace">(${spec.expiration || ''})</small>`;
+  const badgeSub = document.getElementById('modal-take-substrat-badge');
+  if (badgeSub) badgeSub.textContent = subStrat;
+
   document.getElementById('modal-take-alert-px').textContent = `$${alertPx.toFixed(2)}`;
   document.getElementById('modal-take-market-px').textContent = `$${mktPx.toFixed(2)}`;
+  const curEl = document.getElementById('modal-take-current-px');
+  if (curEl) curEl.textContent = `$${curPx.toFixed(2)}`;
+  const peakEl = document.getElementById('modal-take-peak-px');
+  if (peakEl) peakEl.textContent = `$${peakPx.toFixed(2)}`;
+  const botEl = document.getElementById('modal-take-bottom-px');
+  if (botEl) botEl.textContent = `$${bottomPx.toFixed(2)}`;
+
   document.getElementById('modal-take-diff').textContent = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`;
-  document.getElementById('modal-take-custom-px').value = mktPx.toFixed(2);
+  document.getElementById('modal-take-custom-px').value = curPx.toFixed(2);
   document.getElementById('modal-take-custom-qty').value = defaultQty;
+
+  const modeEl = document.getElementById('modal-take-exec-mode');
+  if (modeEl) {
+    const liveOpt = modeEl.querySelector('option[value="live"]');
+    if (subStrat === 'Others') {
+      if (liveOpt) liveOpt.disabled = true;
+      modeEl.value = 'paper';
+    } else {
+      if (liveOpt) liveOpt.disabled = false;
+      const isPaper = subCfg.paper_mode || (subCfg.execution_mode === 'paper');
+      modeEl.value = isPaper ? 'paper' : 'live';
+    }
+  }
 
   updateModalTakeLadderPreview();
 
@@ -12046,6 +13844,8 @@ async function confirmTakeManual() {
   const sigId = document.getElementById('modal-take-sig-id')?.value;
   const customPx = parseFloat(document.getElementById('modal-take-custom-px')?.value || 0);
   const customQty = parseInt(document.getElementById('modal-take-custom-qty')?.value || 1);
+  const execMode = document.getElementById('modal-take-exec-mode')?.value || 'live';
+  const isPaper = (execMode === 'paper');
 
   if (!sigId) return;
 
@@ -12053,11 +13853,11 @@ async function confirmTakeManual() {
     const res = await fetch(`/api/clone_trades/signal/${sigId}/take_manual`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ price: customPx, qty: customQty })
+      body: JSON.stringify({ price: customPx, qty: customQty, paper_mode: isPaper })
     });
     const data = await res.json();
     if (res.ok && data.ok) {
-      toast(`Order executed manually: ${customQty} contracts @ $${customPx.toFixed(2)}`, 'success');
+      toast(`Order entered: ${customQty} contracts @ $${customPx.toFixed(2)} (${isPaper ? 'Paper' : 'Live Brokerage'})`, 'success');
       const modalEl = document.getElementById('modal-clone-take-manual');
       if (modalEl) {
         const inst = bootstrap.Modal.getInstance(modalEl);
@@ -12110,13 +13910,15 @@ async function sendSimulatedSignal() {
   const type = document.getElementById('sim-type')?.value || 'CALL';
   const price = parseFloat(document.getElementById('sim-price')?.value || 0.80);
 
+  const calledBy = document.getElementById('sim-calledby')?.value || 'PC';
   const payload = {
     ticker: ticker,
     exp: exp,
     strike: strike,
     type: type,
     price: price,
-    action: 'buy'
+    action: 'buy',
+    calledBy: calledBy
   };
 
   try {
@@ -12127,7 +13929,8 @@ async function sendSimulatedSignal() {
     });
     const data = await res.json();
     if (data.status === 'TAKEN') {
-      toast(`Simulated signal filled: ${ticker} @ $${price.toFixed(2)}`, 'success');
+      const subTag = data.trade?.sub_strategy || (calledBy === 'genie' ? 'Genie' : (calledBy !== 'PC' ? 'Others' : 'PC'));
+      toast(`Simulated signal filled [${subTag}]: ${ticker} @ $${price.toFixed(2)}`, 'success');
     } else if (data.status === 'WORKING') {
       toast(`Simulated order submitted & QUEUED on brokerage (awaiting market open)`, 'info');
     } else if (data.status === 'CHASE_EXCEEDED') {
@@ -12642,15 +14445,176 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// ── INVERSE MEIC (INVERSE_MEIC_SPX) CLIENT LOGIC ──
+let inverseMeicPollTimer = null;
+let lastInverseMeicData = null;
+
+function startInverseMeicPolling() {
+  stopInverseMeicPolling();
+  inverseMeicPollTimer = setInterval(loadInverseMeic, 5000);
+}
+
+function stopInverseMeicPolling() {
+  if (inverseMeicPollTimer) {
+    clearInterval(inverseMeicPollTimer);
+    inverseMeicPollTimer = null;
+  }
+}
+
+async function loadInverseMeic(params = '') {
+  try {
+    const url = `/api/inverse_meic/today${params ? '?' + params : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    lastInverseMeicData = data;
+    renderInverseMeic(data);
+  } catch (err) {
+    console.error('Failed loading Inverse MEIC status:', err);
+  }
+}
+
+async function testToggleInverseMeicRegime(forceArmed) {
+  const arg = forceArmed ? 'force_armed=1' : 'force_armed=0';
+  await loadInverseMeic(arg);
+  toast(`Inverse MEIC Regime switched to ${forceArmed ? 'ARMED' : 'STANDBY'}`, forceArmed ? 'success' : 'warning');
+}
+
+function renderInverseMeic(data) {
+  if (!data) return;
+  const regime = data.regime || {};
+  const isArmed = Boolean(regime.is_armed);
+  const paper = Boolean(data.paper);
+
+  const navBadge = document.getElementById('inverse-meic-nav-badge');
+  if (navBadge) {
+    navBadge.textContent = paper ? 'PAPER' : 'LIVE';
+    navBadge.className = paper ? 'badge bg-secondary ms-1' : 'badge bg-danger ms-1';
+  }
+
+  // 1. Regime Badge
+  const badge = document.getElementById('inv-regime-badge');
+  if (badge) {
+    badge.className = isArmed ? 'badge bg-success px-3 py-1 fs-6 fw-bold' : 'badge bg-secondary px-3 py-1 fs-6 fw-bold';
+    badge.textContent = `STATUS: ${regime.regime || (isArmed ? 'ARMED' : 'STANDBY')}`;
+  }
+
+  // 2. Pre-market Gap Card
+  const gapVal = document.getElementById('inv-gap-val');
+  const gapIcon = document.getElementById('inv-gap-icon');
+  if (gapVal) gapVal.textContent = `${(Number(regime.premarket_gap_pct || 0) * 100).toFixed(2)}%`;
+  if (gapIcon) {
+    gapIcon.className = regime.premarket_gap_met ? 'badge bg-success-subtle text-success fw-bold' : 'badge bg-secondary-subtle text-secondary fw-bold';
+    gapIcon.textContent = regime.premarket_gap_met ? '✓ MET' : 'STANDBY';
+  }
+
+  // 3. 30m ORB Range Card
+  const orbVal = document.getElementById('inv-orb-val');
+  const orbIcon = document.getElementById('inv-orb-icon');
+  if (orbVal) orbVal.textContent = `${Number(regime.orb_range_pts || 0).toFixed(1)} pts`;
+  if (orbIcon) {
+    orbIcon.className = regime.orb_range_met ? 'badge bg-success-subtle text-success fw-bold' : 'badge bg-secondary-subtle text-secondary fw-bold';
+    orbIcon.textContent = regime.orb_range_met ? '✓ MET' : 'STANDBY';
+  }
+
+  // 4. Spot VIX Card
+  const vixVal = document.getElementById('inv-vix-val');
+  const vixIcon = document.getElementById('inv-vix-icon');
+  if (vixVal) vixVal.textContent = Number(regime.spot_vix || 0).toFixed(2);
+  if (vixIcon) {
+    vixIcon.className = regime.vix_met ? 'badge bg-success-subtle text-success fw-bold' : 'badge bg-secondary-subtle text-secondary fw-bold';
+    vixIcon.textContent = regime.vix_met ? '✓ MET' : 'STANDBY';
+  }
+
+  // 5. Realized ATR Card
+  const atrVal = document.getElementById('inv-atr-val');
+  const atrIcon = document.getElementById('inv-atr-icon');
+  if (atrVal) atrVal.textContent = `${Number(regime.realized_atr || 0).toFixed(1)} pts`;
+  if (atrIcon) {
+    atrIcon.className = regime.atr_met ? 'badge bg-success-subtle text-success fw-bold' : 'badge bg-secondary-subtle text-secondary fw-bold';
+    atrIcon.textContent = regime.atr_met ? '✓ MET' : 'STANDBY';
+  }
+
+  // Bottom Sub-bar
+  const modeEl = document.getElementById('inv-today-mode');
+  if (modeEl) {
+    modeEl.textContent = regime.today_mode || (isArmed ? 'ACTIVE TRADING' : 'STANDBY (MONITORING)');
+    modeEl.className = isArmed ? 'text-success fw-bold' : 'text-warning fw-bold';
+  }
+  const nextTrancheEl = document.getElementById('inv-next-tranche');
+  if (nextTrancheEl) nextTrancheEl.textContent = `${regime.next_tranche || '10-30'} CT`;
+  const targetMultEl = document.getElementById('inv-target-mult');
+  if (targetMultEl) targetMultEl.textContent = `${regime.target_multiplier || 3.0}x Multiple`;
+  const summaryMsgEl = document.getElementById('inv-summary-msg');
+  if (summaryMsgEl) summaryMsgEl.textContent = regime.summary_message || '';
+
+  // Render Tranches Table
+  const tbody = document.getElementById('inv-tranches-tbody');
+  if (tbody && Array.isArray(data.slots)) {
+    tbody.innerHTML = data.slots.map(s => {
+      const cds = s.cds || {};
+      const pds = s.pds || {};
+      const cdsPnlClass = (cds.pnl || 0) >= 0 ? 'text-success' : 'text-danger';
+      const pdsPnlClass = (pds.pnl || 0) >= 0 ? 'text-success' : 'text-danger';
+      const totPnlClass = (s.tranche_pnl || 0) >= 0 ? 'text-success' : 'text-danger';
+
+      const formatWing = (w) => {
+        if (!w || w.status === 'PENDING') {
+          return `<span class="badge bg-secondary-subtle text-secondary font-monospace">PENDING</span>`;
+        }
+        const badgeClass = w.status === 'CLOSED' ? 'bg-primary' : (w.status === 'OPEN' ? 'bg-success' : 'bg-secondary');
+        return `
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+              <span class="badge ${badgeClass} me-2">${w.status}</span>
+              <span class="font-monospace text-light fw-bold">${w.long_strike || '–'}/${w.short_strike || '–'}</span>
+            </div>
+            <div class="small">
+              <span class="text-secondary">Entry:</span> <strong class="text-light">$${Number(w.debit||0).toFixed(2)}</strong>
+              <span class="text-secondary ms-2">Mark:</span> <strong class="text-info">$${Number(w.mark||0).toFixed(2)}</strong>
+              <span class="text-secondary ms-2">Target:</span> <strong class="text-warning">$${Number(w.target||0).toFixed(2)}</strong>
+            </div>
+            <div>
+              <span class="${(w.pnl||0) >= 0 ? 'text-success' : 'text-danger'} fw-bold font-monospace">${fmtPnl(w.pnl||0)}</span>
+            </div>
+          </div>
+        `;
+      };
+
+      return `
+        <tr style="border-bottom:1px solid #1e293b;">
+          <td class="font-monospace fw-bold text-info py-2">${s.lot}</td>
+          <td class="text-secondary small py-2">${s.window}</td>
+          <td class="py-2">${formatWing(cds)}</td>
+          <td class="py-2">${formatWing(pds)}</td>
+          <td class="font-monospace fw-bold ${totPnlClass} text-end py-2">${fmtPnl(s.tranche_pnl || 0)}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // Total PnL Banner
+  const totPnlEl = document.getElementById('inv-total-pnl');
+  if (totPnlEl) {
+    const tot = data.total_pnl || 0;
+    totPnlEl.textContent = fmtPnl(tot);
+    totPnlEl.className = `h5 fw-bold font-monospace mb-0 ${tot >= 0 ? 'text-success' : 'text-danger'}`;
+  }
+}
+
 // Polling for Discretionary Clone Trades
 setInterval(() => {
   if (activeTab === 'today' && activeStrategy === 'clone_trades') {
     loadCloneTrades();
   }
+  if (activeTab === 'today' && activeStrategy === 'inverse_meic') {
+    loadInverseMeic();
+  }
 }, 2500);
 
-// Pre-load clone status once on launch
+// Pre-load clone and inverse status once on launch
 setTimeout(loadCloneTrades, 1500);
+setTimeout(loadInverseMeic, 2000);
 
 // Initial render on page load — don't wait for SocketIO first push
 fetch('/api/summary').then(r => r.json()).then(data => {

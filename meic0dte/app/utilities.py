@@ -179,25 +179,24 @@ def get_bearer(log):
 
 #=============================================================================================================================#
 
-def update_options_symbols(additional_symbols,lot,log):
+def update_options_symbols(additional_symbols, lot, log):
     file_path = config.STREAM_SYMBOLS
+    lock_path = file_path + '.lock'
+    from common.data_utils import interprocess_file_lock, load_json_safe, save_json_safe
     try:
-        with file_lock:
-            with open(file_path, 'r') as file:
-                data = json.load(file)
+        with interprocess_file_lock(lock_path, timeout_sec=5.0):
+            data = load_json_safe(file_path)
+            if not isinstance(data, dict) or "SYMBOLS" not in data:
+                data = {"SYMBOLS": []}
+            current = set(data.get("SYMBOLS") or [])
+            current.update(additional_symbols)
+            data["SYMBOLS"] = sorted(list(current))
+            save_json_safe(file_path, data)
+        return True
     except Exception as e:
-        log.info(f"ERROR Opening {lot} Options Symbol File - {e}")
+        log.info(f"ERROR updating {lot} Options Symbol File - {e}")
         return False
-    try:
-        data["SYMBOLS"].extend(additional_symbols)
-        data["SYMBOLS"] = list(set(data["SYMBOLS"]))
-        with file_lock:
-            with open(file_path, 'w') as file:
-                json.dump(data, file, indent=2)
-    except Exception as e:
-        log.info(f"ERROR Writing to {lot} Options Symbol File - {e}")
-        return False
-    return True
+
     
 #=============================================================================================================================#
 

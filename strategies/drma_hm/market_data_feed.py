@@ -240,6 +240,56 @@ def fetch_yahoo_spx_5m_bars(for_date: date) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def fetch_yahoo_es_5m_bars(for_date: date, include_overnight: bool = True) -> pd.DataFrame:
+    """Fetch live 5m bars for ES futures (ES=F) from Yahoo Finance covering overnight and regular sessions."""
+    try:
+        url = 'https://query1.finance.yahoo.com/v8/finance/chart/ES=F?range=2d&interval=5m'
+        resp = requests.get(url, headers=_DEFAULT_HEADERS, timeout=8)
+        if resp.status_code != 200:
+            return pd.DataFrame()
+        res = resp.json().get('chart', {}).get('result', [])
+        if not res:
+            return pd.DataFrame()
+        ts = res[0].get('timestamp', [])
+        quote = res[0].get('indicators', {}).get('quote', [{}])[0]
+        opens = quote.get('open', [])
+        highs = quote.get('high', [])
+        lows = quote.get('low', [])
+        closes = quote.get('close', [])
+        bars = []
+
+        # Previous trading day 17:00 CST marks start of current cycle
+        prev_d = for_date - timedelta(days=1)
+        while prev_d.weekday() >= 5:
+            prev_d -= timedelta(days=1)
+        cycle_start_ct = datetime.datetime.combine(prev_d, datetime.time(17, 0), tzinfo=_CT)
+
+        for t, o, h, l, c in zip(ts, opens, highs, lows, closes):
+            if c is None or o is None or h is None or l is None:
+                continue
+            dt_ct = datetime.datetime.fromtimestamp(t, tz=_CT)
+            if include_overnight:
+                if dt_ct < cycle_start_ct or dt_ct.date() > for_date:
+                    continue
+            else:
+                if dt_ct.date() != for_date:
+                    continue
+            bars.append({
+                'datetime': dt_ct.strftime('%Y-%m-%d %H:%M:%S'),
+                'open': round(float(o), 2),
+                'high': round(float(h), 2),
+                'low': round(float(l), 2),
+                'close': round(float(c), 2),
+                'is_today': True,
+            })
+        if not bars:
+            return pd.DataFrame()
+        return pd.DataFrame(bars)
+    except Exception as exc:
+        log.warning('Failed to fetch Yahoo ES 5m bars: %s', exc)
+        return pd.DataFrame()
+
+
 def load_spx_5m_bars(
     data_root: str,
     for_date: date,
@@ -340,6 +390,20 @@ def fetch_es_current_price(
     if allow_synthetic_fallback and spx_spot is not None and spx_spot > 0:
         offset = es_basis if es_basis is not None else ((levels.get('es_offset') if levels else None) or (levels.get('es_basis') if levels else None) or 0.0)
         return round(float(spx_spot) + float(offset), 2)
+
+    # 4. Yahoo Finance live quote fallback for ES=F
+    try:
+        url = 'https://query1.finance.yahoo.com/v8/finance/chart/ES=F?range=1d&interval=1m'
+        resp = requests.get(url, headers=_DEFAULT_HEADERS, timeout=min(timeout_sec, 3.0))
+        if resp.status_code == 200:
+            res = resp.json().get('chart', {}).get('result', [])
+            if res:
+                meta = res[0].get('meta', {})
+                market_price = meta.get('regularMarketPrice')
+                if market_price is not None and float(market_price) > 0:
+                    return round(float(market_price), 2)
+    except Exception as y_exc:
+        log.debug('Yahoo ES live quote attempt: %s', y_exc)
 
     return None
 

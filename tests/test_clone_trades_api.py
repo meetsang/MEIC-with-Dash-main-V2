@@ -72,7 +72,7 @@ class TestCloneTradesAPI(unittest.TestCase):
         res = self.client.post(
             "/api/clone_trades/webhook",
             headers={"X-Webhook-Secret": "test_secret_123"},
-            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80},
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "PC"},
         )
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
@@ -86,7 +86,7 @@ class TestCloneTradesAPI(unittest.TestCase):
 
         res = self.client.post(
             "/api/clone_trades/test_signal",
-            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80},
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "PC"},
         )
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
@@ -98,7 +98,7 @@ class TestCloneTradesAPI(unittest.TestCase):
 
         res = self.client.post(
             "/api/clone_trades/test_signal",
-            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00},
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "calledBy": "PC"},
         )
         trade_id = res.get_json()["trade"]["id"]
 
@@ -114,7 +114,7 @@ class TestCloneTradesAPI(unittest.TestCase):
 
         res = self.client.post(
             "/api/clone_trades/test_signal",
-            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00},
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "calledBy": "PC"},
         )
         trade_id = res.get_json()["trade"]["id"]
 
@@ -147,7 +147,7 @@ class TestCloneTradesAPI(unittest.TestCase):
 
         res = self.client.post(
             "/api/clone_trades/test_signal",
-            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00},
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "calledBy": "PC"},
         )
         trade_id = res.get_json()["trade"]["id"]
 
@@ -162,6 +162,65 @@ class TestCloneTradesAPI(unittest.TestCase):
         not_found = self.client.get("/api/clone_trades/trade/nonexistent_id")
         self.assertEqual(not_found.status_code, 404)
         self.assertFalse(not_found.get_json()["ok"])
+
+
+    def test_sub_strategy_config_endpoints(self):
+        """Test GET and POST /api/clone_trades/sub_strategy/<name>/config."""
+        # 1. GET Genie config
+        res = self.client.get("/api/clone_trades/sub_strategy/Genie/config")
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["config"]["name"], "Genie")
+        self.assertTrue(data["config"]["paper_mode"])
+
+        # 2. POST Genie config update (e.g. adjust allocation and toggle to live)
+        res = self.client.post(
+            "/api/clone_trades/sub_strategy/Genie/config",
+            json={"paper_mode": False, "allocation_amount": 1000.0, "max_premium_pct": 35.0},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["config"]["paper_mode"])
+        self.assertEqual(data["config"]["allocation_amount"], 1000.0)
+        self.assertEqual(data["config"]["max_premium_pct"], 35.0)
+
+        # 3. POST Others config: attempting to set paper_mode=False must remain True
+        res = self.client.post(
+            "/api/clone_trades/sub_strategy/Others/config",
+            json={"paper_mode": False},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["config"]["paper_mode"])
+
+    def test_test_signal_with_called_by(self):
+        """Test simulator sending signal with calledBy routes properly (Daemon to Others in Tracking mode)."""
+        self.config_mgr.auto_take_trades = True
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+
+        res = self.client.post(
+            "/api/clone_trades/test_signal",
+            json={"ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "Daemon"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["status"], "TRACKING")
+        self.assertEqual(data["signal"]["called_by"], "Daemon")
+        self.assertEqual(data["signal"]["sub_strategy"], "Others")
+        sig_id = data["signal"]["id"]
+
+        # Now test taking it manually via API
+        take_res = self.client.post(
+            f"/api/clone_trades/signal/{sig_id}/take_manual",
+            json={"price": 0.80, "qty": 1, "paper_mode": True},
+        )
+        self.assertEqual(take_res.status_code, 200)
+        take_data = take_res.get_json()
+        self.assertTrue(take_data["ok"])
+        self.assertEqual(take_data["trade"]["sub_strategy"], "Others")
+        self.assertTrue(take_data["trade"]["paper_mode"])
 
 
 if __name__ == "__main__":

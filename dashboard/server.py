@@ -71,6 +71,8 @@ from db import (
     STRATEGY_SKYLINE, STRATEGY_PERMA_BULL, STRATEGY_MEAN_REVERSION,
     STRATEGY_IRON_FLY, STRATEGY_IRON_FLY_XSP, STRATEGY_DRMA_HM,
     STRATEGY_DRMA_HM_DIR, STRATEGY_DRMA_HM_NONDIR, STRATEGY_DRMA_HM_FUT,
+    STRATEGY_DRMA_STOCKS, STRATEGY_DRMA_STOCK_DIR, STRATEGY_DRMA_STOCK_NONDIR, STRATEGY_DRMA_STOCK_EQUITY,
+    STRATEGY_INVERSE_MEIC,
 )
 from manual_spread_handlers import (
     build_manual_trades,
@@ -988,8 +990,40 @@ def _drma_hm_today_pnl() -> float:
     return round(total, 2)
 
 
+def _drma_stocks_today_pnl() -> float:
+    """Today's DRMA_HM_STOCKS paper P/L (realized + open)."""
+    import glob
+    from common.session_cleanup import central_today
+    today = central_today().isoformat()
+    active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+
+    total = 0.0
+    for d in (active, hist_dir):
+        if not os.path.isdir(d):
+            continue
+        for path in glob.glob(os.path.join(d, '*.json')):
+            if os.path.basename(path).startswith('session_'):
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    trade = json.load(f)
+                if trade.get('status') == 'closed':
+                    closed_at = trade.get('closed_at') or trade.get('entered_at') or ''
+                    if not closed_at.startswith(today):
+                        continue
+                    total += float(trade.get('realized_pnl_dollars', 0.0))
+                else:
+                    total += float(trade.get('unrealized_pnl_dollars', 0.0))
+            except (OSError, json.JSONDecodeError):
+                pass
+    return round(total, 2)
+
+
 def _resolve_strategy_config(name: str):
     lookup_name = 'DRMA_HM_SPX' if name in ('DRMA_HM_DIR', 'DRMA_HM_NONDIR', 'DRMA_HM_FUT') else name
+    if name in ('DRMA_STOCK_DIR', 'DRMA_STOCK_NONDIR', 'DRMA_STOCK_EQUITY'):
+        lookup_name = 'DRMA_HM_STOCKS'
     from strategies.loader import load_strategies
     for strat, cfg in load_strategies(include_disabled=True):
         if cfg.name == lookup_name:
@@ -999,6 +1033,13 @@ def _resolve_strategy_config(name: str):
             from strategies.drma_hm.config import DRMAHMConfig
             from strategies.drma_hm.strategy import DRMAHMStrategy
             return DRMAHMStrategy(), DRMAHMConfig(), DRMAHMConfig
+        except Exception:
+            pass
+    if name in ('DRMA_HM_STOCKS', 'DRMA_STOCK_DIR', 'DRMA_STOCK_NONDIR', 'DRMA_STOCK_EQUITY'):
+        try:
+            from strategies.drma_stocks.config import DRMAStocksConfig
+            from strategies.drma_stocks.strategy import DRMAStocksStrategy
+            return DRMAStocksStrategy(), DRMAStocksConfig(), DRMAStocksConfig
         except Exception:
             pass
     if name == 'MANUAL_SPREAD':
@@ -1020,6 +1061,7 @@ ALL_STRATEGY_META = [
     {'name': 'IRON_FLY_SPX', 'label': 'Iron Fly SPX', 'tab_id': 'iron_fly', 'badge_id': 'iron-fly-nav-badge'},
     {'name': 'IRON_FLY_XSP', 'label': 'Iron Fly XSP', 'tab_id': 'iron_fly_xsp', 'badge_id': 'iron-fly-xsp-nav-badge'},
     {'name': 'DRMA_HM_SPX', 'label': 'DRMA Hilega Milega Pro', 'tab_id': 'drma_hm', 'badge_id': 'drma-hm-nav-badge'},
+    {'name': 'DRMA_HM_STOCKS', 'label': 'DRMA Stocks Pro', 'tab_id': 'drma_stocks', 'badge_id': 'drma-stocks-nav-badge'},
 ]
 
 
@@ -1349,6 +1391,7 @@ def build_summary():
     iron_fly_pnl = _iron_fly_today_pnl()
     iron_fly_xsp_pnl = _iron_fly_xsp_today_pnl()
     drma_hm_pnl = _drma_hm_today_pnl()
+    drma_stocks_pnl = _drma_stocks_today_pnl()
     if session_plan:
         meic_unpaused = sum(1 for r in session_plan.rows if not r.paused and not r.skip)
         all_slot_keys = {r.slot_key for r in session_plan.rows}
@@ -1370,6 +1413,9 @@ def build_summary():
         'iron_fly_xsp_pnl': round(iron_fly_xsp_pnl, 2),
         'drma_hm_pnl':   round(drma_hm_pnl, 2),
         'drma_hm_paper': _strategy_paper_flag(trades_layout.STRATEGY_DRMA_HM),
+        'drma_stocks_pnl': round(drma_stocks_pnl, 2),
+        'drma_stocks_paper': True,
+        'inverse_meic_paper': _strategy_paper_flag(trades_layout.STRATEGY_INVERSE_MEIC),
         'combined_pnl':  round(day_pnl + manual_pnl + perma_bull_pnl, 2),
         'day_slippage':  round(day_slippage, 2),
         'meic_unpaused_slots': meic_unpaused,
@@ -2267,6 +2313,11 @@ def api_daily_calendar():
         STRATEGY_DRMA_HM_DIR: ('drma_dir_pnl', 'drma_dir_trades', 'drma_dir_wins'),
         STRATEGY_DRMA_HM_NONDIR: ('drma_nondir_pnl', 'drma_nondir_trades', 'drma_nondir_wins'),
         STRATEGY_DRMA_HM_FUT: ('drma_fut_pnl', 'drma_fut_trades', 'drma_fut_wins'),
+        STRATEGY_DRMA_STOCKS: ('drma_stocks_pnl', 'drma_stocks_trades', 'drma_stocks_wins'),
+        STRATEGY_DRMA_STOCK_DIR: ('drma_stock_dir_pnl', 'drma_stock_dir_trades', 'drma_stock_dir_wins'),
+        STRATEGY_DRMA_STOCK_NONDIR: ('drma_stock_nondir_pnl', 'drma_stock_nondir_trades', 'drma_stock_nondir_wins'),
+        STRATEGY_DRMA_STOCK_EQUITY: ('drma_stock_equity_pnl', 'drma_stock_equity_trades', 'drma_stock_equity_wins'),
+        STRATEGY_INVERSE_MEIC: ('inverse_meic_pnl', 'inverse_meic_trades', 'inverse_meic_wins'),
     }
     if strategy:
         pnl_key, trade_key, win_key = strategy_keys.get(
@@ -2443,6 +2494,34 @@ def api_perma_bull_today():
     })
 
 
+@app.route('/api/inverse_meic/today')
+def api_inverse_meic_today():
+    """Read-only Inverse MEIC status for today's market regime and trades."""
+    from common.session_cleanup import central_today
+    from strategies.inverse_meic.strategy import InverseMEICStrategy
+    from strategies.inverse_meic.config import InverseMEICConfig
+
+    paper = _strategy_paper_flag(trades_layout.STRATEGY_INVERSE_MEIC)
+    today = central_today().isoformat()
+
+    strat = InverseMEICStrategy(InverseMEICConfig(paper=paper, root=ROOT))
+    
+    # Check for manual regime override query param
+    overrides = {}
+    force_armed_arg = request.args.get('force_armed')
+    if force_armed_arg is not None:
+        overrides['force_armed'] = force_armed_arg.lower() in ('1', 'true', 'yes')
+
+    if overrides:
+        strat.evaluate_regime(overrides=overrides)
+
+    status = strat.get_status()
+    status['paper'] = paper
+    status['date'] = today
+
+    return jsonify(status)
+
+
 @app.route('/api/mean_reversion/today')
 def api_mean_reversion_today():
     """Read-only Mean Reversion status for today's trade."""
@@ -2564,7 +2643,7 @@ def api_drma_hm_today():
                 with open(path, encoding='utf-8') as f:
                     t = json.load(f)
                 trades.append(t)
-                if t.get('status') == 'open':
+                if t.get('status') in ('open', 'closing'):
                     open_trades_with_paths.append((t, path))
                     is_fut = (t.get('structure_type') == 'futures' or t.get('trade_type') == 'DIRECTIONAL_FUTURES')
                     if is_fut:
@@ -2623,7 +2702,7 @@ def api_drma_hm_today():
                 continue
 
     realized_pnl = sum(float(h.get('realized_pnl_dollars') or 0.0) for h in history)
-    open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in trades if t.get('status') == 'open')
+    open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in trades if t.get('status') in ('open', 'closing'))
     total_pnl = round(realized_pnl + open_pnl, 2)
 
     # Resolve indicators & levels
@@ -2637,12 +2716,27 @@ def api_drma_hm_today():
     today_date = central_today()
     data_root = os.path.join(ROOT, 'data')
 
+    # Resolve strategy config and session phase
+    from strategies.drma_hm.config import DRMAHMConfig
+    from strategies.drma_hm.strategy import DRMAHMStrategy
+    from common.daily_overrides import effective_config
+    cfg = effective_config(DRMAHMConfig(name=trades_layout.STRATEGY_DRMA_HM, paper=paper), 'DRMA_HM_SPX', ROOT)
+    dummy_strat = DRMAHMStrategy(config=cfg)
+    current_phase = strat_status.get('session_phase') if (strat_status and strat_status.get('session_phase')) else dummy_strat.get_session_phase(_central_now())
+
+    timing = {
+        'session_phase': current_phase,
+        'enable_overnight_futures': bool(getattr(cfg, 'enable_overnight_futures', True)),
+        'overnight_flatten_time_cst': getattr(cfg, 'overnight_flatten_time_cst', '07:00'),
+        'market_open_time_cst': getattr(cfg, 'market_open_time_cst', '08:30'),
+        'regular_trading_start_time_cst': getattr(cfg, 'regular_trading_start_time_cst', '09:30'),
+        'eod_exit_time_cst': getattr(cfg, 'eod_exit_time_cst', '14:50'),
+    }
+
     # Ensure reference levels are available
     if not levels or levels.get('pdh') is None:
         try:
             from strategies.drma_hm.market_data_feed import fetch_yahoo_market_levels
-            from strategies.drma_hm.config import DRMAHMConfig
-            cfg = DRMAHMConfig(name=trades_layout.STRATEGY_DRMA_HM, paper=paper)
             raw_levels = fetch_yahoo_market_levels(today_date, cfg, ROOT)
             if raw_levels:
                 levels = {
@@ -2657,7 +2751,41 @@ def api_drma_hm_today():
         except Exception as exc:
             log.warning('Could not resolve DRM-HM levels: %s', exc)
 
-    # Ensure indicators are available
+    # Ensure indicators are available (overnight ES vs daytime SPX)
+    if not indicators or indicators.get('close') is None:
+        try:
+            if current_phase == 'OVERNIGHT_TRADING' and getattr(cfg, 'enable_overnight_futures', True):
+                from strategies.drma_hm.market_data_feed import fetch_yahoo_es_5m_bars
+                from strategies.drma_hm.indicators import compute_indicators
+                df_es = fetch_yahoo_es_5m_bars(today_date, include_overnight=True)
+                if not df_es.empty:
+                    _, snaps = compute_indicators(
+                        df_es,
+                        pdh=levels.get('pdh'), pdl=levels.get('pdl'), pdc=levels.get('pdc'),
+                        onh=levels.get('onh'), onl=levels.get('onl'),
+                    )
+                    if snaps:
+                        latest = snaps[-1]
+                        indicators = {
+                            'last_bar': latest.datetime_str,
+                            'close': latest.close,
+                            'drma': latest.out_ma,
+                            'orb_formed': latest.orb_formed,
+                            'orb_high': latest.orb_high,
+                            'orb_low': latest.orb_low,
+                            'rsi': latest.rsi,
+                            'fast': latest.hm_fast,
+                            'slow': latest.hm_slow,
+                            'bias': latest.bias,
+                            'grade': latest.setup_grade,
+                            'vehicle': 'DIRECTIONAL ES FUTURES (OVERNIGHT)' if latest.setup_grade == 'Grade A+' else latest.trade_vehicle,
+                            'gamma_risk': latest.gamma_risk,
+                            'active_score': latest.active_score,
+                            'is_overnight': True,
+                        }
+        except Exception as exc:
+            log.warning('DRMA overnight fallback indicator calculation failed: %s', exc)
+
     if not indicators or indicators.get('close') is None:
         try:
             from strategies.drma_hm.market_data_feed import load_spx_5m_bars
@@ -2712,6 +2840,7 @@ def api_drma_hm_today():
         'date': today,
         'session': session,
         'strat_status': strat_status,
+        'timing': timing,
         'indicators': indicators,
         'levels': levels,
         'trades': trades,
@@ -2721,6 +2850,158 @@ def api_drma_hm_today():
         'open_pnl': open_pnl,
         'total_pnl': total_pnl,
     })
+
+
+@app.route('/api/drma_stocks/today')
+def api_drma_stocks_today():
+    """Read-only and live evaluation of DRMA Stocks strategy across watchlist tickers."""
+    import glob
+    from common.session_cleanup import central_today
+    from strategies.drma_stocks.config import DRMAStocksConfig
+    from strategies.drma_stocks.strategy import DRMAStocksStrategy
+    from strategies.drma_stocks.watchlist import load_watchlist
+
+    today = central_today().isoformat()
+    active_dir = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+    os.makedirs(active_dir, exist_ok=True)
+    os.makedirs(hist_dir, exist_ok=True)
+
+    # Trigger evaluation/update of all stocks
+    strat = DRMAStocksStrategy(config=DRMAStocksConfig(name=trades_layout.STRATEGY_DRMA_STOCKS, root=ROOT))
+    stock_summaries = strat.evaluate_all_stocks(ROOT)
+
+    # Read active open trades
+    active_trades = []
+    if os.path.isdir(active_dir):
+        for path in sorted(glob.glob(os.path.join(active_dir, '*.json')), reverse=True):
+            if os.path.basename(path).startswith('session_'):
+                continue
+            fname = os.path.basename(path)
+            if os.path.isdir(hist_dir) and os.path.isfile(os.path.join(hist_dir, fname)):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    t = json.load(f)
+                if t.get('status') == 'closed':
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    continue
+                if t.get('status') in ('open', 'closing'):
+                    active_trades.append(t)
+            except Exception:
+                continue
+
+    # Read today's closed history
+    history_trades = []
+    if os.path.isdir(hist_dir):
+        for path in sorted(glob.glob(os.path.join(hist_dir, '*.json')), reverse=True):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    t = json.load(f)
+                closed_at = t.get('closed_at') or t.get('entered_at') or ''
+                if closed_at.startswith(today):
+                    history_trades.append(t)
+            except Exception:
+                continue
+
+    realized_pnl = sum(float(t.get('realized_pnl_dollars') or 0.0) for t in history_trades)
+    open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in active_trades)
+    total_pnl = round(realized_pnl + open_pnl, 2)
+
+    stocks_list = list(stock_summaries.values()) if isinstance(stock_summaries, dict) else stock_summaries
+    return jsonify({
+        'strategy': trades_layout.STRATEGY_DRMA_STOCKS,
+        'paper': True,
+        'date': today,
+        'watchlist': load_watchlist(ROOT),
+        'stocks': stocks_list,
+        'stocks_by_ticker': stock_summaries if isinstance(stock_summaries, dict) else {s.get('ticker', s.get('symbol')): s for s in stock_summaries},
+        'active_trades': active_trades,
+        'history_trades': history_trades,
+        'realized_pnl': round(realized_pnl, 2),
+        'open_pnl': round(open_pnl, 2),
+        'total_pnl': total_pnl,
+        'today_pnl': total_pnl,
+    })
+
+
+@app.route('/api/drma_stocks/watchlist', methods=['GET', 'POST'])
+def api_drma_stocks_watchlist():
+    """Get or update watchlist tickers for DRMA Stocks."""
+    from strategies.drma_stocks.watchlist import add_ticker, load_watchlist, remove_ticker, toggle_ticker
+
+    if request.method == 'GET':
+        wl = load_watchlist(ROOT)
+        return jsonify({'status': 'ok', 'watchlist': wl, 'tickers': wl})
+
+    data = request.get_json(force=True) or {}
+    action = data.get('action', 'add').lower()
+    symbol = data.get('symbol', '').strip().upper()
+    name = data.get('name', '')
+
+    if action == 'add':
+        ok, msg = add_ticker(symbol, name=name, root=ROOT)
+    elif action == 'remove':
+        ok, msg = remove_ticker(symbol, root=ROOT)
+    elif action == 'toggle':
+        enabled = data.get('enabled')
+        ok, msg = toggle_ticker(symbol, enabled=enabled, root=ROOT)
+    else:
+        return jsonify({'status': 'error', 'message': f'Unknown action {action}'}), 400
+
+    return jsonify({
+        'status': 'ok' if ok else 'error',
+        'message': msg,
+        'watchlist': load_watchlist(ROOT),
+    }), 200 if ok else 400
+
+
+@app.route('/api/drma_stocks/close_trade', methods=['POST'])
+def api_drma_stocks_close_trade():
+    """Manually close an active stock equity or options spread trade."""
+    import glob
+    data = request.get_json(force=True) or {}
+    trade_id = data.get('trade_id')
+    if not trade_id:
+        return jsonify({'status': 'error', 'message': 'Missing trade_id'}), 400
+
+    active_dir = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+    target_path = os.path.join(active_dir, f"{trade_id}.json")
+    if not os.path.isfile(target_path):
+        for f in glob.glob(os.path.join(active_dir, f"*{trade_id}*.json")):
+            target_path = f
+            break
+
+    if not os.path.isfile(target_path):
+        return jsonify({'status': 'error', 'message': f'Trade {trade_id} not found'}), 404
+
+    try:
+        from strategies.drma_stocks.settlement import move_trade_to_history, settle_stock_trade
+        with open(target_path, 'r', encoding='utf-8') as f:
+            t = json.load(f)
+        current_mark = float(t.get('current_mark') or t.get('entry_price') or 0.0)
+        settle_stock_trade(t, current_mark, exit_reason='Manual User Close')
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(t, f, indent=2)
+        move_trade_to_history(target_path, hist_dir)
+        return jsonify({'status': 'ok', 'message': f'Closed trade {trade_id}'})
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/drma_stocks/history')
+def api_drma_stocks_history():
+    """Get aggregated performance metrics for DRMA Stocks per ticker and per sub-strategy."""
+    from dashboard.db import get_stocks_performance_breakdown
+    return jsonify(get_stocks_performance_breakdown(include_paper=True))
 
 
 @app.route('/api/iron_fly/today')

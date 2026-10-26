@@ -28,13 +28,12 @@ BACKOFF_MAX_SEC = 300.0
 
 
 def _read_optsymbols() -> Set[str]:
-    try:
-        with open(config.STREAM_SYMBOLS, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        raw = data.get('SYMBOLS') or []
-    except Exception as exc:
-        log.info('ERROR reading optsymbols.json: %s', exc)
+    from common.data_utils import load_json_safe
+    data = load_json_safe(config.STREAM_SYMBOLS)
+    if not isinstance(data, dict):
         return set()
+    raw = data.get('SYMBOLS') or []
+
     out: Set[str] = set()
     for sym in raw:
         text = str(sym).strip()

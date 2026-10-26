@@ -26,6 +26,8 @@ _MODULE_DEFAULTS = {
     'strategies.perma_bull_pcs.strategy': ('PermaBullPCSStrategy', 'PermaBullPCSConfig'),
     'strategies.mean_reversion.strategy': ('MeanReversionStrategy', 'MeanReversionConfig'),
     'strategies.drma_hm.strategy': ('DRMAHMStrategy', 'DRMAHMConfig'),
+    'strategies.drma_stocks.strategy': ('DRMAStocksStrategy', 'DRMAStocksConfig'),
+    'strategies.inverse_meic.strategy': ('InverseMEICStrategy', 'InverseMEICConfig'),
 }
 
 

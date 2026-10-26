@@ -18,6 +18,7 @@ trades/settlement/
 trades/closed/
 trades/clone_trades/
 trades/commands/
+trades/archive*/
 trades/*.json
 manual_spread/trades/
 meic0dte/trades/
@@ -38,6 +39,7 @@ streaming/vix_tick_data.csv
 streaming/optsymbols.json
 streaming/spx_ladder_symbols.json
 *.log
+*.lock
 
 # Cache
 common/fomc_cache.json

@@ -47,6 +47,12 @@ STRATEGY_DRMA_HM = trades_layout.STRATEGY_DRMA_HM
 STRATEGY_DRMA_HM_DIR = trades_layout.STRATEGY_DRMA_HM_DIR
 STRATEGY_DRMA_HM_NONDIR = trades_layout.STRATEGY_DRMA_HM_NONDIR
 STRATEGY_DRMA_HM_FUT = trades_layout.STRATEGY_DRMA_HM_FUT
+STRATEGY_DRMA_STOCKS = trades_layout.STRATEGY_DRMA_STOCKS
+STRATEGY_DRMA_STOCK_DIR = trades_layout.STRATEGY_DRMA_STOCK_DIR
+STRATEGY_DRMA_STOCK_NONDIR = trades_layout.STRATEGY_DRMA_STOCK_NONDIR
+STRATEGY_DRMA_STOCK_EQUITY = trades_layout.STRATEGY_DRMA_STOCK_EQUITY
+STRATEGY_CLONE_TRADES = trades_layout.STRATEGY_CLONE_TRADES
+STRATEGY_INVERSE_MEIC = trades_layout.STRATEGY_INVERSE_MEIC
 
 
 def _truthy_paper(value) -> bool:
@@ -68,17 +74,26 @@ def _strategy_sql_filter(strategy: str) -> tuple[str, list]:
         return "(strategy = ? AND (lot LIKE 'credit_%' OR lot LIKE 'ic_%'))", [STRATEGY_DRMA_HM]
     elif strategy == STRATEGY_DRMA_HM_FUT:
         return "(strategy = ? AND lot LIKE 'fut_%')", [STRATEGY_DRMA_HM]
+    elif strategy == STRATEGY_DRMA_STOCK_DIR:
+        return "(strategy = ? AND (lot LIKE '%_cds_%' OR lot LIKE '%_pds_%' OR lot LIKE '%_dir_%'))", [STRATEGY_DRMA_STOCKS]
+    elif strategy == STRATEGY_DRMA_STOCK_NONDIR:
+        return "(strategy = ? AND (lot LIKE '%_pcs_%' OR lot LIKE '%_ccs_%' OR lot LIKE '%_credit_%' OR lot LIKE '%_nondir_%'))", [STRATEGY_DRMA_STOCKS]
+    elif strategy == STRATEGY_DRMA_STOCK_EQUITY:
+        return "(strategy = ? AND (lot LIKE '%_equity_%' OR lot LIKE '%_stock_%'))", [STRATEGY_DRMA_STOCKS]
     else:
         return "strategy = ?", [strategy]
 
 
 def infer_strategy(lot: str, entry_strategy: str | None = None) -> str:
-    if entry_strategy in (STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE, STRATEGY_PERMA_BULL, STRATEGY_MEAN_REVERSION, STRATEGY_IRON_FLY, STRATEGY_IRON_FLY_XSP, STRATEGY_DRMA_HM):
+    if entry_strategy in (STRATEGY_MEIC, STRATEGY_MANUAL, STRATEGY_SKYLINE, STRATEGY_PERMA_BULL, STRATEGY_MEAN_REVERSION, STRATEGY_IRON_FLY, STRATEGY_IRON_FLY_XSP, STRATEGY_DRMA_HM, STRATEGY_DRMA_STOCKS, STRATEGY_CLONE_TRADES, STRATEGY_INVERSE_MEIC):
         return entry_strategy
     text = (lot or '').strip().lower()
+    if text.startswith('inv-') or text.startswith('inverse'):
+        return STRATEGY_INVERSE_MEIC
     if text.startswith('ms-') or text.startswith('ms'):
         return STRATEGY_MANUAL
     if text.startswith('skyline-') or text.startswith('skyline'):
+        return STRATEGY_SKYLINE
         return STRATEGY_SKYLINE
     if text.startswith('perma-') or text.startswith('perma'):
         return STRATEGY_PERMA_BULL
@@ -88,6 +103,8 @@ def infer_strategy(lot: str, entry_strategy: str | None = None) -> str:
         return STRATEGY_IRON_FLY_XSP
     if text.startswith('if-') or text.startswith('iron'):
         return STRATEGY_IRON_FLY
+    if text.startswith('clone-') or text.startswith('disc-'):
+        return STRATEGY_CLONE_TRADES
     if text.startswith('drma') or text.startswith('dir_') or text.startswith('credit_') or text.startswith('ic_') or text.startswith('fut_'):
         return STRATEGY_DRMA_HM
     return STRATEGY_MEIC
@@ -264,7 +281,7 @@ def _refresh_daily_summary(conn, date):
     except Exception:
         pass
 
-def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, paper_only=False):
+def get_trades(date=None, strategy=None, limit=200, *, ticker=None, include_paper=False, paper_only=False):
     sql = "SELECT * FROM trades"
     params = []
     clauses = []
@@ -275,6 +292,9 @@ def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, pape
         strat_clause, strat_params = _strategy_sql_filter(strategy)
         clauses.append(strat_clause)
         params.extend(strat_params)
+    if ticker:
+        clauses.append('(lot LIKE ? OR long_symbol = ?)')
+        params.extend([f"{ticker}_%", ticker])
     paper_clause = _paper_sql_clause(include_paper=include_paper, paper_only=paper_only)
     if paper_clause:
         clauses.append(paper_clause.replace('AND ', '', 1))
@@ -301,6 +321,22 @@ def get_trades(date=None, strategy=None, limit=200, *, include_paper=False, pape
             else:
                 row['sub_strategy'] = STRATEGY_DRMA_HM
                 row['sub_strategy_label'] = 'DRMA Other'
+        elif strat == STRATEGY_DRMA_STOCKS:
+            parts = lot.split('_')
+            ticker_val = parts[0].upper() if len(parts) > 1 else str(row.get('long_symbol') or 'STOCK').upper()
+            row['ticker'] = ticker_val
+            if '_cds_' in lot or '_pds_' in lot or '_dir_' in lot:
+                row['sub_strategy'] = STRATEGY_DRMA_STOCK_DIR
+                row['sub_strategy_label'] = 'Directional Spread'
+            elif '_pcs_' in lot or '_ccs_' in lot or '_credit_' in lot or '_nondir_' in lot:
+                row['sub_strategy'] = STRATEGY_DRMA_STOCK_NONDIR
+                row['sub_strategy_label'] = 'Non-Directional Spread'
+            elif '_equity_' in lot or '_stock_' in lot:
+                row['sub_strategy'] = STRATEGY_DRMA_STOCK_EQUITY
+                row['sub_strategy_label'] = 'Direct Stock'
+            else:
+                row['sub_strategy'] = STRATEGY_DRMA_STOCKS
+                row['sub_strategy_label'] = 'DRMA Stock'
     return rows
 
 
@@ -354,7 +390,88 @@ def get_stats_by_strategy(*, include_paper=False, paper_only=False) -> dict:
         out[STRATEGY_DRMA_HM_DIR] = get_stats(STRATEGY_DRMA_HM_DIR, include_paper=include_paper, paper_only=paper_only)
         out[STRATEGY_DRMA_HM_NONDIR] = get_stats(STRATEGY_DRMA_HM_NONDIR, include_paper=include_paper, paper_only=paper_only)
         out[STRATEGY_DRMA_HM_FUT] = get_stats(STRATEGY_DRMA_HM_FUT, include_paper=include_paper, paper_only=paper_only)
+        out[STRATEGY_DRMA_STOCK_DIR] = get_stats(STRATEGY_DRMA_STOCK_DIR, include_paper=include_paper, paper_only=paper_only)
+        out[STRATEGY_DRMA_STOCK_NONDIR] = get_stats(STRATEGY_DRMA_STOCK_NONDIR, include_paper=include_paper, paper_only=paper_only)
+        out[STRATEGY_DRMA_STOCK_EQUITY] = get_stats(STRATEGY_DRMA_STOCK_EQUITY, include_paper=include_paper, paper_only=paper_only)
         return out
+
+
+def get_stocks_performance_breakdown(*, include_paper=True) -> dict:
+    """Return historical performance breakdown per sub-strategy and per ticker for DRMA Stocks."""
+    trades = get_trades(strategy=STRATEGY_DRMA_STOCKS, limit=5000, include_paper=include_paper)
+    closed = [t for t in trades if str(t.get('status', '')).upper() == 'CLOSED']
+
+    by_ticker: dict[str, dict] = {}
+    by_substrat: dict[str, dict] = {
+        'all': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+        'dir_spread': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+        'nondir_spread': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+        'equity_stock': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+    }
+
+    for t in closed:
+        ticker = str(t.get('ticker') or 'UNKNOWN').upper()
+        if ticker not in by_ticker:
+            by_ticker[ticker] = {
+                'ticker': ticker,
+                'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0,
+                'sub_strategies': {
+                    'dir_spread': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+                    'nondir_spread': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+                    'equity_stock': {'trades': 0, 'wins': 0, 'losses': 0, 'total_pnl': 0.0, 'win_rate': 0.0},
+                }
+            }
+        pnl = float(t.get('pnl') or 0.0)
+        is_win = (pnl > 0)
+        is_loss = (pnl < 0)
+
+        sub = str(t.get('sub_strategy') or '')
+        if 'DIR' in sub and 'NON' not in sub:
+            cat = 'dir_spread'
+        elif 'NONDIR' in sub:
+            cat = 'nondir_spread'
+        else:
+            cat = 'equity_stock'
+
+        tk = by_ticker[ticker]
+        tk['trades'] += 1
+        tk['total_pnl'] = round(tk['total_pnl'] + pnl, 2)
+        if is_win: tk['wins'] += 1
+        elif is_loss: tk['losses'] += 1
+
+        tk_sub = tk['sub_strategies'][cat]
+        tk_sub['trades'] += 1
+        tk_sub['total_pnl'] = round(tk_sub['total_pnl'] + pnl, 2)
+        if is_win: tk_sub['wins'] += 1
+        elif is_loss: tk_sub['losses'] += 1
+
+        by_substrat['all']['trades'] += 1
+        by_substrat['all']['total_pnl'] = round(by_substrat['all']['total_pnl'] + pnl, 2)
+        if is_win: by_substrat['all']['wins'] += 1
+        elif is_loss: by_substrat['all']['losses'] += 1
+
+        bs = by_substrat[cat]
+        bs['trades'] += 1
+        bs['total_pnl'] = round(bs['total_pnl'] + pnl, 2)
+        if is_win: bs['wins'] += 1
+        elif is_loss: bs['losses'] += 1
+
+    for tk in by_ticker.values():
+        tot = tk['wins'] + tk['losses']
+        tk['win_rate'] = round(tk['wins'] / tot * 100, 1) if tot > 0 else 0.0
+        for sub_k, sub_v in tk['sub_strategies'].items():
+            stot = sub_v['wins'] + sub_v['losses']
+            sub_v['win_rate'] = round(sub_v['wins'] / stot * 100, 1) if stot > 0 else 0.0
+
+    for sub_k, sub_v in by_substrat.items():
+        stot = sub_v['wins'] + sub_v['losses']
+        sub_v['win_rate'] = round(sub_v['wins'] / stot * 100, 1) if stot > 0 else 0.0
+
+    return {
+        'by_ticker': by_ticker,
+        'by_sub_strategy': by_substrat,
+        'total_trades': len(closed),
+    }
 
 
 def get_daily_summary(days=30, strategy=None):
@@ -435,7 +552,18 @@ def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> li
                 'drma_hm_wins': 0,
                 'drma_dir_wins': 0,
                 'drma_nondir_wins': 0,
-                'drma_fut_wins': 0,
+                'drma_stocks_pnl': 0.0,
+                'drma_stocks_trades': 0,
+                'drma_stocks_wins': 0,
+                'drma_stock_dir_pnl': 0.0,
+                'drma_stock_dir_trades': 0,
+                'drma_stock_dir_wins': 0,
+                'drma_stock_nondir_pnl': 0.0,
+                'drma_stock_nondir_trades': 0,
+                'drma_stock_nondir_wins': 0,
+                'drma_stock_equity_pnl': 0.0,
+                'drma_stock_equity_trades': 0,
+                'drma_stock_equity_wins': 0,
             }
         bucket = by_date[d]
         pnl = float(row['pnl'] or 0)
@@ -486,6 +614,22 @@ def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> li
                 bucket['drma_fut_pnl'] = round(bucket['drma_fut_pnl'] + pnl, 2)
                 bucket['drma_fut_trades'] += 1
                 bucket['drma_fut_wins'] += wins
+        elif strat == STRATEGY_DRMA_STOCKS:
+            bucket['drma_stocks_pnl'] = round(bucket.get('drma_stocks_pnl', 0.0) + pnl, 2)
+            bucket['drma_stocks_trades'] = bucket.get('drma_stocks_trades', 0) + 1
+            bucket['drma_stocks_wins'] = bucket.get('drma_stocks_wins', 0) + wins
+            if 'dir' in lot and 'non' not in lot:
+                bucket['drma_stock_dir_pnl'] = round(bucket.get('drma_stock_dir_pnl', 0.0) + pnl, 2)
+                bucket['drma_stock_dir_trades'] = bucket.get('drma_stock_dir_trades', 0) + 1
+                bucket['drma_stock_dir_wins'] = bucket.get('drma_stock_dir_wins', 0) + wins
+            elif 'nondir' in lot:
+                bucket['drma_stock_nondir_pnl'] = round(bucket.get('drma_stock_nondir_pnl', 0.0) + pnl, 2)
+                bucket['drma_stock_nondir_trades'] = bucket.get('drma_stock_nondir_trades', 0) + 1
+                bucket['drma_stock_nondir_wins'] = bucket.get('drma_stock_nondir_wins', 0) + wins
+            else:
+                bucket['drma_stock_equity_pnl'] = round(bucket.get('drma_stock_equity_pnl', 0.0) + pnl, 2)
+                bucket['drma_stock_equity_trades'] = bucket.get('drma_stock_equity_trades', 0) + 1
+                bucket['drma_stock_equity_wins'] = bucket.get('drma_stock_equity_wins', 0) + wins
         elif strat == STRATEGY_MEIC:
             bucket['meic_pnl'] = round(bucket['meic_pnl'] + pnl, 2)
             bucket['meic_trades'] += 1

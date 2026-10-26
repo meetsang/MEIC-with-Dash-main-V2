@@ -146,10 +146,15 @@ def archive_active_trades(
 def reset_optsymbols(root: Optional[str] = None) -> None:
     root = root or _project_root()
     path = os.path.join(root, 'streaming', 'optsymbols.json')
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump({'SYMBOLS': []}, f, indent=2)
-    log.info('Reset %s', path)
+    lock_path = path + '.lock'
+    from common.data_utils import interprocess_file_lock, save_json_safe
+    try:
+        with interprocess_file_lock(lock_path, timeout_sec=5.0):
+            save_json_safe(path, {'SYMBOLS': []})
+        log.info('Reset %s', path)
+    except Exception as exc:
+        log.warning('Failed to reset %s: %s', path, exc)
+
 
 
 def clear_pause_tranches(root: Optional[str] = None) -> None:

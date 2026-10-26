@@ -36,3 +36,16 @@ def test_register_option_symbols_converts_tastytrade(monkeypatch, tmp_path):
     assert captured['lot'] == 'SKYLINE_SPX'
     assert 'SPXW  260731C07450000' in captured['symbols']
     assert 'SPXW  260731C07475000' in captured['symbols']
+
+
+def test_update_options_symbols_handles_corrupt_file(monkeypatch, tmp_path):
+    sym_file = tmp_path / 'optsymbols.json'
+    sym_file.write_text('{"SYMBOLS": ["SPX"]} extra trailing data', encoding='utf-8')
+    monkeypatch.setattr('meic0dte.app.config.STREAM_SYMBOLS', str(sym_file))
+
+    from meic0dte.app.utilities import update_options_symbols
+    ok = update_options_symbols(['SPXW  261023P07565000'], 'ms-525', MagicMock())
+    assert ok is True
+    data = json.loads(sym_file.read_text(encoding='utf-8'))
+    assert 'SPXW  261023P07565000' in data['SYMBOLS']
+

@@ -8,6 +8,7 @@ import time
 import unittest
 from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -468,6 +469,7 @@ class TestDRMAHMFutures(unittest.TestCase):
             futures_symbol='ES',
             futures_profit_target_pts=5.0,
             futures_stop_loss_pts=5.0,
+            force_eod_exit=False,
         )
         strat = DRMAHMStrategy(cfg)
         snap = self._make_snap('BULL', 5800.0)
@@ -865,6 +867,7 @@ class TestDRMAHMFutures(unittest.TestCase):
             trade_mode='directional_futures',
             futures_profit_target_pts=5.0,
             futures_stop_loss_pts=5.0,
+            force_eod_exit=False,
         )
         strat = DRMAHMStrategy(cfg)
         mock_paper = MagicMock(_is_journal=True, _is_paper=True)
@@ -954,6 +957,7 @@ class TestDRMAHMFutures(unittest.TestCase):
             trade_mode='non_directional_options',
             non_dir_profit_target_pct=0.50,
             non_dir_stop_loss_pct=1.00,
+            force_eod_exit=False,
         )
         strat = DRMAHMStrategy(cfg)
         mock_live = MagicMock(_is_journal=False, _is_paper=False)
@@ -1535,7 +1539,407 @@ class TestDRMAHMSameSideLock(unittest.TestCase):
         self.assertEqual(leg_actions['.SPXW261022P5790'], 'SELL_TO_CLOSE')
 
 
+class TestDRMAHMOvernightAndSessionLifecycle(unittest.TestCase):
+    """Test overnight ES futures trading, 7:00 CST flatten, 08:30 open, and 09:30 trading start."""
+
+    def test_session_phases_classification(self):
+        cfg = DRMAHMConfig()
+        strat = DRMAHMStrategy(cfg)
+        d = date(2026, 10, 26)
+
+        # 1. Overnight Trading: prior to 07:00 CST and from 17:00 CST onwards
+        t_overnight_early = datetime.combine(d, datetime.min.time().replace(hour=3, minute=30))
+        self.assertEqual(strat.get_session_phase(t_overnight_early), 'OVERNIGHT_TRADING')
+
+        t_overnight_late = datetime.combine(d, datetime.min.time().replace(hour=21, minute=0))
+        self.assertEqual(strat.get_session_phase(t_overnight_late), 'OVERNIGHT_TRADING')
+
+        t_overnight_boundary = datetime.combine(d, datetime.min.time().replace(hour=6, minute=59, second=59))
+        self.assertEqual(strat.get_session_phase(t_overnight_boundary), 'OVERNIGHT_TRADING')
+
+        # 2. Pre-Market Preparation: 07:00 to 08:30 CST
+        t_prep_start = datetime.combine(d, datetime.min.time().replace(hour=7, minute=0))
+        self.assertEqual(strat.get_session_phase(t_prep_start), 'PRE_MARKET_PREP')
+
+        t_prep_mid = datetime.combine(d, datetime.min.time().replace(hour=7, minute=45))
+        self.assertEqual(strat.get_session_phase(t_prep_mid), 'PRE_MARKET_PREP')
+
+        t_prep_end = datetime.combine(d, datetime.min.time().replace(hour=8, minute=29, second=59))
+        self.assertEqual(strat.get_session_phase(t_prep_end), 'PRE_MARKET_PREP')
+
+        # 3. Market Open Preparation: 08:30 to 09:00 CST (30m ORB formation)
+        t_open_start = datetime.combine(d, datetime.min.time().replace(hour=8, minute=30))
+        self.assertEqual(strat.get_session_phase(t_open_start), 'MARKET_OPEN_PREP')
+
+        t_open_mid = datetime.combine(d, datetime.min.time().replace(hour=8, minute=45))
+        self.assertEqual(strat.get_session_phase(t_open_mid), 'MARKET_OPEN_PREP')
+
+        t_open_end = datetime.combine(d, datetime.min.time().replace(hour=8, minute=59, second=59))
+        self.assertEqual(strat.get_session_phase(t_open_end), 'MARKET_OPEN_PREP')
+
+        # 4. Regular Trading Session: 09:00 to 14:50 CST
+        t_trade_start = datetime.combine(d, datetime.min.time().replace(hour=9, minute=0))
+        self.assertEqual(strat.get_session_phase(t_trade_start), 'REGULAR_TRADING')
+
+        t_trade_mid = datetime.combine(d, datetime.min.time().replace(hour=11, minute=0))
+        self.assertEqual(strat.get_session_phase(t_trade_mid), 'REGULAR_TRADING')
+
+        t_trade_end = datetime.combine(d, datetime.min.time().replace(hour=14, minute=49, second=59))
+        self.assertEqual(strat.get_session_phase(t_trade_end), 'REGULAR_TRADING')
+
+        # 5. EOD Flatten: 14:50 to 15:00 CST
+        t_eod_start = datetime.combine(d, datetime.min.time().replace(hour=14, minute=50))
+        self.assertEqual(strat.get_session_phase(t_eod_start), 'EOD_FLATTEN')
+
+        # 6. CME Daily Maintenance Halt: 15:00 to 17:00 CST
+        t_halt = datetime.combine(d, datetime.min.time().replace(hour=15, minute=30))
+        self.assertEqual(strat.get_session_phase(t_halt), 'DAILY_HALT')
+
+    def test_overnight_trade_flatten_at_7am(self):
+        """Open futures positions must be flattened at 07:00 CST with reason 'overnight_flatten_7am'."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True, enable_overnight_futures=True)
+        strat = DRMAHMStrategy(cfg)
+
+        active_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        os.makedirs(active_dir, exist_ok=True)
+        today_str = date.today().isoformat()
+        trade_path = os.path.join(active_dir, f'drma_hm_{today_str}_fut_test.json')
+
+        trade_data = {
+            'trade_id': 'fut_overnight_1',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_FUT',
+            'trade_type': 'DIRECTIONAL_FUTURES',
+            'structure_type': 'futures',
+            'status': 'open',
+            'paper': True,
+            'entry_price': 5850.0,
+            'contracts': 1,
+            'side': 'BUY',
+            'unrealized_pnl': 2.0,
+        }
+        with open(trade_path, 'w', encoding='utf-8') as f:
+            json.dump(trade_data, f)
+
+        # Mock _exit_trade to verify it gets invoked with 'overnight_flatten_7am'
+        with patch.object(strat, '_exit_trade') as mock_exit:
+            # Simulate PRE_MARKET_PREP scan logic
+            open_trades = [trade_path]
+            for t_path in open_trades:
+                with open(t_path, encoding='utf-8') as f:
+                    t_chk = json.load(f)
+                if t_chk.get('status') == 'open':
+                    is_fut = (t_chk.get('structure_type') == 'futures' or t_chk.get('trade_type') == 'DIRECTIONAL_FUTURES')
+                    if is_fut:
+                        strat._exit_trade(tmp, t_path, 'overnight_flatten_7am')
+
+            mock_exit.assert_called_once_with(tmp, trade_path, 'overnight_flatten_7am')
+
+    def test_overnight_suppresses_options_trades(self):
+        """During OVERNIGHT_TRADING, options trades are suppressed and only futures can enter."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True, trade_mode='all_three')
+        strat = DRMAHMStrategy(cfg)
+
+        snap = TestDRMAHMFutures._make_snap(bias='BULL', close=5850.0, score=5)
+
+        with patch.object(strat, 'get_session_phase', return_value='OVERNIGHT_TRADING'), \
+             patch.object(strat, '_enter_directional_trade') as mock_dir_opts, \
+             patch.object(strat, '_enter_non_directional_trade') as mock_nondir_opts, \
+             patch.object(strat, '_enter_directional_futures_trade') as mock_fut:
+
+            strat._evaluate_and_enter(tmp, '261026', snap, 10)
+
+            # Options trades must be suppressed overnight
+            mock_dir_opts.assert_not_called()
+            mock_nondir_opts.assert_not_called()
+            # Directional futures must enter on Grade A+ setup
+            mock_fut.assert_called_once()
+
+    def test_regular_trading_permits_options_and_futures(self):
+        """During REGULAR_TRADING, both options and futures are permitted on Grade A+ setup."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True, trade_mode='all_three')
+        strat = DRMAHMStrategy(cfg)
+
+        snap = TestDRMAHMFutures._make_snap(bias='BULL', close=5850.0, score=5)
+
+        with patch.object(strat, 'get_session_phase', return_value='REGULAR_TRADING'), \
+             patch.object(strat, '_enter_directional_trade') as mock_dir_opts, \
+             patch.object(strat, '_enter_directional_futures_trade') as mock_fut:
+
+            strat._evaluate_and_enter(tmp, '261026', snap, 20)
+
+            mock_dir_opts.assert_called_once()
+            mock_fut.assert_called_once()
+
+    def test_end_of_active_day_flatten_cutoff(self):
+        """At 14:50 CST (end of active day) all daytime open trades (futures and options) must be flattened."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True, force_eod_exit=True)
+        strat = DRMAHMStrategy(cfg)
+
+        active_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        os.makedirs(active_dir, exist_ok=True)
+        trade_path = os.path.join(active_dir, 'drma_hm_2026-10-26_fut_day_1.json')
+
+        trade_data = {
+            'trade_id': 'fut_day_1',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_FUT',
+            'trade_type': 'DIRECTIONAL_FUTURES',
+            'structure_type': 'futures',
+            'status': 'open',
+            'session_phase': 'regular',
+            'paper': True,
+            'entry_price': 5850.0,
+            'contracts': 1,
+            'side': 'BUY',
+        }
+        with open(trade_path, 'w', encoding='utf-8') as f:
+            json.dump(trade_data, f)
+
+        with patch.object(strat, '_exit_trade') as mock_exit:
+            open_trades = [trade_path]
+            for t_path in open_trades:
+                with open(t_path, encoding='utf-8') as f:
+                    t_chk = json.load(f)
+                if t_chk.get('status') == 'open':
+                    strat._exit_trade(tmp, t_path, 'end_of_active_day_flatten')
+
+            mock_exit.assert_called_once_with(tmp, trade_path, 'end_of_active_day_flatten')
+
+    def test_manage_open_trade_session_cutoffs(self):
+        """_manage_open_trade flattens overnight futures at 7:00 CST and all trades at end of active day."""
+        tmp = tempfile.mkdtemp()
+        cfg = DRMAHMConfig(root=tmp, paper=True, force_eod_exit=True)
+        strat = DRMAHMStrategy(cfg)
+
+        active_dir = os.path.join(tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        os.makedirs(active_dir, exist_ok=True)
+
+        # 1. Overnight futures evaluated at 07:15 CST
+        trade_path_on = os.path.join(active_dir, 'drma_hm_2026-10-26_fut_on.json')
+        trade_on = {
+            'trade_id': 'fut_on_1',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_FUT',
+            'trade_type': 'DIRECTIONAL_FUTURES',
+            'structure_type': 'futures',
+            'status': 'open',
+            'session_phase': 'overnight',
+            'paper': True,
+            'entry_price': 5850.0,
+            'side': 'LONG',
+        }
+        with open(trade_path_on, 'w', encoding='utf-8') as f:
+            json.dump(trade_on, f)
+
+        mock_715 = datetime(2026, 10, 26, 7, 15, 0, tzinfo=ZoneInfo('America/Chicago'))
+        with patch('strategies.drma_hm.strategy.util.central_now', return_value=mock_715), \
+             patch.object(strat, '_exit_trade') as mock_exit_7am:
+            strat._manage_open_trade(tmp, trade_path_on)
+            mock_exit_7am.assert_called_once_with(tmp, trade_path_on, 'overnight_flatten_7am', exit_price=unittest.mock.ANY)
+
+        # 2. Daytime trade evaluated at 14:55 CST (end of active day)
+        trade_path_day = os.path.join(active_dir, 'drma_hm_2026-10-26_fut_day.json')
+        trade_day = {
+            'trade_id': 'fut_day_2',
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_FUT',
+            'trade_type': 'DIRECTIONAL_FUTURES',
+            'structure_type': 'futures',
+            'status': 'open',
+            'session_phase': 'regular',
+            'paper': True,
+            'entry_price': 5850.0,
+            'side': 'LONG',
+        }
+        with open(trade_path_day, 'w', encoding='utf-8') as f:
+            json.dump(trade_day, f)
+
+        mock_1455 = datetime(2026, 10, 26, 14, 55, 0, tzinfo=ZoneInfo('America/Chicago'))
+        with patch('strategies.drma_hm.strategy.util.central_now', return_value=mock_1455), \
+             patch.object(strat, '_exit_trade') as mock_exit_eod:
+            strat._manage_open_trade(tmp, trade_path_day)
+            mock_exit_eod.assert_called_once_with(tmp, trade_path_day, 'end_of_active_day_flatten', exit_price=unittest.mock.ANY)
+
+
+
+class TestDRMAHMClosingOrderChase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cfg = DRMAHMConfig(
+            root=self.tmp,
+            paper=False,
+            non_dir_paper=False,
+            dir_paper=False,
+        )
+        self.strat = DRMAHMStrategy(self.cfg)
+        self.active_dir = os.path.join(self.tmp, 'trades', 'active', 'DRMA_HM_SPX')
+        self.hist_dir = os.path.join(self.tmp, 'trades', 'history', 'DRMA_HM_SPX')
+        os.makedirs(self.active_dir, exist_ok=True)
+        os.makedirs(self.hist_dir, exist_ok=True)
+
+    def _create_sample_trade(self, trade_id='credit_bull_test', status='open', close_oid=None):
+        trade_data = {
+            'trade_id': trade_id,
+            'strategy': 'DRMA_HM_SPX',
+            'sub_strategy': 'DRMA_HM_NONDIR',
+            'trade_type': 'NON_DIRECTIONAL',
+            'structure_type': 'credit_spread',
+            'status': status,
+            'entered_at': '2026-10-26T09:55:00',
+            'quantity': 1,
+            'entry_price': 1.05,
+            'net_credit': 1.05,
+            'paper': False,
+            'close_order_id': close_oid,
+            'close_limit_price': 1.05 if close_oid else None,
+            'structures': [{
+                'structure_id': 'spread_1',
+                'name': 'Credit BULL Spread (PCS)',
+                'net_credit': 1.05,
+                'status': status,
+                'legs': [
+                    {'symbol': '.SPXW261026P7665', 'action': 'SELL_TO_OPEN', 'qty': 1, 'strike': 7665},
+                    {'symbol': '.SPXW261026P7655', 'action': 'BUY_TO_OPEN', 'qty': 1, 'strike': 7655},
+                ],
+                'current_mark': 1.05,
+            }],
+        }
+        path = os.path.join(self.active_dir, f'drma_hm_2026-10-26_{trade_id}.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(trade_data, f, indent=2)
+        return path, trade_data
+
+    def test_spread_close_fills_immediately(self):
+        """If broker immediately returns filled on submit, trade moves cleanly to history."""
+        path, _ = self._create_sample_trade()
+        mock_broker = MagicMock(_is_journal=False, _is_paper=False)
+        mock_broker.place_multi_leg_order.return_value = MagicMock(
+            success=True, order_id='close_ord_1', status='filled', filled_price=-1.10
+        )
+        self.strat._live_broker = mock_broker
+
+        self.strat._exit_trade(self.tmp, path, 'momentum_exit')
+
+        # Active trade deleted
+        self.assertFalse(os.path.exists(path))
+        # History trade created
+        hist_files = os.listdir(self.hist_dir)
+        self.assertEqual(len(hist_files), 1)
+        with open(os.path.join(self.hist_dir, hist_files[0]), encoding='utf-8') as f:
+            hist_trade = json.load(f)
+        self.assertEqual(hist_trade['status'], 'closed')
+        self.assertEqual(hist_trade['close_order_id'], 'close_ord_1')
+        self.assertEqual(hist_trade['exit_price'], 1.10)
+        self.assertEqual(hist_trade['realized_pnl'], round(1.05 - 1.10, 2))
+
+    def test_spread_close_chases_and_fills_on_attempt_2(self):
+        """If order is live on attempt 1, cancel and reprice to mid, fills on attempt 2."""
+        path, _ = self._create_sample_trade()
+        mock_broker = MagicMock(_is_journal=False, _is_paper=False)
+
+        # First placement: order 101, status live
+        # Second placement: order 102, status live -> filled on get_order_status
+        mock_broker.place_multi_leg_order.side_effect = [
+            MagicMock(success=True, order_id='101', status='live', filled_price=None),
+            MagicMock(success=True, order_id='102', status='live', filled_price=None),
+        ]
+        # Order status calls:
+        # 1st check for 101 -> 'live'
+        # post-cancel check for 101 -> 'cancelled'
+        # 2nd check for 102 -> 'filled' at 1.45
+        mock_broker.get_order_status_direct.side_effect = [
+            MagicMock(status='live', filled_price=None, filled_quantity=0),
+            MagicMock(status='cancelled', filled_price=None, filled_quantity=0),
+            MagicMock(status='filled', filled_price=1.45, filled_quantity=1),
+        ]
+        mock_broker.cancel_order.return_value = MagicMock(status='cancelled', message='Cancelled')
+        mock_broker.fetch_option_mids_api.return_value = {
+            '.SPXW261026P7665': 3.10,
+            '.SPXW261026P7655': 1.65,
+        }
+        self.strat._live_broker = mock_broker
+
+        # Run chase with wait_sec=0 to avoid test delay
+        with patch('time.sleep', return_value=None):
+            self.strat._exit_trade(self.tmp, path, 'stop_loss')
+
+        # Verify cancel called on order 101
+        mock_broker.cancel_order.assert_called_with('101')
+        # Verify order 102 placed at new mid (-1.45 debit)
+        self.assertEqual(mock_broker.place_multi_leg_order.call_count, 2)
+        _, second_call_kwargs = mock_broker.place_multi_leg_order.call_args
+        self.assertEqual(second_call_kwargs['price'], -1.45)
+
+        # Trade should be closed with order 102 and exit price 1.45
+        self.assertFalse(os.path.exists(path))
+        hist_files = os.listdir(self.hist_dir)
+        self.assertEqual(len(hist_files), 1)
+        with open(os.path.join(self.hist_dir, hist_files[0]), encoding='utf-8') as f:
+            hist_trade = json.load(f)
+        self.assertEqual(hist_trade['status'], 'closed')
+        self.assertEqual(hist_trade['close_order_id'], '102')
+        self.assertEqual(hist_trade['exit_price'], 1.45)
+        self.assertEqual(hist_trade['realized_pnl'], round(1.05 - 1.45, 2))
+
+    def test_spread_close_persists_closing_state_when_unfilled(self):
+        """When closing order remains working through all attempts, trade transitions to 'closing' state."""
+        path, _ = self._create_sample_trade()
+        mock_broker = MagicMock(_is_journal=False, _is_paper=False)
+        mock_broker.place_multi_leg_order.return_value = MagicMock(
+            success=True, order_id='working_oid_99', status='live', filled_price=None
+        )
+        mock_broker.get_order_status_direct.return_value = MagicMock(
+            status='live', filled_price=None, filled_quantity=0
+        )
+        mock_broker.cancel_order.return_value = MagicMock(status='cancelled', message='Cancelled')
+        mock_broker.fetch_option_mids_api.return_value = {}
+        self.strat._live_broker = mock_broker
+
+        with patch('time.sleep', return_value=None):
+            self.strat._exit_trade(self.tmp, path, 'stop_loss')
+
+        # Active trade file MUST still exist with status 'closing'
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding='utf-8') as f:
+            closing_trade = json.load(f)
+        self.assertEqual(closing_trade['status'], 'closing')
+        self.assertIsNotNone(closing_trade['close_order_id'])
+        self.assertIn('stop_loss', closing_trade['close_reason'])
+
+        # No history file created yet!
+        hist_files = os.listdir(self.hist_dir)
+        self.assertEqual(len(hist_files), 0)
+
+    def test_manage_closing_trade_detects_fill_and_finalizes(self):
+        """_manage_closing_trade picks up a trade in 'closing' state, checks broker, and finalizes when filled."""
+        path, _ = self._create_sample_trade(status='closing', close_oid='pending_oid_123')
+        mock_broker = MagicMock(_is_journal=False, _is_paper=False)
+        mock_broker.get_order_status_direct.return_value = MagicMock(
+            status='filled', filled_price=1.35, filled_quantity=1
+        )
+        self.strat._live_broker = mock_broker
+
+        self.strat._manage_closing_trade(self.tmp, path)
+
+        # Active file removed
+        self.assertFalse(os.path.exists(path))
+        # History trade created
+        hist_files = os.listdir(self.hist_dir)
+        self.assertEqual(len(hist_files), 1)
+        with open(os.path.join(self.hist_dir, hist_files[0]), encoding='utf-8') as f:
+            hist_trade = json.load(f)
+        self.assertEqual(hist_trade['status'], 'closed')
+        self.assertEqual(hist_trade['close_order_id'], 'pending_oid_123')
+        self.assertEqual(hist_trade['exit_price'], 1.35)
+
+
 if __name__ == '__main__':
     unittest.main()
+
 
 

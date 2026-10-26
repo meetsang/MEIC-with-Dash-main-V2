@@ -68,10 +68,12 @@ def purge_stale_history_rows(
 
     with get_conn() as conn:
         rows = conn.execute(
-            'SELECT id, lot, side FROM trades WHERE date_opened = ?',
+            'SELECT id, lot, side, strategy FROM trades WHERE date_opened = ?',
             (iso,),
         ).fetchall()
         for row in rows:
+            if row['strategy'] == 'CLONE_TRADES':
+                continue
             if (row['lot'], row['side']) not in valid:
                 conn.execute('DELETE FROM trades WHERE id = ?', (row['id'],))
                 deleted += 1
@@ -116,6 +118,9 @@ def sync_history_from_disk(
             log.exception('history_sync: upsert failed for %s', path)
             skipped += 1
 
+    clone_synced = sync_clone_trades_from_disk(root, dates_touched)
+    synced += clone_synced
+
     purged = purge_stale_history_rows(root, for_date=target, spx_close=spx)
 
     return {
@@ -138,7 +143,7 @@ def _trade_priority(trade: Dict[str, Any]) -> int:
 
 
 def _trade_key(trade: Dict[str, Any]) -> Optional[tuple[str, str, str]]:
-    from common.history_adapter import is_skyline_trade, is_drma_hm_trade, is_iron_fly_trade
+    from common.history_adapter import is_skyline_trade, is_drma_hm_trade, is_drma_stocks_trade, is_iron_fly_trade
     if is_skyline_trade(trade):
         date_opened = str(trade.get('date') or '')
         if not date_opened:
@@ -151,6 +156,14 @@ def _trade_key(trade: Dict[str, Any]) -> Optional[tuple[str, str, str]]:
             return None
         trade_id = trade.get('trade_id') or f"drma_hm_{date_opened}"
         side = str(trade.get('opt_type') or ('C' if 'bull' in trade_id else 'P')).upper()
+        return (date_opened, trade_id, side)
+    if is_drma_stocks_trade(trade):
+        entered_at = trade.get('entered_at') or ''
+        date_opened = entered_at[:10] if len(entered_at) >= 10 else str(trade.get('date') or '')
+        if not date_opened:
+            return None
+        trade_id = trade.get('trade_id') or f"drma_stocks_{date_opened}"
+        side = str(trade.get('side') or trade.get('opt_type') or 'EQ').upper()
         return (date_opened, trade_id, side)
     if is_iron_fly_trade(trade):
         date_opened = str(trade.get('date') or '')
@@ -173,6 +186,87 @@ def _skip_test_trade(trade: Dict[str, Any], path: str) -> bool:
     from common.test_trades import is_test_trade
 
     return is_test_trade(trade, path)
+
+
+def sync_clone_trades_from_disk(
+    root: str,
+    dates_touched: Optional[set[str]] = None,
+    pnl_by_date: Optional[Dict[str, float]] = None,
+) -> int:
+    """Sync closed trades from trades/clone_trades/trades.jsonl into SQLite history."""
+    clone_file = os.path.join(root, "trades", "clone_trades", "trades.jsonl")
+    if not os.path.exists(clone_file):
+        return 0
+
+    trades_by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        with open(clone_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line)
+                    t_id = t.get("id")
+                    if t_id:
+                        trades_by_id[t_id] = t
+                except Exception:
+                    continue
+    except Exception as exc:
+        log.warning("history_sync: error reading clone trades: %s", exc)
+        return 0
+
+    synced = 0
+    for trade in trades_by_id.values():
+        if trade.get("status") != "CLOSED":
+            continue
+        date_opened = trade.get("date_cst") or (trade.get("created_at") or "")[:10]
+        if not date_opened or len(date_opened) < 10:
+            continue
+        spec = trade.get("spec") or {}
+        und = spec.get("underlying") or "OPT"
+        k = spec.get("strike")
+        ot = (spec.get("option_type") or "").upper()
+        sub = trade.get("sub_strategy") or "PC"
+        qty = int(trade.get("initial_quantity") or 1)
+        entry_p = float(trade.get("entry_price") or trade.get("webhook_price") or 0.0)
+        exit_p = float(trade.get("exit_price") or 0.0)
+        pnl = float(trade.get("realized_pnl_usd") or 0.0)
+        trade_id = trade.get("id")
+        paper = 1 if bool(trade.get("paper_mode", False)) else 0
+
+        row = {
+            "date_opened": date_opened,
+            "time_opened": trade.get("created_at_cst") or trade.get("created_at") or "",
+            "strategy": "CLONE_TRADES",
+            "lot": trade_id,
+            "side": ot[:1] if ot else "C",
+            "short_symbol": f"{und} ${k} {ot} [{sub}]",
+            "long_symbol": "",
+            "quantity": qty,
+            "open_credit": -entry_p,
+            "short_open_price": entry_p,
+            "long_open_price": 0.0,
+            "short_close_price": exit_p,
+            "long_close_price": 0.0,
+            "close_debit": exit_p,
+            "pnl": pnl,
+            "status": "CLOSED",
+            "open_order_id": trade.get("order_id", ""),
+            "short_close_order_id": "",
+            "paper": paper,
+        }
+        try:
+            upsert_trade(row)
+            synced += 1
+            if dates_touched is not None:
+                dates_touched.add(date_opened)
+            if pnl_by_date is not None:
+                pnl_by_date[date_opened] = pnl_by_date.get(date_opened, 0.0) + pnl
+        except Exception:
+            log.exception("history_sync: clone trade upsert failed for %s", trade_id)
+
+    return synced
 
 
 def sync_all_history_from_disk(
@@ -232,6 +326,9 @@ def sync_all_history_from_disk(
         except Exception:
             log.exception('history_sync: upsert failed for %s', path)
             skipped += 1
+
+    clone_synced = sync_clone_trades_from_disk(root, dates_touched, pnl_by_date)
+    synced += clone_synced
 
     refresh_all_daily_summaries()
 

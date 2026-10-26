@@ -156,9 +156,65 @@ strategies:
       max_daily_signals: 4
       force_eod_exit: true
       eod_exit_time_cst: '14:50'
+      # Session & Overnight Futures Timing
+      enable_overnight_futures: true
+      overnight_flatten_time_cst: '07:00'
+      market_open_time_cst: '08:30'
+      regular_trading_start_time_cst: '09:30'
       exit_style: trend_runner
       min_hold_bars: 3
       # Data feed & Overrides (Overnight & Prior Day)
       enable_yahoo_finance: true
       quantity: 1
+
+  - name: INVERSE_MEIC_SPX
+    enabled: true
+    confirmed: true
+    module: strategies.inverse_meic.strategy
+    instrument: SPX
+    broker: tastytrade
+    stop_profile: inverse_meic_debit_spread
+    scheduled: false
+    paper: true
+    config_overrides:
+      spread_width: 25
+      target_debit: 0.90
+      max_debit: 1.10
+      profit_target_multiple: 3.0
+      premarket_gap_threshold: -0.005
+      orb_range_threshold: 25.0
+      vix_threshold: 18.0
+      atr_threshold: 25.0
+      quantity: 1
+      force_eod_exit: true
+      eod_exit_time_cst: '14:50'
+
+  - name: DRMA_HM_STOCKS
+    enabled: true
+    confirmed: true
+    module: strategies.drma_stocks.strategy
+    instrument: STOCKS
+    broker: tastytrade
+    stop_profile: drma_hm_strategy
+    scheduled: false
+    paper: true
+    config_overrides:
+      trade_mode: all_three
+      min_grade_to_signal: 'Grade A and A+'
+      spread_width: 10
+      stock_allocation_dollars: 5000.0
+      min_dte: 0
+      max_dte: 7
+      stock_profit_target_pct: 0.03
+      stock_stop_loss_pct: 0.02
+      stock_allow_short: true
+      dir_profit_target_pct: 0.50
+      dir_stop_loss_pct: 0.50
+      non_dir_profit_target_pct: 0.50
+      non_dir_stop_loss_pct: 1.00
+      orb_minutes: 30
+      wait_for_orb: true
+      force_eod_exit: true
+      eod_exit_time_cst: '14:50'
+
 

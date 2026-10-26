@@ -18,6 +18,12 @@ STRATEGY_DRMA_HM = 'DRMA_HM_SPX'
 STRATEGY_DRMA_HM_DIR = 'DRMA_HM_DIR'
 STRATEGY_DRMA_HM_NONDIR = 'DRMA_HM_NONDIR'
 STRATEGY_DRMA_HM_FUT = 'DRMA_HM_FUT'
+STRATEGY_DRMA_STOCKS = 'DRMA_HM_STOCKS'
+STRATEGY_DRMA_STOCK_DIR = 'DRMA_STOCK_DIR'
+STRATEGY_DRMA_STOCK_NONDIR = 'DRMA_STOCK_NONDIR'
+STRATEGY_DRMA_STOCK_EQUITY = 'DRMA_STOCK_EQUITY'
+STRATEGY_CLONE_TRADES = 'CLONE_TRADES'
+STRATEGY_INVERSE_MEIC = 'INVERSE_MEIC_SPX'
 
 MEIC_ACTIVE = 'trades/active/MEIC_IC'
 MEIC_HISTORY = 'trades/history/MEIC_IC'
@@ -35,6 +41,11 @@ IRON_FLY_XSP_ACTIVE = 'trades/active/IRON_FLY_XSP'
 IRON_FLY_XSP_HISTORY = 'trades/history/IRON_FLY_XSP'
 DRMA_HM_ACTIVE = 'trades/active/DRMA_HM_SPX'
 DRMA_HM_HISTORY = 'trades/history/DRMA_HM_SPX'
+DRMA_STOCKS_ACTIVE = 'trades/active/DRMA_HM_STOCKS'
+DRMA_STOCKS_HISTORY = 'trades/history/DRMA_HM_STOCKS'
+INVERSE_MEIC_ACTIVE = 'trades/active/INVERSE_MEIC_SPX'
+INVERSE_MEIC_HISTORY = 'trades/history/INVERSE_MEIC_SPX'
+
 
 # Test fixtures — never scanned for dashboard History / PnL totals.
 TEST_ROOT = 'trades/test'
@@ -98,6 +109,9 @@ def registered_strategies() -> List[str]:
         STRATEGY_IRON_FLY,
         STRATEGY_IRON_FLY_XSP,
         STRATEGY_DRMA_HM,
+        STRATEGY_DRMA_STOCKS,
+        STRATEGY_CLONE_TRADES,
+        STRATEGY_INVERSE_MEIC,
     ]
 
 
@@ -120,6 +134,10 @@ def ensure_all_trade_dirs(root: Optional[str] = None) -> None:
         os.path.join(base, IRON_FLY_XSP_HISTORY),
         os.path.join(base, DRMA_HM_ACTIVE),
         os.path.join(base, DRMA_HM_HISTORY),
+        os.path.join(base, DRMA_STOCKS_ACTIVE),
+        os.path.join(base, DRMA_STOCKS_HISTORY),
+        os.path.join(base, INVERSE_MEIC_ACTIVE),
+        os.path.join(base, INVERSE_MEIC_HISTORY),
         os.path.join(base, TEST_MEIC_ACTIVE),
         os.path.join(base, TEST_MEIC_HISTORY),
         os.path.join(base, TEST_MANUAL_ACTIVE),

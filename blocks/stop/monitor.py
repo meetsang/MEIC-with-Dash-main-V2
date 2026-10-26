@@ -625,7 +625,20 @@ class StopMonitor:
                 return
             raw_debit = max(float(short_p) - float(long_p), 0.05)
             debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
-        result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
+
+        is_debit = (getattr(getattr(self, 'stop_profile', None), 'spread_type', '') == 'debit' or self.state.get('spread_type') == 'debit')
+        if is_debit:
+            if hasattr(self.broker, 'place_debit_spread_close_order'):
+                result = self.broker.place_debit_spread_close_order(long_sym, short_sym, qty, debit)
+            else:
+                from brokers.base import ComboLeg
+                legs = [
+                    ComboLeg(symbol=long_sym, action='SELL_TO_CLOSE', quantity=qty),
+                    ComboLeg(symbol=short_sym, action='BUY_TO_CLOSE', quantity=qty),
+                ]
+                result = self.broker.place_multi_leg_order(legs, price=debit)
+        else:
+            result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
         if not result.success:
             if is_instruments_stopped_trading_error(result.message):
                 self._mark_instruments_stopped_trading(result.message)

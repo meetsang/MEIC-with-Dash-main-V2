@@ -79,6 +79,18 @@ def register_clone_trades_routes(app: Flask, engine: CloneTradeEngine = None, st
     def clone_status():
         return jsonify(eng.get_status())
 
+    @app.route("/api/clone_trades/sub_strategy/<name>/config", methods=["GET", "POST"])
+    def clone_sub_strategy_config(name: str):
+        if request.method == "GET":
+            cfg = eng.config_mgr.get_sub_strategy_config(name)
+            return jsonify({"ok": True, "sub_strategy": name, "config": cfg.to_dict()})
+
+        data = request.get_json(force=True, silent=True) or {}
+        updated = eng.config_mgr.update_sub_strategy(name, data)
+        if "paper_mode" in data and hasattr(eng, "_resolve_broker"):
+            eng._resolve_broker()
+        return jsonify({"ok": True, "sub_strategy": name, "config": updated})
+
     @app.route("/api/clone_trades/config", methods=["POST"])
     def clone_config_post():
         data = request.get_json(force=True, silent=True) or {}
@@ -116,7 +128,8 @@ def register_clone_trades_routes(app: Flask, engine: CloneTradeEngine = None, st
             except Exception:
                 custom_qty = None
 
-        res = eng.take_signal_manually(sig_id, custom_price=custom_px, custom_qty=custom_qty)
+        paper_mode = data.get("paper_mode")
+        res = eng.take_signal_manually(sig_id, custom_price=custom_px, custom_qty=custom_qty, paper_mode=paper_mode)
         code = 200 if res.get("ok") else 400
         return jsonify(res), code
 

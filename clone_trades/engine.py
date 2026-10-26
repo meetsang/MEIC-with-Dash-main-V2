@@ -18,7 +18,9 @@ from clone_trades.models import (
     ClosedLeg,
     LadderTier,
     OptionSpec,
+    classify_sub_strategy,
     distribute_contracts_across_tiers,
+    extract_called_by,
     utc_now_iso,
 )
 from clone_trades.quotes import OptionQuote, OptionQuoteService
@@ -198,6 +200,11 @@ class CloneTradeEngine:
         sig_id = f"sig_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
         now_iso = utc_now_iso()
 
+        # 0. Extract caller and classify sub-strategy ("PC", "Genie", or "Others")
+        called_by = extract_called_by(payload)
+        sub_strat = classify_sub_strategy(called_by)
+        sub_cfg = self.config_mgr.get_sub_strategy_config(sub_strat)
+
         # 1. Parse option specification
         try:
             spec = OptionSpec.from_payload(payload)
@@ -211,6 +218,8 @@ class CloneTradeEngine:
                 alert_price=0.0,
                 status="REJECTED_ERROR",
                 status_reason=f"Spec parse error: {exc}",
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -223,14 +232,14 @@ class CloneTradeEngine:
         raw_alert = payload.get("price") or payload.get("entry_price") or payload.get("alert_price")
         alert_px = self._normalize_alert_price(raw_alert, market_px)
 
-        cfg = self.config_mgr
         market_open = is_market_open()
+        is_paper = bool(sub_strat == "Others" or sub_cfg.paper_mode or self.config_mgr.paper_mode)
 
         # Handle missing quote
         if market_px <= 0:
-            if not market_open and not cfg.paper_mode:
-                reason = "Options market is CLOSED (Mon-Fri 8:30 AM - 3:00 PM CT) and no live quote available. Auto-take paused."
-                log.info("SIGNAL HELD (Market Closed, No Quote): %s %s", spec.underlying, spec.occ_symbol)
+            if not market_open and not is_paper:
+                reason = f"Options market is CLOSED (Mon-Fri 8:30 AM - 3:00 PM CT) and no live quote available for [{sub_strat}]. Auto-take paused."
+                log.info("SIGNAL HELD (Market Closed, No Quote): %s %s [%s]", spec.underlying, spec.occ_symbol, sub_strat)
                 sig = CloneSignal(
                     id=sig_id,
                     received_at=now_iso,
@@ -241,6 +250,8 @@ class CloneTradeEngine:
                     premium_pct=0.0,
                     status="MARKET_CLOSED",
                     status_reason=reason,
+                    called_by=called_by,
+                    sub_strategy=sub_strat,
                 )
                 with self._lock:
                     self.signals.append(sig)
@@ -251,8 +262,8 @@ class CloneTradeEngine:
                     "signal": sig.to_dict(),
                     "message": reason,
                 }
-            elif not cfg.paper_mode:
-                reason = f"Unable to fetch live quote for {spec.occ_symbol} to verify chase guard."
+            elif not is_paper:
+                reason = f"Unable to fetch live quote for {spec.occ_symbol} to verify chase guard on [{sub_strat}]."
                 log.warning("REJECTED NO QUOTE: %s", reason)
                 sig = CloneSignal(
                     id=sig_id,
@@ -264,6 +275,8 @@ class CloneTradeEngine:
                     premium_pct=0.0,
                     status="REJECTED_NO_QUOTE",
                     status_reason=reason,
+                    called_by=called_by,
+                    sub_strategy=sub_strat,
                 )
                 with self._lock:
                     self.signals.append(sig)
@@ -284,13 +297,45 @@ class CloneTradeEngine:
         else:
             premium_pct = 0.0
 
-        # 4. Check Chase Guard (#4)
-        if premium_pct > cfg.max_premium_pct:
-            reason = (
-                f"Trading at {premium_pct:+.1f}% above alert price ${alert_px:.2f} "
-                f"(exceeds max allowed chase of {cfg.max_premium_pct:.1f}%)"
+        # 3b. Check Tracking Mode: If sub-strategy is in tracking mode, track contract in real-time
+        if getattr(sub_cfg, "execution_mode", "") == "tracking":
+            reason = f"Tracking alert for [{sub_strat}] (Alert: ${alert_px:.2f}, Broker: ${market_px:.2f}). Ready for manual Buy / Get In."
+            log.info("SIGNAL TRACKING: %s %s [%s] Alert: $%.2f, Broker: $%.2f", spec.underlying, spec.occ_symbol, sub_strat, alert_px, market_px)
+            sig = CloneSignal(
+                id=sig_id,
+                received_at=now_iso,
+                raw_payload=payload,
+                spec=spec,
+                alert_price=alert_px,
+                market_price=market_px,
+                premium_pct=premium_pct,
+                status="TRACKING",
+                status_reason=reason,
+                called_by=called_by,
+                sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=max(alert_px, market_px) if market_px > 0 else alert_px,
+                bottom_price=min(alert_px, market_px) if market_px > 0 else alert_px,
+                last_quote_time=now_iso,
             )
-            log.warning("CHASE EXCEEDED: %s %s -> %s", spec.underlying, spec.streamer_symbol, reason)
+            with self._lock:
+                self.signals.append(sig)
+                self._persist_signal(sig)
+            return {
+                "ok": True,
+                "status": "TRACKING",
+                "signal": sig.to_dict(),
+                "message": reason,
+            }
+
+        # 4. Check Chase Guard (#4) using sub-strategy max_premium_pct
+        max_premium = getattr(sub_cfg, "max_premium_pct", self.config_mgr.max_premium_pct)
+        if premium_pct > max_premium:
+            reason = (
+                f"[{sub_strat}] Trading at {premium_pct:+.1f}% above alert price ${alert_px:.2f} "
+                f"(exceeds max allowed chase of {max_premium:.1f}%)"
+            )
+            log.warning("CHASE EXCEEDED: %s %s [%s] -> %s", spec.underlying, spec.streamer_symbol, sub_strat, reason)
             sig = CloneSignal(
                 id=sig_id,
                 received_at=now_iso,
@@ -301,6 +346,8 @@ class CloneTradeEngine:
                 premium_pct=premium_pct,
                 status="CHASE_EXCEEDED",
                 status_reason=reason,
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -314,13 +361,13 @@ class CloneTradeEngine:
 
         # 4b. Check Floor Guard (prevents late alerts on crashing/dead contracts)
         drop_pct = round(((alert_px - market_px) / alert_px) * 100.0, 2) if alert_px > 0 else 0.0
-        floor_limit = getattr(cfg, "floor_guard_pct", 75.0)
+        floor_limit = getattr(sub_cfg, "floor_guard_pct", getattr(self.config_mgr, "floor_guard_pct", 75.0))
         if floor_limit > 0 and drop_pct > floor_limit:
             reason = (
-                f"Trading at {drop_pct:.1f}% below alert price ${alert_px:.2f} (market: ${market_px:.2f}) "
+                f"[{sub_strat}] Trading at {drop_pct:.1f}% below alert price ${alert_px:.2f} (market: ${market_px:.2f}) "
                 f"(exceeds max allowed floor drop of {floor_limit:.1f}%)"
             )
-            log.warning("FLOOR EXCEEDED: %s %s -> %s", spec.underlying, spec.streamer_symbol, reason)
+            log.warning("FLOOR EXCEEDED: %s %s [%s] -> %s", spec.underlying, spec.streamer_symbol, sub_strat, reason)
             sig = CloneSignal(
                 id=sig_id,
                 received_at=now_iso,
@@ -331,6 +378,8 @@ class CloneTradeEngine:
                 premium_pct=premium_pct,
                 status="FLOOR_EXCEEDED",
                 status_reason=reason,
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -342,10 +391,10 @@ class CloneTradeEngine:
                 "message": f"Signal held for manual decision: {reason}",
             }
 
-        # 5. Check Daily Flag (#3)
-        if not cfg.auto_take_trades:
-            reason = "Daily Auto-Take flag is OFF. Trade skipped on brokerage."
-            log.info("SIGNAL SKIPPED (Daily Flag OFF): %s %s", spec.underlying, spec.streamer_symbol)
+        # 5. Check Sub-Strategy & Daily Auto-Take Flags
+        if not getattr(sub_cfg, "enabled", True) or not getattr(sub_cfg, "auto_take_trades", True) or not self.config_mgr.auto_take_trades:
+            reason = f"Auto-Take is OFF for sub-strategy [{sub_strat}] (calledBy: {called_by}). Trade skipped on brokerage."
+            log.info("SIGNAL SKIPPED (Auto-Take OFF): %s %s [%s]", spec.underlying, spec.streamer_symbol, sub_strat)
             sig = CloneSignal(
                 id=sig_id,
                 received_at=now_iso,
@@ -356,6 +405,8 @@ class CloneTradeEngine:
                 premium_pct=premium_pct,
                 status="SKIPPED",
                 status_reason=reason,
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -368,9 +419,9 @@ class CloneTradeEngine:
             }
 
         # 6. Check Market Open Gate
-        if not market_open and not cfg.paper_mode and not getattr(cfg, "allow_off_hours_orders", False):
-            reason = "Options market is CLOSED (Mon-Fri 8:30 AM - 3:00 PM CT). Auto-take paused."
-            log.info("SIGNAL BLOCKED (Market Closed): %s %s", spec.underlying, spec.occ_symbol)
+        if not market_open and not is_paper and not getattr(self.config_mgr, "allow_off_hours_orders", False):
+            reason = f"Options market is CLOSED (Mon-Fri 8:30 AM - 3:00 PM CT). Live orders paused for [{sub_strat}]."
+            log.info("SIGNAL BLOCKED (Market Closed): %s %s [%s]", spec.underlying, spec.occ_symbol, sub_strat)
             sig = CloneSignal(
                 id=sig_id,
                 received_at=now_iso,
@@ -381,6 +432,8 @@ class CloneTradeEngine:
                 premium_pct=premium_pct,
                 status="MARKET_CLOSED",
                 status_reason=reason,
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -392,10 +445,15 @@ class CloneTradeEngine:
                 "message": reason,
             }
 
-        # 7. Calculate contract quantity (#5)
-        contract_cost = max(1.0, market_px * 100.0)
-        calc_qty = int(cfg.allocation_amount // contract_cost)
-        qty = max(1, calc_qty)
+        # 7. Calculate contract quantity (#5) using sub-strategy allocation (either $ budget or # contracts)
+        entry_mode = getattr(sub_cfg, "entry_limit_mode", "dollar")
+        if entry_mode == "contracts":
+            qty = max(1, int(getattr(sub_cfg, "allocation_contracts", 1)))
+        else:
+            contract_cost = max(1.0, market_px * 100.0)
+            alloc_amt = getattr(sub_cfg, "allocation_amount", self.config_mgr.allocation_amount)
+            calc_qty = int(alloc_amt // contract_cost)
+            qty = max(1, calc_qty)
 
         # Allow explicit override from payload if provided and positive
         explicit_qty = payload.get("qty") or payload.get("quantity")
@@ -416,9 +474,13 @@ class CloneTradeEngine:
                 alert_price=alert_px,
                 premium_pct=premium_pct,
                 sig_id=sig_id,
+                sub_strategy=sub_strat,
+                called_by=called_by,
+                paper_mode=is_paper,
+                ladder_tiers=sub_cfg.ladder_tiers if sub_cfg and sub_cfg.ladder_tiers else self.config_mgr.ladder_tiers,
             )
         except Exception as exc:
-            log.error("Broker order execution error: %s", exc)
+            log.error("Broker order execution error [%s]: %s", sub_strat, exc)
             sig = CloneSignal(
                 id=sig_id,
                 received_at=now_iso,
@@ -429,6 +491,8 @@ class CloneTradeEngine:
                 premium_pct=premium_pct,
                 status="REJECTED_BROKER",
                 status_reason=f"Broker execution failed: {exc}",
+                called_by=called_by,
+                sub_strategy=sub_strat,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -444,7 +508,7 @@ class CloneTradeEngine:
         sig_reason = (
             f"Queued {qty} contracts on brokerage @ ${market_px:.2f} (awaiting market open)"
             if trade.status == "WORKING"
-            else f"Filled {qty} contracts @ ${market_px:.2f}"
+            else f"Filled {qty} contracts @ ${market_px:.2f} ({'Paper' if is_paper else 'Live'} [{sub_strat}])"
         )
 
         sig = CloneSignal(
@@ -458,6 +522,8 @@ class CloneTradeEngine:
             status=sig_status,
             status_reason=sig_reason,
             trade_id=trade.id,
+            called_by=called_by,
+            sub_strategy=sub_strat,
         )
         with self._lock:
             self.signals.append(sig)
@@ -478,15 +544,28 @@ class CloneTradeEngine:
         alert_price: float,
         premium_pct: float,
         sig_id: str,
+        sub_strategy: str = "Others",
+        called_by: str = "",
+        paper_mode: Optional[bool] = None,
+        ladder_tiers: Optional[List[LadderTier]] = None,
     ) -> CloneTrade:
         """Place buy order on broker (or simulate) and setup unbalanced OCO ladder."""
         cfg = self.config_mgr
+        sub_cfg = cfg.get_sub_strategy_config(sub_strategy)
+
+        if paper_mode is None:
+            paper_mode = getattr(sub_cfg, "paper_mode", cfg.paper_mode)
+        if sub_strategy == "Others":
+            paper_mode = True
+        if ladder_tiers is None:
+            ladder_tiers = list(sub_cfg.ladder_tiers) if sub_cfg and sub_cfg.ladder_tiers else list(cfg.ladder_tiers)
+
         order_id = f"ord_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         trade_status = "OPEN"
-        trade_status_reason = "Active trade"
+        trade_status_reason = f"Active trade ({'Paper' if paper_mode else 'Live'} [{sub_strategy}])"
 
         # Attempt broker execution if live
-        if not cfg.paper_mode:
+        if not paper_mode:
             self._resolve_broker()
             if not self.broker:
                 raise RuntimeError("Live broker connection unavailable. Order rejected.")
@@ -524,12 +603,12 @@ class CloneTradeEngine:
         trade_id = f"clone_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         now_iso = utc_now_iso()
 
-        # Unbalanced OCO Ladder initialization (#6)
-        num_tiers = len(cfg.ladder_tiers)
-        tier_pcts = [t.exit_pct for t in cfg.ladder_tiers]
+        # Unbalanced OCO Ladder initialization using sub-strategy's ladder tiers
+        num_tiers = len(ladder_tiers)
+        tier_pcts = [t.exit_pct for t in ladder_tiers]
         contracts_per_tier = distribute_contracts_across_tiers(qty, num_tiers, tier_pcts=tier_pcts)
         tier_distribution = []
-        for i, t in enumerate(cfg.ladder_tiers):
+        for i, t in enumerate(ladder_tiers):
             eff_exit_pct = t.exit_pct if t.exit_pct > 0 else round(100.0 / max(1, num_tiers), 1)
             tier_distribution.append({
                 "tier_id": t.tier_id,
@@ -539,15 +618,15 @@ class CloneTradeEngine:
                 "contracts": contracts_per_tier[i] if i < len(contracts_per_tier) else 0,
             })
 
-        # Initial Stop Loss applies to ALL contracts (defined by Tier 1 of ladder or initial_stop_loss_pct)
-        if cfg.ladder_tiers and len(cfg.ladder_tiers) > 0:
-            initial_sl_pct = cfg.ladder_tiers[0].stop_loss_pct
+        # Initial Stop Loss applies to ALL contracts (defined by Tier 1 of ladder)
+        if ladder_tiers and len(ladder_tiers) > 0:
+            initial_sl_pct = ladder_tiers[0].stop_loss_pct
         else:
-            initial_sl_pct = cfg.initial_stop_loss_pct
+            initial_sl_pct = sub_cfg.initial_stop_loss_pct if sub_cfg else cfg.initial_stop_loss_pct
         active_stop_price = round(max(0.01, fill_price * (1.0 + initial_sl_pct / 100.0)), 2)
 
         # Next Profit Target for Tier 1
-        tier_0 = cfg.ladder_tiers[0] if cfg.ladder_tiers else LadderTier(1, 25.0, -50.0)
+        tier_0 = ladder_tiers[0] if ladder_tiers else LadderTier(1, 25.0, -50.0)
         active_pt_price = round(fill_price * (1.0 + tier_0.target_profit_pct / 100.0), 2)
 
         trade = CloneTrade(
@@ -564,6 +643,7 @@ class CloneTradeEngine:
             remaining_quantity=qty,
             current_price=fill_price,
             highest_price=fill_price,
+            lowest_price=fill_price,
             highest_profit_pct=0.0,
             status=trade_status,
             status_reason=trade_status_reason,
@@ -577,6 +657,10 @@ class CloneTradeEngine:
             unrealized_pnl_pct=0.0,
             unrealized_pnl_usd=0.0,
             order_id=order_id,
+            called_by=called_by,
+            sub_strategy=sub_strategy,
+            paper_mode=paper_mode,
+            ladder_tiers=[t.to_dict() for t in ladder_tiers],
         )
 
         with self._lock:
@@ -584,8 +668,11 @@ class CloneTradeEngine:
             self._persist_trade(trade)
 
         log.info(
-            "OPENED CLONE TRADE %s: %s %d contracts @ $%.2f (status=%s) | PT1=$%.2f SL=$%.2f",
+            "OPENED CLONE TRADE %s [%s, calledBy=%s, paper=%s]: %s %d contracts @ $%.2f (status=%s) | PT1=$%.2f SL=$%.2f",
             trade.id,
+            sub_strategy,
+            called_by,
+            paper_mode,
             spec.streamer_symbol,
             qty,
             fill_price,
@@ -600,8 +687,9 @@ class CloneTradeEngine:
         signal_id: str,
         custom_price: Optional[float] = None,
         custom_qty: Optional[int] = None,
+        paper_mode: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Allow user to manually take a trade previously held or skipped."""
+        """Allow user to manually take a trade previously held, skipped, or tracked."""
         with self._lock:
             target_sig = next((s for s in self.signals if s.id == signal_id), None)
         if not target_sig:
@@ -612,15 +700,32 @@ class CloneTradeEngine:
         quote = self.quote_service.get_quote(target_sig.spec)
         market_px = custom_price if custom_price and custom_price > 0 else quote.market_buy_price
         if market_px <= 0:
-            market_px = target_sig.alert_price
+            market_px = target_sig.current_price or target_sig.alert_price
+
+        sub_strat = getattr(target_sig, "sub_strategy", "Others")
+        called_by = getattr(target_sig, "called_by", "")
+        sub_cfg = self.config_mgr.get_sub_strategy_config(sub_strat)
 
         if custom_qty and custom_qty > 0:
             qty = custom_qty
         else:
-            cost = max(1.0, market_px * 100.0)
-            qty = max(1, int(self.config_mgr.allocation_amount // cost))
+            entry_mode = getattr(sub_cfg, "entry_limit_mode", "dollar")
+            if entry_mode == "contracts":
+                qty = max(1, int(getattr(sub_cfg, "allocation_contracts", 1)))
+            else:
+                cost = max(1.0, market_px * 100.0)
+                alloc_amt = getattr(sub_cfg, "allocation_amount", self.config_mgr.allocation_amount)
+                qty = max(1, int(alloc_amt // cost))
 
         premium_pct = round(((market_px - target_sig.alert_price) / target_sig.alert_price) * 100.0, 2)
+
+        if sub_strat == "Others":
+            target_paper = True
+        elif paper_mode is not None:
+            target_paper = bool(paper_mode)
+        else:
+            target_paper = bool(getattr(sub_cfg, "paper_mode", True) or getattr(sub_cfg, "execution_mode", "") != "live")
+
         try:
             trade = self._execute_and_open_trade(
                 spec=target_sig.spec,
@@ -629,6 +734,10 @@ class CloneTradeEngine:
                 alert_price=target_sig.alert_price,
                 premium_pct=premium_pct,
                 sig_id=signal_id,
+                sub_strategy=sub_strat,
+                called_by=called_by,
+                paper_mode=target_paper,
+                ladder_tiers=sub_cfg.ladder_tiers if sub_cfg and sub_cfg.ladder_tiers else self.config_mgr.ladder_tiers,
             )
         except Exception as exc:
             log.error("Manual take failed on broker: %s", exc)
@@ -638,7 +747,7 @@ class CloneTradeEngine:
         sig_reason = (
             f"Manually queued {qty} contracts on brokerage @ ${market_px:.2f} (awaiting market open)"
             if trade.status == "WORKING"
-            else f"Manually executed {qty} contracts @ ${market_px:.2f}"
+            else f"Executed {qty} contracts @ ${market_px:.2f} ({'Paper' if trade.paper_mode else 'Live'} [{sub_strat}])"
         )
 
         with self._lock:
@@ -650,6 +759,7 @@ class CloneTradeEngine:
                 "timestamp": utc_now_iso(),
                 "price": market_px,
                 "qty": qty,
+                "paper_mode": trade.paper_mode,
             }
             self._persist_signal(target_sig)
 
@@ -673,9 +783,35 @@ class CloneTradeEngine:
         return {"ok": True, "signal": target_sig.to_dict()}
 
     def update_quotes_and_check_stops(self) -> None:
-        """Background loop iteration checking live quotes against ladder PTs and full SL."""
+        """Background loop iteration checking live quotes against ladder PTs and full SL, and updating tracked alerts."""
+        try:
+            from meic0dte.app.utilities import central_now
+            today_cst = central_now().strftime("%Y-%m-%d")
+        except Exception:
+            today_cst = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
         with self._lock:
             open_trades = list(self.active_trades.values())
+            tracking_sigs = [
+                s for s in self.signals
+                if s.status == "TRACKING" and s.spec and (s.date_cst == today_cst or (s.received_at_cst and s.received_at_cst.startswith(today_cst)))
+            ]
+
+        # Update real-time quotes for tracked alerts / signals (Tracking Mode)
+        for sig in tracking_sigs:
+            try:
+                q = self.quote_service.get_quote(sig.spec)
+                px = q.market_buy_price or q.last or q.mid
+                if px and px > 0:
+                    with self._lock:
+                        sig.current_price = px
+                        if sig.peak_price is None or px > sig.peak_price:
+                            sig.peak_price = px
+                        if sig.bottom_price is None or px < sig.bottom_price:
+                            sig.bottom_price = px
+                        sig.last_quote_time = utc_now_iso()
+            except Exception as exc:
+                log.debug("Failed to update quote for tracked signal %s: %s", sig.id, exc)
 
         if not open_trades:
             return
@@ -718,6 +854,8 @@ class CloneTradeEngine:
                     trade.highest_profit_pct = round(
                         ((current_px - trade.entry_price) / trade.entry_price) * 100.0, 2
                     )
+                if not hasattr(trade, "lowest_price") or trade.lowest_price <= 0 or current_px < trade.lowest_price:
+                    trade.lowest_price = current_px
 
                 trade.unrealized_pnl_pct = round(
                     ((current_px - trade.entry_price) / trade.entry_price) * 100.0, 2
@@ -743,8 +881,9 @@ class CloneTradeEngine:
 
         now_iso = utc_now_iso()
 
-        # Place sell order on broker
-        if not self.config_mgr.paper_mode:
+        # Place sell order on broker if trade is live
+        is_paper = getattr(trade, "paper_mode", False) or self.config_mgr.paper_mode
+        if not is_paper:
             self._resolve_broker()
             if self.broker and not getattr(self.broker, "_is_journal", False):
                 try:
@@ -789,8 +928,10 @@ class CloneTradeEngine:
         self._persist_trade(trade)
 
         log.info(
-            "STOP LOSS EXECUTED %s: Sold %d contracts @ $%.2f | P&L: $%.2f",
+            "STOP LOSS EXECUTED %s [%s, paper=%s]: Sold %d contracts @ $%.2f | P&L: $%.2f",
             trade.id,
+            getattr(trade, "sub_strategy", "PC"),
+            getattr(trade, "paper_mode", False),
             rem_qty,
             exit_px,
             pnl_usd,
@@ -799,8 +940,14 @@ class CloneTradeEngine:
     def _trigger_partial_pt_unlocked(self, trade: CloneTrade, exit_px: float) -> None:
         """Profit target reached: sell this tier's contract tranche, advance to next PT."""
         current_idx = trade.current_tier_index
-        cfg = self.config_mgr
-        tiers = cfg.ladder_tiers
+
+        # Determine ladder tiers: trade-specific ladder tiers take precedence, then sub-strategy tiers, then global config tiers
+        tiers = []
+        if getattr(trade, "ladder_tiers", None) and isinstance(trade.ladder_tiers, list) and trade.ladder_tiers:
+            tiers = [LadderTier.from_dict(t) if isinstance(t, dict) else t for t in trade.ladder_tiers]
+        if not tiers:
+            sub_cfg = self.config_mgr.get_sub_strategy_config(getattr(trade, "sub_strategy", "PC"))
+            tiers = sub_cfg.ladder_tiers if sub_cfg and sub_cfg.ladder_tiers else self.config_mgr.ladder_tiers
 
         # Determine contracts to close for this tier
         tier_dist = trade.tier_distribution
@@ -813,8 +960,9 @@ class CloneTradeEngine:
         # Cap at remaining quantity
         qty_to_close = min(trade.remaining_quantity, max(1, qty_for_tier))
 
-        # Place partial sell order on broker
-        if not self.config_mgr.paper_mode:
+        # Place partial sell order on broker if live
+        is_paper = getattr(trade, "paper_mode", False) or self.config_mgr.paper_mode
+        if not is_paper:
             self._resolve_broker()
             if self.broker and not getattr(self.broker, "_is_journal", False):
                 try:
@@ -851,8 +999,9 @@ class CloneTradeEngine:
         trade.remaining_quantity -= qty_to_close
 
         log.info(
-            "PARTIAL PT HIT %s (%s): Sold %d contracts @ $%.2f (P&L: $%.2f). Remaining: %d contracts",
+            "PARTIAL PT HIT %s [%s] (%s): Sold %d contracts @ $%.2f (P&L: $%.2f). Remaining: %d contracts",
             trade.id,
+            getattr(trade, "sub_strategy", "PC"),
             tier_name,
             qty_to_close,
             exit_px,
@@ -882,8 +1031,9 @@ class CloneTradeEngine:
                 trade.active_stop_pct = next_tier.stop_loss_pct
                 trade.active_stop_price = round(trade.entry_price * (1.0 + next_tier.stop_loss_pct / 100.0), 2)
                 log.info(
-                    "ADVANCED LADDER %s -> Next PT=%s (+$%.2f), Ratcheted SL=%s ($%.2f)",
+                    "ADVANCED LADDER %s [%s] -> Next PT=%s (+$%.2f), Ratcheted SL=%s ($%.2f)",
                     trade.id,
+                    getattr(trade, "sub_strategy", "PC"),
                     next_tier.description,
                     trade.active_pt_price,
                     next_tier.stop_loss_pct,
@@ -903,10 +1053,11 @@ class CloneTradeEngine:
                 return {"ok": False, "error": f"Open trade {trade_id} not found"}
 
             now_iso = utc_now_iso()
+            is_paper = getattr(trade, "paper_mode", False) or self.config_mgr.paper_mode
 
             # If the trade is still WORKING / QUEUED (not yet filled)
             if trade.status == "WORKING":
-                if not self.config_mgr.paper_mode and self.broker and trade.order_id:
+                if not is_paper and self.broker and trade.order_id:
                     try:
                         self.broker.cancel_order(trade.order_id)
                     except Exception as exc:
@@ -929,7 +1080,7 @@ class CloneTradeEngine:
             quote = self.quote_service.get_quote(trade.spec)
             exit_px = quote.market_sell_price or trade.current_price
 
-            if not self.config_mgr.paper_mode:
+            if not is_paper:
                 self._resolve_broker()
                 if self.broker and not getattr(self.broker, "_is_journal", False):
                     try:
@@ -945,9 +1096,9 @@ class CloneTradeEngine:
                                 if getattr(ost, "filled_price", None) and float(ost.filled_price) > 0:
                                     exit_px = float(ost.filled_price)
                             except Exception as exc:
-                                log.warning("Could not query manual close fill: %s", exc)
+                                log.warning("Could not query close order fill: %s", exc)
                     except Exception as exc:
-                        log.warning("Broker flatten error: %s", exc)
+                        log.warning("Broker manual close order error: %s", exc)
 
             profit_pct = round(((exit_px - trade.entry_price) / trade.entry_price) * 100.0, 2)
             pnl_usd = round((exit_px - trade.entry_price) * 100.0 * rem_qty, 2)
@@ -1158,6 +1309,45 @@ class CloneTradeEngine:
             "closed_trades": today_closed,
             "all_closed_trades": all_closed_list[:100],
             "pending_decisions": pending_decisions,
+            "tracked_signals": [
+                s.to_dict() for s in self.signals
+                if s.status == "TRACKING" and (s.date_cst == today_cst or (s.received_at_cst and s.received_at_cst.startswith(today_cst)))
+            ],
+            "sub_strategies": {
+                s_name: {
+                    "name": s_name,
+                    "display_name": self.config_mgr.get_sub_strategy_config(s_name).display_name or s_name,
+                    "enabled": self.config_mgr.get_sub_strategy_config(s_name).enabled,
+                    "paper_mode": self.config_mgr.get_sub_strategy_config(s_name).paper_mode,
+                    "execution_mode": getattr(self.config_mgr.get_sub_strategy_config(s_name), "execution_mode", "live"),
+                    "entry_limit_mode": getattr(self.config_mgr.get_sub_strategy_config(s_name), "entry_limit_mode", "dollar"),
+                    "allocation_contracts": getattr(self.config_mgr.get_sub_strategy_config(s_name), "allocation_contracts", 1),
+                    "allocation_amount": self.config_mgr.get_sub_strategy_config(s_name).allocation_amount,
+                    "auto_take_trades": self.config_mgr.get_sub_strategy_config(s_name).auto_take_trades,
+                    "max_premium_pct": self.config_mgr.get_sub_strategy_config(s_name).max_premium_pct,
+                    "floor_guard_pct": self.config_mgr.get_sub_strategy_config(s_name).floor_guard_pct,
+                    "ladder_tiers": [t.to_dict() for t in self.config_mgr.get_sub_strategy_config(s_name).ladder_tiers],
+                    "active_trades_count": len([t for t in active_list if t.get("sub_strategy") == s_name]),
+                    "open_trades_count": len([t for t in active_list if t.get("sub_strategy") == s_name]),
+                    "today_signals_count": len([s for s in today_signals if s.get("sub_strategy") == s_name]),
+                    "tracked_alerts_count": len([
+                        s for s in self.signals
+                        if getattr(s, "sub_strategy", "") == s_name
+                        and s.status == "TRACKING"
+                        and (s.date_cst == today_cst or (s.received_at_cst and s.received_at_cst.startswith(today_cst)))
+                    ]),
+                    "today_realized_pnl_usd": round(
+                        sum(t.get("realized_pnl_usd", 0.0) for t in today_closed if t.get("sub_strategy") == s_name)
+                        + sum(t.get("realized_pnl_usd", 0.0) for t in active_list if t.get("sub_strategy") == s_name),
+                        2,
+                    ),
+                    "total_unrealized_pnl_usd": round(
+                        sum(t.get("unrealized_pnl_usd", 0.0) for t in active_list if t.get("sub_strategy") == s_name),
+                        2,
+                    ),
+                }
+                for s_name in ("PC", "Genie", "Others")
+            },
             "stats": {
                 "active_trades_count": len(active_list),
                 "today_signals_count": len(today_signals),

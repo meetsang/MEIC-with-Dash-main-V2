@@ -8,6 +8,63 @@ Older history (V2 rewrite, pre-Jul-6 design) stays in the other `changes/` docs 
 
 ---
 
+## 2026-10-26 — DRMA Closing Order Verification, Mid-Chase Engine & Persistent Closing Management
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_drma_stocks.py tests/test_drma_hm.py tests/test_drma_hm_dashboard.py -v` → 78 passed  
+**Doc:** [fixes/2026-10-26_DRMA_CLOSING_ORDER_CHASE_ENGINE.md](fixes/2026-10-26_DRMA_CLOSING_ORDER_CHASE_ENGINE.md)
+
+### What changed
+- **Live Incident Resolution (Trade `credit_bull_753fd75c` SPX 7665/7655 PCS):**
+  - Order `518330903` was submitted at 10:50:04 CST at limit -1.05 and left working/unfilled while the trade was prematurely marked closed.
+  - Successfully connected to live TastyTrade account `5WT45050`, cancelled order `518330903`, fetched live option mids, placed replacement spread order, and chased to confirmed fill at 1.45 debit (order `518376784`).
+  - Verified account positions are completely flat (`Remaining 7665/7655 positions: []`). Updated historical trade JSON with actual fill metrics.
+- **Dedicated Closing Chase Engine (`strategies/drma_hm/strategy.py`):**
+  - Added `_chase_options_spread_close()`: monitors broker status via `get_order_status_direct()`; if working after timeout, polls live mids via `fetch_option_mids_api()`, reprices up to mid (for credit spread buyback) or down to mid (for debit spread sale), cancels working order, verifies race condition, and resubmits replacement order.
+  - Added `_finalize_closed_trade()`: atomically calculates realized PnL, dollar PnL, resets strategy position state, moves trade file to history, and unlinks active tracking.
+- **Persistent `closing` Trade Lifecycle:**
+  - If a live close order does not fill during initial chase attempts, the trade is transitioned to `status: 'closing'` with `close_order_id` and retained in `trades/active/`.
+  - Strategy position states remain active to prevent placing duplicate entries while an existing position is closing.
+  - Added `_manage_closing_trade()`: evaluated on every strategy loop cycle (regular hours, overnight, startup resume, and EOD cutoff) to continue polling and chasing closing orders until filled.
+- **Dashboard Synchronization (`dashboard/server.py`):**
+  - Included `status in ('open', 'closing')` in active positions table and active unrealized PnL calculation.
+- **Automated Test Coverage (`tests/test_drma_hm.py`):**
+  - Added `TestDRMAHMClosingOrderChase` covering immediate fills, multi-step cancel/reprice/fill chase, persistent `closing` state retention, and `_manage_closing_trade` reconciliation (78/78 tests passing).
+
+---
+
+## 2026-10-26 — DRMA Stocks UI Visibility, Opened At Column, and Pre-09:00 AM CST Trade Clean-Up
+
+**Status:** implemented, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_drma_stocks.py tests/test_drma_hm.py tests/test_drma_hm_dashboard.py -v` → 74 passed  
+**Doc:** [fixes/2026-10-26_DRMA_STOCKS_UI_AND_PRE_9AM_CLEANUP.md](fixes/2026-10-26_DRMA_STOCKS_UI_AND_PRE_9AM_CLEANUP.md)
+
+### What changed
+- **Completed Trades Opened At Column (`dashboard/templates/index.html`):**
+  - Added dedicated `Opened At` column (`<th>Opened At</th>`) before `Closed At` in the DRMA Stocks Completed Trades table.
+  - Rendered formatted CST timestamp (`${h.entered_at ? formatCST(h.entered_at, true) : '—'}`) in high-contrast text.
+  - Updated empty-state row `colspan` to 9.
+- **High-Contrast Typography & Prohibition of `text-muted` (`dashboard/templates/index.html`, `.agents/rules/UI_DESIGN_GUIDELINES.md`):**
+  - Fixed low-contrast text in Table Active: `Targets (PT / SL)` now styled with high-contrast colored spans (`PT: text-info`, `SL: text-warning`); `Open Time` now styled with `text-light fw-medium`.
+  - Fixed low-contrast text in Table Completed Trades: `Closed At` and `Opened At` now styled with `text-light fw-medium`.
+  - Replaced `text-secondary` table headers with high-contrast slate `color: #94a3b8;`.
+  - Established permanent repository rule in `.agents/rules/UI_DESIGN_GUIDELINES.md` prohibiting `text-muted` on dark background tables.
+- **Options Expiry Column & Formatter (`dashboard/templates/index.html`):**
+  - Added dedicated `Expiry` column to both Active Open Positions and Completed Stock Trades.
+  - Added `formatStockExpiry()` to parse YYMMDD or YYYYMMDD to human-readable `YYYY-MM-DD` (e.g. `2026-10-30`).
+- **Credit vs Debit Structure Display Bug Fixed (`dashboard/templates/index.html`):**
+  - Resolved bug where line 12089 previously hardcoded `+ ' Debit'` for every options position. Non-directional credit spreads (`CCS`, `PCS`) now accurately display as `CREDIT` (e.g. `CCS 265/255 CREDIT` with `$1.00 Cr`), while directional spreads display as `DEBIT` (`CDS 144/154 DEBIT` with `$2.50 Db`).
+- **Profit Target (PT) & Stop Loss (SL) Active Target Marks Displayed (`dashboard/templates/index.html`, `strategies/drma_stocks/strategy.py`):**
+  - Updated `strategy.py` to calculate and store explicit dollar target and stop levels (`profit_target_price` / `stop_loss_price`, `profit_target` / `stop_loss`).
+  - Implemented dynamic calculation fallback in JS so active positions display target price and percentage: Direct Equity (`$148.56 (+3.0%)` | `$141.35 (-2.0%)`), Debit Spreads (`$3.75 (+50%)` | `$1.25 (-50%)`), Credit Spreads (`$0.50 (+50%)` | `$2.00 (-100%)`).
+- **Pre-09:00 AM CST Trades Removal:**
+  - Removed all 11 trades entered before 9:00 AM CST today (2026-10-26) prior to ORB completion (5 active, 6 historical) and archived them in `trades/archive_pre9am_20261026/`.
+  - Refreshed stock active position counters to accurately reflect only valid post-09:00 AM CST trades.
+- **30m ORB & 09:00 CST Session Display Alignment:**
+  - Aligned DRMA session phase text descriptions to reflect the 30m ORB duration and 09:00 CST regular session opening.
+
+---
+
 ## 2026-10-20 — Strategy Persistent Live / Paper Execution Modes & Trade Provenance Safety
 
 **Status:** implemented, verified & unit-tested  

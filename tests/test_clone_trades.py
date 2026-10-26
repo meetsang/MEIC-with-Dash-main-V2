@@ -76,6 +76,7 @@ class TestCloneTradesEngine(unittest.TestCase):
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.config_mgr = CloneTradeConfigManager(root_dir=self.tmp_dir.name)
         self.config_mgr.paper_mode = True
+        self.config_mgr.update_sub_strategy("Others", {"execution_mode": "paper", "auto_take_trades": True})
         self.quote_service = OptionQuoteService()
         self.engine = CloneTradeEngine(
             config_mgr=self.config_mgr,
@@ -201,6 +202,7 @@ class TestCloneTradesEngine(unittest.TestCase):
             "strike": 500,
             "type": "CALL",
             "price": 1.00,
+            "calledBy": "PC",
         }
         res = self.engine.process_signal(payload)
         self.assertEqual(res["status"], "FLOOR_EXCEEDED")
@@ -330,6 +332,7 @@ class TestCloneTradesEngine(unittest.TestCase):
                 "strike": 500,
                 "type": "CALL",
                 "price": 0.80,
+                "calledBy": "PC",
             }
             res = self.engine.process_signal(payload)
             self.assertEqual(res["status"], "MARKET_CLOSED")
@@ -361,6 +364,7 @@ class TestCloneTradesEngine(unittest.TestCase):
                 "strike": 500,
                 "type": "CALL",
                 "price": 0.80,
+                "calledBy": "PC",
             }
             res = self.engine.process_signal(payload)
             self.assertEqual(res["status"], "REJECTED_BROKER")
@@ -386,6 +390,7 @@ class TestCloneTradesEngine(unittest.TestCase):
             "type": "CALL",
             "price": 1.00,
             "qty": 4,
+            "calledBy": "PC",
         }
         res = self.engine.process_signal(payload)
         self.assertEqual(res["status"], "TAKEN")
@@ -446,6 +451,7 @@ class TestCloneTradesEngine(unittest.TestCase):
             "type": "CALL",
             "price": 1.00,
             "qty": 4,
+            "calledBy": "PC",
         }
         res = self.engine.process_signal(payload)
         self.assertEqual(res["status"], "TAKEN")
@@ -534,7 +540,7 @@ class TestCloneTradesEngine(unittest.TestCase):
         # Alert is 1.00, quote is 1.04
         self.quote_service.set_mock_price(".QQQ260929C741", 1.04)
         payload = {
-            "ticker": "QQQ", "exp": "2026-09-29", "strike": 741, "type": "CALL", "price": 1.00, "qty": 4
+            "ticker": "QQQ", "exp": "2026-09-29", "strike": 741, "type": "CALL", "price": 1.00, "qty": 4, "calledBy": "PC"
         }
         res = self.engine.process_signal(payload)
         self.assertTrue(res["ok"])
@@ -560,7 +566,7 @@ class TestCloneTradesEngine(unittest.TestCase):
         self.quote_service.set_mock_price(".SPY260925C500", 1.00)
 
         payload = {
-            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "qty": 4
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "qty": 4, "calledBy": "PC"
         }
         res = self.engine.process_signal(payload)
         self.assertTrue(res["ok"])
@@ -628,6 +634,241 @@ class TestCloneTradesEngine(unittest.TestCase):
         self.assertEqual(status["today_signals"][0].get("date_cst"), status["today_date_cst"])
 
 
+
+
+class TestSubStrategiesDiscretionary(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.config_mgr = CloneTradeConfigManager(root_dir=self.tmp_dir.name)
+        self.config_mgr.auto_take_trades = True
+        self.config_mgr.paper_mode = True
+        self.quote_service = OptionQuoteService()
+        self.engine = CloneTradeEngine(
+            config_mgr=self.config_mgr,
+            quote_service=self.quote_service,
+        )
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_pc_routing_and_execution(self):
+        """Signals with calledBy='PC' (or missing) route to PC sub-strategy."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+        payload = {
+            "ticker": "SPY",
+            "exp": "2026-09-25",
+            "strike": 500,
+            "type": "CALL",
+            "price": 0.80,
+            "calledBy": "PC",
+        }
+        res = self.engine.process_signal(payload)
+        self.assertEqual(res["status"], "TAKEN")
+        sig = res["signal"]
+        self.assertEqual(sig["called_by"], "PC")
+        self.assertEqual(sig["sub_strategy"], "PC")
+
+        trade = res["trade"]
+        self.assertEqual(trade["called_by"], "PC")
+        self.assertEqual(trade["sub_strategy"], "PC")
+
+    def test_missing_called_by_routes_to_others(self):
+        """Signals without calledBy key route to Others bucket and default to Tracking mode."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+        payload = {
+            "ticker": "SPY",
+            "exp": "2026-09-25",
+            "strike": 500,
+            "type": "CALL",
+            "price": 0.80,
+        }
+        res = self.engine.process_signal(payload)
+        self.assertEqual(res["status"], "TRACKING")
+        self.assertEqual(res["signal"]["called_by"], "")
+        self.assertEqual(res["signal"]["sub_strategy"], "Others")
+
+    def test_pc_variants_route_to_others(self):
+        """pc2, pc3, PC2, pc_2 and any other variant of PC must route to Others in Tracking mode."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+        for variant in ("pc2", "pc3", "PC2", "PC3", "pc_2", "pc-2", "PC_TEST", "pc daemon"):
+            payload = {
+                "ticker": "SPY",
+                "exp": "2026-09-25",
+                "strike": 500,
+                "type": "CALL",
+                "price": 0.80,
+                "calledBy": variant,
+            }
+            res = self.engine.process_signal(payload)
+            self.assertEqual(res["status"], "TRACKING")
+            self.assertEqual(res["signal"]["called_by"], variant)
+            self.assertEqual(res["signal"]["sub_strategy"], "Others")
+
+    def test_genie_routing_tracking_mode_and_custom_ladder(self):
+        """calledBy='Genie' routes to Genie, enters Tracking Mode by default, and allows manual Buy / Get In."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.85)
+        payload = {
+            "ticker": "SPY",
+            "exp": "2026-09-25",
+            "strike": 500,
+            "type": "CALL",
+            "price": 0.80,
+            "calledBy": "genie",
+        }
+        res = self.engine.process_signal(payload)
+        self.assertEqual(res["status"], "TRACKING")
+        sig = res["signal"]
+        self.assertEqual(sig["called_by"], "genie")
+        self.assertEqual(sig["sub_strategy"], "Genie")
+        self.assertEqual(sig["alert_price"], 0.80)
+        self.assertEqual(sig["market_price"], 0.85)
+        self.assertEqual(sig["current_price"], 0.85)
+        self.assertEqual(sig["peak_price"], 0.85)
+        self.assertEqual(sig["bottom_price"], 0.80)
+
+        # Now test user clicking 'Buy / Get In' button with 1 contract
+        take_res = self.engine.take_signal_manually(sig["id"], custom_price=0.85, custom_qty=1, paper_mode=True)
+        self.assertTrue(take_res["ok"])
+        trade = take_res["trade"]
+        self.assertEqual(trade["sub_strategy"], "Genie")
+        self.assertTrue(trade["paper_mode"])
+        self.assertEqual(trade["initial_quantity"], 1)
+
+        # Check that Genie's ladder has 3 tiers with 30%, 60%, 120% PT
+        tier_dist = trade.get("tier_distribution", [])
+        self.assertEqual(len(tier_dist), 3)
+        self.assertEqual(tier_dist[0]["target_profit_pct"], 30.0)
+        self.assertEqual(tier_dist[1]["target_profit_pct"], 60.0)
+        self.assertEqual(tier_dist[2]["target_profit_pct"], 120.0)
+
+    def test_genie_fixed_contract_limit_sizing(self):
+        """Requirement #1: Allow # of contracts as entry limit (e.g. 1 contract for $800 option)."""
+        self.config_mgr.update_sub_strategy("Genie", {
+            "entry_limit_mode": "contracts",
+            "allocation_contracts": 1,
+            "execution_mode": "paper",
+            "auto_take_trades": True,
+        })
+        self.quote_service.set_mock_price(".SPY260925C500", 8.00)  # $800 contract!
+
+        payload = {
+            "ticker": "SPY",
+            "exp": "2026-09-25",
+            "strike": 500,
+            "type": "CALL",
+            "price": 8.00,
+            "calledBy": "genie",
+        }
+        res = self.engine.process_signal(payload)
+        self.assertEqual(res["status"], "TAKEN")
+        trade = res["trade"]
+        self.assertEqual(trade["initial_quantity"], 1)
+        self.assertEqual(trade["remaining_quantity"], 1)
+
+    def test_price_watermarks_peak_and_bottom_for_pc_and_tracking(self):
+        """Requirements #2 & #3: Track alert px, broker @ alert, current px, peak, and bottom for PC trades & tracked alerts."""
+        self.quote_service.set_mock_price(".SPY260925C500", 1.00)
+
+        # 1. PC trade auto-takes live/paper
+        res_pc = self.engine.process_signal({
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "calledBy": "PC"
+        })
+        self.assertEqual(res_pc["status"], "TAKEN")
+        trade_id = res_pc["trade"]["id"]
+
+        # 2. Genie signal enters tracking mode
+        res_g = self.engine.process_signal({
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 1.00, "calledBy": "genie"
+        })
+        self.assertEqual(res_g["status"], "TRACKING")
+        sig_id = res_g["signal"]["id"]
+
+        # 1. Market dips to 0.85 (above initial -50% SL of 0.50) -> updates bottom prices
+        self.quote_service.set_mock_price(".SPY260925C500", 0.85)
+        self.engine.update_quotes_and_check_stops()
+
+        trade = self.engine.active_trades[trade_id]
+        self.assertEqual(trade.lowest_price, 0.85)
+        self.assertEqual(trade.highest_price, 1.00)
+
+        tracked_sig = next(s for s in self.engine.signals if s.id == sig_id)
+        self.assertEqual(tracked_sig.bottom_price, 0.85)
+        self.assertEqual(tracked_sig.peak_price, 1.00)
+
+        # 2. Market surges to 1.40 -> updates peak prices
+        self.quote_service.set_mock_price(".SPY260925C500", 1.40)
+        self.engine.update_quotes_and_check_stops()
+
+        # Trade had partial exit at PT and remains open or check active/closed
+        trade = self.engine.active_trades.get(trade_id) or self.engine.closed_trades[-1]
+        self.assertEqual(trade.highest_price, 1.40)
+        self.assertEqual(trade.lowest_price, 0.85)
+
+        tracked_sig = next(s for s in self.engine.signals if s.id == sig_id)
+        self.assertEqual(tracked_sig.peak_price, 1.40)
+        self.assertEqual(tracked_sig.bottom_price, 0.85)
+
+    def test_genie_toggle_to_live_mode(self):
+        """Genie can be toggled to live mode."""
+        self.config_mgr.update_sub_strategy("Genie", {"execution_mode": "live", "paper_mode": False})
+        genie_cfg = self.config_mgr.get_sub_strategy_config("Genie")
+        self.assertEqual(genie_cfg.execution_mode, "live")
+        self.assertFalse(genie_cfg.paper_mode)
+
+    def test_others_bucket_routing_and_strict_paper_enforcement(self):
+        """Any other calledBy routes to Others, defaults to Tracking, and cannot trade Live."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+        payload = {
+            "ticker": "SPY",
+            "exp": "2026-09-25",
+            "strike": 500,
+            "type": "CALL",
+            "price": 0.80,
+            "calledBy": "Daemon",
+        }
+        res = self.engine.process_signal(payload)
+        self.assertEqual(res["status"], "TRACKING")
+        self.assertEqual(res["signal"]["called_by"], "Daemon")
+        self.assertEqual(res["signal"]["sub_strategy"], "Others")
+
+        # Attempt to enable live mode on Others - must be blocked to paper or tracking!
+        self.config_mgr.update_sub_strategy("Others", {"execution_mode": "live", "paper_mode": False})
+        others_cfg = self.config_mgr.get_sub_strategy_config("Others")
+        self.assertNotEqual(others_cfg.execution_mode, "live")
+        self.assertTrue(others_cfg.paper_mode)
+
+    def test_sub_strategies_status_breakdown(self):
+        """get_status() returns per-sub-strategy statistics including tracked alerts and trades."""
+        self.quote_service.set_mock_price(".SPY260925C500", 0.80)
+
+        # 1 PC trade (auto-takes)
+        self.engine.process_signal({
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "PC"
+        })
+        # 1 Genie alert in tracking mode
+        res_g = self.engine.process_signal({
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "genie"
+        })
+        # 1 Others alert in tracking mode
+        self.engine.process_signal({
+            "ticker": "SPY", "exp": "2026-09-25", "strike": 500, "type": "CALL", "price": 0.80, "calledBy": "test_bot"
+        })
+
+        status = self.engine.get_status()
+        self.assertIn("sub_strategies", status)
+        sub_stats = status["sub_strategies"]
+        self.assertIn("PC", sub_stats)
+        self.assertIn("Genie", sub_stats)
+        self.assertIn("Others", sub_stats)
+
+        self.assertEqual(sub_stats["PC"]["open_trades_count"], 1)
+        self.assertEqual(sub_stats["Genie"]["tracked_alerts_count"], 1)
+        self.assertEqual(sub_stats["Others"]["tracked_alerts_count"], 1)
+
+        # Now take the Genie alert manually -> becomes open trade
+        self.engine.take_signal_manually(res_g["signal"]["id"], custom_qty=1, paper_mode=True)
+        status2 = self.engine.get_status()
+        self.assertEqual(status2["sub_strategies"]["Genie"]["open_trades_count"], 1)
 
 
 class TestOptionSymbols(unittest.TestCase):

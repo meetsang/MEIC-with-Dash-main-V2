@@ -155,6 +155,12 @@ class DRMAHMConfig(StrategyConfig):
     force_eod_exit: bool = True            # Force square-off before market close
     eod_exit_time_cst: str = '14:50'       # 14:50 CT (15:50 ET / 10 min before close)
 
+    # --- Session & Overnight Timing ---
+    enable_overnight_futures: bool = True     # Allow Directional ES Futures to trade overnight until 07:00 CST
+    overnight_flatten_time_cst: str = '07:00' # 07:00 CST: Flatten all overnight futures positions before market open
+    market_open_time_cst: str = '08:30'       # 08:30 CST: Market open (RTH open) & 30m ORB formation
+    regular_trading_start_time_cst: str = '09:00' # 09:00 CST: 30m ORB established, start regular daytime trading
+
     # --- Exit Styles ---
     # 'trend_runner': Rides 21 EMA trail, exits on 2-bar close across MA or full H-M cross across 50
     # 'confirmed_hm': Exits when Fast crosses Slow AND crosses 50 line

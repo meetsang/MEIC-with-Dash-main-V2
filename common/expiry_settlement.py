@@ -683,11 +683,14 @@ def trade_to_history_row(
     from common.history_adapter import (
         is_skyline_trade, skyline_trade_to_history_row,
         is_drma_hm_trade, drma_hm_trade_to_history_row,
+        is_drma_stocks_trade, drma_stocks_trade_to_history_row,
         is_iron_fly_trade, iron_fly_trade_to_history_row,
     )
 
     if is_skyline_trade(trade):
         return skyline_trade_to_history_row(trade)
+    if is_drma_stocks_trade(trade):
+        return drma_stocks_trade_to_history_row(trade)
     if is_drma_hm_trade(trade):
         return drma_hm_trade_to_history_row(trade)
     if is_iron_fly_trade(trade):

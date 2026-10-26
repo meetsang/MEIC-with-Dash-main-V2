@@ -84,6 +84,35 @@ class BrokerBase(ABC):
     ) -> OrderResult:
         raise NotImplementedError
 
+    def place_debit_spread_order(
+        self,
+        long_symbol: str,
+        short_symbol: str,
+        qty: int,
+        debit: float,
+    ) -> OrderResult:
+        """Place a vertical debit spread order (BUY_TO_OPEN long, SELL_TO_OPEN short)."""
+        legs = [
+            ComboLeg(symbol=long_symbol, action='BUY_TO_OPEN', quantity=qty),
+            ComboLeg(symbol=short_symbol, action='SELL_TO_OPEN', quantity=qty),
+        ]
+        return self.place_multi_leg_order(legs, price=-abs(debit))
+
+    def place_debit_spread_close_order(
+        self,
+        long_symbol: str,
+        short_symbol: str,
+        qty: int,
+        credit: float,
+    ) -> OrderResult:
+        """Place a vertical debit spread closing order (SELL_TO_CLOSE long, BUY_TO_CLOSE short)."""
+        legs = [
+            ComboLeg(symbol=long_symbol, action='SELL_TO_CLOSE', quantity=qty),
+            ComboLeg(symbol=short_symbol, action='BUY_TO_CLOSE', quantity=qty),
+        ]
+        return self.place_multi_leg_order(legs, price=abs(credit))
+
+
     @abstractmethod
     def place_spread_close_order(
         self,

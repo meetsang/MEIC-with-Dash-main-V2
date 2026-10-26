@@ -134,6 +134,87 @@ def drma_hm_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, An
     }
 
 
+def is_drma_stocks_trade(trade: Dict[str, Any]) -> bool:
+    strat = trade.get('strategy')
+    sub = trade.get('sub_strategy')
+    return (
+        strat == trades_layout.STRATEGY_DRMA_STOCKS
+        or sub in (trades_layout.STRATEGY_DRMA_STOCK_DIR, trades_layout.STRATEGY_DRMA_STOCK_NONDIR, trades_layout.STRATEGY_DRMA_STOCK_EQUITY)
+        or 'equity_stock' in str(trade.get('structure_type', '')).lower()
+        or (bool(trade.get('ticker')) and trade.get('ticker') != 'SPX' and 'drma' in str(strat or '').lower())
+    )
+
+
+def drma_stocks_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Map a DRMA Stocks trade JSON to a dashboard history row."""
+    entered_at = trade.get('entered_at') or ''
+    date_opened = entered_at[:10] if len(entered_at) >= 10 else str(trade.get('date') or '')
+    if not date_opened:
+        return None
+
+    ticker = trade.get('ticker') or ''
+    trade_id = trade.get('trade_id') or trade.get('lot') or f"{ticker}_trade_{date_opened}"
+    status = str(trade.get('status') or 'open').upper()
+    qty = int(trade.get('quantity') or trade.get('shares') or 1)
+    fill = float(trade.get('entry_price') or 0.0)
+    exit_p = trade.get('exit_price')
+    close_debit = float(exit_p) if exit_p is not None else None
+
+    pnl = trade.get('realized_pnl_dollars')
+    if pnl is None and trade.get('realized_pnl') is not None:
+        pnl = float(trade['realized_pnl'])
+
+    side = str(trade.get('side') or trade.get('opt_type') or 'LONG').upper()
+    short_sym = ''
+    long_sym = ''
+    short_k = ''
+    long_k = ''
+    structs = trade.get('structures') or []
+    if structs:
+        legs = structs[0].get('legs') or []
+        for leg in legs:
+            action = str(leg.get('action') or '').upper()
+            k_val = str(leg.get('strike') or '')
+            if 'SELL' in action:
+                short_sym = leg.get('symbol') or f"K{k_val}"
+                short_k = k_val
+            elif 'BUY' in action:
+                long_sym = leg.get('symbol') or f"K{k_val}"
+                long_k = k_val
+        if not short_k and len(legs) > 1:
+            short_k = str(legs[1].get('strike') or '')
+        if not long_k and len(legs) > 0:
+            long_k = str(legs[0].get('strike') or '')
+    else:
+        long_sym = ticker
+        short_sym = f"{qty} shs"
+
+    return {
+        'date_opened': date_opened,
+        'time_opened': entered_at,
+        'strategy': trades_layout.STRATEGY_DRMA_STOCKS,
+        'ticker': ticker,
+        'lot': trade_id,
+        'side': side,
+        'short_symbol': short_sym,
+        'long_symbol': long_sym,
+        'short_strike': short_k,
+        'long_strike': long_k,
+        'quantity': qty,
+        'open_credit': fill,
+        'short_open_price': fill,
+        'long_open_price': 0.0,
+        'short_close_price': close_debit,
+        'long_close_price': 0.0,
+        'close_debit': close_debit,
+        'pnl': pnl,
+        'status': status,
+        'open_order_id': trade.get('open_order_id', ''),
+        'short_close_order_id': trade.get('close_order_id', ''),
+        'paper': 1,
+    }
+
+
 def is_iron_fly_trade(trade: Dict[str, Any]) -> bool:
     strat = trade.get('strategy')
     return strat in (trades_layout.STRATEGY_IRON_FLY, trades_layout.STRATEGY_IRON_FLY_XSP) or bool(trade.get('structures') and 'IF_' in str(trade.get('structures', [{}])[0].get('name', '')))
@@ -177,14 +258,67 @@ def iron_fly_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, A
     }
 
 
+def is_inverse_meic_trade(trade: Dict[str, Any]) -> bool:
+    strat = trade.get('strategy') or trade.get('entry', {}).get('strategy')
+    return strat == trades_layout.STRATEGY_INVERSE_MEIC or str(trade.get('lot', '')).startswith('inv-')
+
+
+def inverse_meic_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Map an Inverse MEIC trade JSON to a dashboard history row."""
+    entry = trade.get('entry') or {}
+    ts = entry.get('timestamp') or ''
+    date_opened = ts[:10] if len(ts) >= 10 else str(trade.get('date') or '')
+    if not date_opened:
+        return None
+
+    status = str(trade.get('status') or 'open').upper()
+    qty = int(trade.get('quantity') or 1)
+    debit = float(entry.get('debit') or entry.get('net_debit') or 0.0)
+    close_debit = trade.get('close_debit') or trade.get('short_close_price')
+    close_debit_f = float(close_debit) if close_debit is not None else None
+
+    pnl = trade.get('realized_pnl_dollars')
+    if pnl is None and close_debit_f is not None:
+        pnl = round((close_debit_f - debit) * 100 * qty, 2)
+
+    side = str(entry.get('side') or trade.get('side') or 'C').upper()
+    short_sym = trade.get('short_leg', {}).get('symbol', '')
+    long_sym = trade.get('long_leg', {}).get('symbol', '')
+
+    return {
+        'date_opened': date_opened,
+        'time_opened': ts[11:19] if len(ts) >= 19 else '',
+        'strategy': trades_layout.STRATEGY_INVERSE_MEIC,
+        'lot': str(trade.get('lot') or entry.get('lot') or f"inv-{date_opened}"),
+        'side': side,
+        'short_symbol': short_sym,
+        'long_symbol': long_sym,
+        'quantity': qty,
+        'open_credit': -debit,  # Net debit
+        'short_open_price': float(trade.get('short_leg', {}).get('fill_price') or 0.0),
+        'long_open_price': float(trade.get('long_leg', {}).get('fill_price') or 0.0),
+        'short_close_price': close_debit_f,
+        'long_close_price': None,
+        'close_debit': close_debit_f,
+        'pnl': pnl,
+        'status': status,
+        'open_order_id': trade.get('open_order_id', ''),
+        'short_close_order_id': trade.get('short_close_order_id', ''),
+        'paper': 1 if bool(trade.get('paper', True)) else 0,
+    }
+
+
 def production_strategy_dirs() -> List[tuple[str, str, str]]:
     return [
         (trades_layout.STRATEGY_MEIC, trades_layout.MEIC_ACTIVE, trades_layout.MEIC_HISTORY),
         (trades_layout.STRATEGY_MANUAL, trades_layout.MANUAL_ACTIVE, trades_layout.MANUAL_HISTORY),
         (trades_layout.STRATEGY_SKYLINE, trades_layout.SKYLINE_ACTIVE, trades_layout.SKYLINE_HISTORY),
         (trades_layout.STRATEGY_DRMA_HM, trades_layout.DRMA_HM_ACTIVE, trades_layout.DRMA_HM_HISTORY),
+        (trades_layout.STRATEGY_DRMA_STOCKS, trades_layout.DRMA_STOCKS_ACTIVE, trades_layout.DRMA_STOCKS_HISTORY),
         (trades_layout.STRATEGY_IRON_FLY, trades_layout.IRON_FLY_ACTIVE, trades_layout.IRON_FLY_HISTORY),
         (trades_layout.STRATEGY_IRON_FLY_XSP, trades_layout.IRON_FLY_XSP_ACTIVE, trades_layout.IRON_FLY_XSP_HISTORY),
         (trades_layout.STRATEGY_PERMA_BULL, trades_layout.PERMA_BULL_ACTIVE, trades_layout.PERMA_BULL_HISTORY),
         (trades_layout.STRATEGY_MEAN_REVERSION, trades_layout.MEAN_REVERSION_ACTIVE, trades_layout.MEAN_REVERSION_HISTORY),
+        (trades_layout.STRATEGY_INVERSE_MEIC, trades_layout.INVERSE_MEIC_ACTIVE, trades_layout.INVERSE_MEIC_HISTORY),
     ]
+

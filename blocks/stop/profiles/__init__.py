@@ -8,3 +8,5 @@ from blocks.stop.profiles import mean_reversion  # noqa: F401 — registers mean
 from blocks.stop.profiles import iron_fly  # noqa: F401 — registers iron_fly_break_even_cut
 from blocks.stop.profiles import iron_fly_xsp  # noqa: F401 — registers iron_fly_xsp_break_even_cut
 from blocks.stop.profiles import drma_hm  # noqa: F401 — registers drma_hm_strategy
+from blocks.stop.profiles import inverse_meic  # noqa: F401 — registers inverse_meic_debit_spread
+
