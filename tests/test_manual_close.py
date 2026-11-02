@@ -38,11 +38,23 @@ class TestManualClose(unittest.TestCase):
     def test_close_structure_reverses_legs(self):
         from unittest.mock import patch
         broker = MockBroker()
+        today = date.today().isoformat()
         with patch('common.manual_close.get_shared_broker_for_strategy', return_value=broker):
             result = close_structure('SKYLINE_SPX', 'BF1', root=self.tmp, paper=True)
         self.assertTrue(result.success)
         self.assertEqual(len(broker.placed), 1)
         self.assertEqual(broker.placed[0][0], 'multi_leg')
+
+        # Check that history file has exit_price and close_reason properly recorded
+        hist_file = os.path.join(self.tmp, 'trades', 'history', 'SKYLINE_SPX', f'skyline_{today}.json')
+        self.assertTrue(os.path.isfile(hist_file))
+        with open(hist_file, encoding='utf-8') as f:
+            h = json.load(f)
+        self.assertEqual(h['status'], 'closed')
+        self.assertIn('exit_price', h)
+        self.assertEqual(h['close_reason'], 'manual_close')
+        self.assertEqual(h['exit_reason'], 'manual_close')
+        self.assertEqual(h['close_mechanism'], 'manual_close')
 
 
 if __name__ == '__main__':

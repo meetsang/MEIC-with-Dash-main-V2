@@ -8,7 +8,15 @@ from dashboard.server import app
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    import os, shutil
+    import dashboard.server as srv
+    real_root = srv.ROOT
+    os.makedirs(tmp_path / 'config', exist_ok=True)
+    if os.path.exists(os.path.join(real_root, 'config', 'strategies.yaml')):
+        shutil.copy(os.path.join(real_root, 'config', 'strategies.yaml'), tmp_path / 'config' / 'strategies.yaml')
+    monkeypatch.setattr(srv, 'ROOT', str(tmp_path))
+    monkeypatch.setattr('common.broker_factory.ROOT', str(tmp_path), raising=False)
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client

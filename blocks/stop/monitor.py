@@ -52,6 +52,7 @@ from blocks.stop.stop_ownership import has_ownership_conflict
 from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
 from common.mqtt_prices import mqtt_cache_is_stale
 from common.streamer_health import is_stale as streamer_prices_stale
+from blocks.stop.phases import PhaseAction
 from blocks.stop.stop_profile import StopProfile, resolve_stop_profile
 
 if TYPE_CHECKING:
@@ -546,7 +547,18 @@ class StopMonitor:
         self.state['long_close_price'] = result.long_fill_price
         self.state['spread_close_order_id'] = None
         self.state['active_stop'] = None
-        self._finalize_close(reason=self.state.get('close_mechanism') or 'manual_close')
+        spx = self.prices.get_spx() if hasattr(self.prices, 'get_spx') else None
+        state_mod.append_stop_history(
+            self.state,
+            action='filled',
+            order_id=result.order_id,
+            price=result.filled_price,
+            phase=0,
+            reason=self.state.get('close_mechanism') or 'spread_close',
+            spx_price_at_event=spx,
+            status='filled',
+        )
+        self._finalize_close(reason=self.state.get('close_mechanism') or 'manual_close', spx_price=spx)
 
     def _poll_spread_close(self) -> bool:
         """Poll working spread-close order. True = handled; skip leg-by-leg long chase."""
@@ -640,6 +652,16 @@ class StopMonitor:
         else:
             result = self.broker.place_spread_close_order(short_sym, long_sym, qty, debit)
         if not result.success:
+            err_msg = str(getattr(result, 'message', '') or '')
+            if getattr(result, 'status', '') == 'rejected_preflight' and (
+                'position_flat' in err_msg.lower() or 'flat' in err_msg.lower()
+            ):
+                log.info('Spread close: Position confirmed already FLAT on broker for %s — marking closed', self.json_path)
+                if not self.state.get('close_mechanism'):
+                    self.state['close_mechanism'] = reason
+                self.state['status'] = 'closed'
+                state_mod.save_state(self.json_path, self.state)
+                return
             if is_instruments_stopped_trading_error(result.message):
                 self._mark_instruments_stopped_trading(result.message)
             else:
@@ -953,16 +975,21 @@ class StopMonitor:
             return
 
         for phase in self.phases:
-            if phase.should_activate(self):
-                self._breach_active = True
-                t = threading.Thread(
-                    target=self._threaded_phase_execute,
-                    args=(phase,),
-                    name=f'breach-{self.state.get("lot","?")}-{self.state.get("entry",{}).get("side","?")}',
-                    daemon=True,
-                )
-                t.start()
-                return
+            if hasattr(phase, 'evaluate'):
+                action = phase.evaluate(self)
+                if action == PhaseAction.NONE:
+                    continue
+            elif not phase.should_activate(self):
+                continue
+            self._breach_active = True
+            t = threading.Thread(
+                target=self._threaded_phase_execute,
+                args=(phase,),
+                name=f'breach-{self.state.get("lot","?")}-{self.state.get("entry",{}).get("side","?")}',
+                daemon=True,
+            )
+            t.start()
+            return
 
         self._maybe_merge_disk_stop_state()
         state_mod.save_state(self.json_path, self.state)

@@ -382,6 +382,25 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
             summary['mean_reversion_settlement_error'] = str(exc)
 
         try:
+            import glob
+            from strategies.drma_stocks.settlement import settle_open_stock_trade
+
+            active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, root)
+            settled = 0
+            if os.path.isdir(active):
+                for path in glob.glob(os.path.join(active, '*.json')):
+                    if os.path.basename(path).startswith('session_'):
+                        continue
+                    if settle_open_stock_trade(path, root, for_date=today):
+                        settled += 1
+            summary['drma_stocks_settled'] = settled
+            if settled:
+                lg.info('DRMA_HM_STOCKS EOD settlement: %d trade(s) moved to history', settled)
+        except Exception as exc:
+            lg.exception('DRMA_HM_STOCKS EOD settlement failed: %s', exc)
+            summary['drma_stocks_settlement_error'] = str(exc)
+
+        try:
             from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
             export_strategy_daily_pnl_csv(root)
             lg.info('EOD: Updated strategy_daily_pnl.csv successfully')

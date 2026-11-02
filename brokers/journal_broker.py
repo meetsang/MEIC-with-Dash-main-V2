@@ -902,7 +902,25 @@ class JournalBroker(BrokerBase):
         return self.place_market_order('BUY_TO_CLOSE', symbol, qty)
 
     def get_option_price(self, symbol: str) -> Optional[float]:
-        return self._inner.get_option_price(symbol)
+        if hasattr(self._inner, 'get_option_price'):
+            try:
+                p = self._inner.get_option_price(symbol)
+                if p is not None and p > 0:
+                    return p
+            except Exception:
+                pass
+        try:
+            from common.mqtt_prices import get_shared_cache
+            cache = get_shared_cache()
+            mid = cache.get_option_mid(symbol)
+            if mid is not None and mid > 0:
+                return mid
+            raw = cache.get(symbol)
+            if raw is not None and raw > 0:
+                return raw
+        except Exception:
+            pass
+        return None
 
     def get_spx_price(self) -> Optional[float]:
         return self._inner.get_spx_price()

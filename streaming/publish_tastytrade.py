@@ -147,6 +147,10 @@ async def _stream_loop(session, slog):
     from tastytrade import DXLinkStreamer
     from tastytrade.dxfeed import Quote, Trade
 
+    # Re-apply log level after tastytrade package import (tastytrade.__init__ sets DEBUG)
+    logging.getLogger('tastytrade').setLevel(logging.WARNING)
+    logging.getLogger('websockets').setLevel(logging.WARNING)
+
     _session_started = central_now()
     guard = LadderSubscribeGuard()
     quote_set, sub_meta = build_quote_subscribe_set()
@@ -340,6 +344,12 @@ async def _stream_loop(session, slog):
                         )
                     continue
                 if mqtt_sym in ('ES', 'MES', 'NQ', 'MNQ') and price > 0:
+                    size = int(trade.size or 0)
+                    day_vol = int(trade.day_volume or 0)
+                    if size > 0:
+                        _mqtt_publish_aux(f'{mqtt_sym}{TRADE_SIZE_TOPIC_SUFFIX}', str(size))
+                    if day_vol > 0:
+                        _mqtt_publish_aux(f'{mqtt_sym}{VOLUME_TOPIC_SUFFIX}', str(day_vol))
                     _publish_genuine(
                         raw_sym,
                         price,
@@ -399,6 +409,10 @@ async def _stream_loop(session, slog):
 
             quote_set, sub_meta = build_quote_subscribe_set()
             trade_set = build_trade_subscribe_set(quote_set)
+            if not fut_symbols and tick % 30 == 0:
+                fut_symbols = await _resolve_futures_symbols()
+            quote_set.update(fut_symbols)
+            trade_set.update(fut_symbols)
             new_quotes = guard.filter_subscribe(quote_set - active_quotes)
             new_trades = trade_set - active_trades
             if new_quotes:
@@ -443,5 +457,5 @@ def main():
 if __name__ == '__main__':
     from common.process_lock import process_lock
 
-    with process_lock('streamer', command='publish_tastytrade.py'):
+    with process_lock('streamer'):
         main()

@@ -123,6 +123,14 @@ class PermaBullPCSStrategy(BaseStrategy):
                     'profit_target_debit': self.config.profit_target_debit,
                 },
             )
+            if self.config.paper and trade_path and os.path.isfile(trade_path):
+                try:
+                    from blocks.stop import state as state_mod
+                    st = state_mod.load_state(trade_path)
+                    st['paper'] = True
+                    state_mod.save_state(trade_path, st)
+                except Exception as exc:
+                    self.logger.warning('Failed to stamp paper flag in trade state: %s', exc)
             self._register_streamer_legs(short_sym, long_sym)
             self._save_session_state(
                 root,

@@ -68,6 +68,9 @@ class MockBroker(BrokerBase):
     return r
 
   def place_limit_order(self, action, symbol, qty, price) -> OrderResult:
+    action_str = str(action).upper()
+    if action_str in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE') and self.spread_position_flat:
+      return OrderResult(False, None, 'rejected_preflight', message='position_not_closable_position_flat', transmitted=False)
     oid = self._next_id()
     r = OrderResult(True, oid, 'working')
     self.orders[oid] = r
@@ -75,6 +78,9 @@ class MockBroker(BrokerBase):
     return r
 
   def place_market_order(self, action, symbol, qty) -> OrderResult:
+    action_str = str(action).upper()
+    if action_str in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE') and self.spread_position_flat:
+      return OrderResult(False, None, 'rejected_preflight', message='position_not_closable_position_flat', transmitted=False)
     oid = self._next_id()
     r = OrderResult(True, oid, 'filled', filled_price=1.0, filled_quantity=qty)
     self.orders[oid] = r
@@ -88,7 +94,43 @@ class MockBroker(BrokerBase):
     self.placed.append(('spread', short_symbol, credit))
     return r
 
+  def inspect_legs_closable(self, legs, *, priority='HIGH'):
+    if self.spread_position_flat:
+      return False, 'position_flat'
+    if self.spread_position_state != 'closable':
+      return False, self.spread_position_state
+    if not self.single_leg_positions and self.default_single_leg_qty is None:
+      return True, 'closable'
+    for leg in legs:
+      action = str(getattr(leg, 'action', '')).upper()
+      if action not in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE'):
+        continue
+      held = self.get_single_leg_position_qty(leg.symbol)
+      if held == 0:
+        return False, 'position_flat'
+      qty_needed = int(getattr(leg, 'quantity', 1) or 1)
+      if action == 'BUY_TO_CLOSE':
+        if held > 0:
+          return False, f'position_mismatch_long (holding=+{held})'
+        if abs(held) < qty_needed:
+          return False, f'insufficient_short_qty (holding={held})'
+      elif action == 'SELL_TO_CLOSE':
+        if held < 0:
+          return False, f'position_mismatch_short (holding={held})'
+        if held < qty_needed:
+          return False, f'insufficient_long_qty (holding=+{held})'
+    return True, 'closable'
+
   def place_multi_leg_order(self, legs, *, price, order_type='LIMIT', time_in_force='DAY') -> OrderResult:
+    closing_legs = [l for l in legs if str(getattr(l, 'action', '')).upper() in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE')]
+    if closing_legs:
+      closable, reason = self.inspect_legs_closable(closing_legs)
+      if not closable:
+        return OrderResult(
+            False, None, 'rejected_preflight',
+            message=f'spread_not_closable_{reason}',
+            transmitted=False,
+        )
     oid = self._next_id()
     r = OrderResult(True, oid, 'filled', filled_price=abs(price), filled_quantity=1)
     self.orders[oid] = r

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from blocks.stop.fill_sync import stop_is_current
 from common.market_hours import (
     is_after_market_close_ct,
+    is_cash_session_open_ct,
     session_row_is_0dte,
     session_row_past_0dte_close,
     trade_expiry_on_or_before_today,
@@ -111,6 +112,16 @@ class TestMarketHours(unittest.TestCase):
         self.assertFalse(
             trade_past_0dte_close(state, now=datetime(2026, 7, 9, 16, 0))
         )
+
+    def test_is_cash_session_open_ct(self):
+        # Weekday RTH (8:30 AM - 3:00 PM CT)
+        self.assertFalse(is_cash_session_open_ct(datetime(2026, 10, 28, 8, 17, 0)))
+        self.assertTrue(is_cash_session_open_ct(datetime(2026, 10, 28, 8, 30, 0)))
+        self.assertTrue(is_cash_session_open_ct(datetime(2026, 10, 28, 14, 59, 59)))
+        self.assertFalse(is_cash_session_open_ct(datetime(2026, 10, 28, 15, 0, 0)))
+        self.assertFalse(is_cash_session_open_ct(datetime(2026, 10, 28, 23, 0, 0)))
+        # Weekend (Saturday)
+        self.assertFalse(is_cash_session_open_ct(datetime(2026, 10, 24, 10, 0, 0)))
 
 
 if __name__ == '__main__':

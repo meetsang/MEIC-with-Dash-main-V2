@@ -1290,6 +1290,65 @@
   #hist-overview-collapsible {
     transition: all 0.25s ease;
   }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     DISCRETIONARY CLONE TRADES — High Contrast Dark Mode
+     ═══════════════════════════════════════════════════════════════════════════ */
+  #strategy-clone-trades[data-visible="true"] { display: block !important; min-height: 200px; }
+  #strategy-clone-trades[data-visible="false"] { display: none !important; }
+  #strategy-clone-trades,
+  #modal-clone-take-manual,
+  #modal-clone-edit-ladder,
+  #modal-clone-ladder-execution {
+    color: #f1f5f9 !important;
+  }
+  #strategy-clone-trades .section-title,
+  #modal-clone-take-manual .section-title,
+  #modal-clone-edit-ladder .section-title,
+  #modal-clone-ladder-execution .section-title {
+    color: #e2e8f0 !important;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+  }
+  #strategy-clone-trades .text-muted,
+  #strategy-clone-trades .text-secondary,
+  #modal-clone-take-manual .text-muted,
+  #modal-clone-take-manual .text-secondary,
+  #modal-clone-edit-ladder .text-muted,
+  #modal-clone-edit-ladder .text-secondary,
+  #modal-clone-ladder-execution .text-muted,
+  #modal-clone-ladder-execution .text-secondary {
+    color: #cbd5e1 !important;
+  }
+  #strategy-clone-trades .card-header,
+  #modal-clone-take-manual .modal-header,
+  #modal-clone-edit-ladder .modal-header,
+  #modal-clone-ladder-execution .modal-header {
+    color: #f8fafc !important;
+    font-weight: 700;
+  }
+  #strategy-clone-trades .input-group-text,
+  #modal-clone-take-manual .input-group-text,
+  #modal-clone-edit-ladder .input-group-text {
+    color: #e2e8f0 !important;
+  }
+  #strategy-clone-trades table thead th,
+  #modal-clone-edit-ladder table thead th,
+  #modal-clone-ladder-execution table thead th {
+    background: #181c28 !important;
+    color: #e2e8f0 !important;
+    border-bottom: 2px solid #3b4061 !important;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  #strategy-clone-trades table tbody td,
+  #modal-clone-edit-ladder table tbody td,
+  #modal-clone-ladder-execution table tbody td {
+    color: #f1f5f9 !important;
+    vertical-align: middle;
+  }
 </style>
 </head>
 <body>
@@ -1343,8 +1402,9 @@
       </div>
       <div class="col-6 col-lg-2">
         <div class="stat-card">
-          <div class="section-title">Discretionary P&amp;L <span class="badge bg-danger ms-1">LIVE</span></div>
+          <div class="section-title" style="color:#e2e8f0;">Discretionary P&amp;L <span class="badge bg-danger ms-1">LIVE</span> <span class="badge bg-secondary ms-1">PAPER</span></div>
           <div class="stat-val" id="pnl-clone-today">$0.00</div>
+          <small class="d-block font-monospace mt-1" id="pnl-clone-today-sub" style="color:#cbd5e1;font-size:0.72rem;">Live: $0.00 | Paper: $0.00</small>
         </div>
       </div>
       <div class="col-6 col-lg-2">
@@ -1858,7 +1918,7 @@
       <!-- Top Row KPI Cards -->
       <div class="row g-3 mb-3">
         <!-- Status & Mode -->
-        <div class="col-md-3">
+        <div class="col-xl-3 col-lg-3 col-md-6">
           <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
             <div class="section-title">Today's Status</div>
             <div id="drma-hm-status" class="fw-semibold mt-1">Loading...</div>
@@ -1867,17 +1927,32 @@
           </div>
         </div>
 
-        <!-- P/L -->
-        <div class="col-md-3">
-          <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
-            <div class="section-title" id="drma-hm-pnl-label">Paper P/L (realized + open)</div>
-            <div id="drma-hm-pnl" class="fs-4 fw-bold mt-1">$0.00</div>
-            <small class="text-muted d-block mt-1" id="drma-hm-pnl-sub">Realized: $0.00 | Open: $0.00</small>
+        <!-- Live P/L -->
+        <div class="col-xl-2 col-lg-2 col-md-6">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #ef444444;border-left:3px solid #ef4444;">
+            <div class="section-title d-flex justify-content-between align-items-center">
+              <span class="text-danger fw-bold"><i class="bi bi-broadcast me-1"></i>Live P/L</span>
+              <span class="badge bg-danger text-light" style="font-size:0.65rem;">REAL</span>
+            </div>
+            <div id="drma-hm-live-pnl" class="fs-4 fw-bold mt-1 text-light">$0.00</div>
+            <small class="text-muted d-block mt-1" id="drma-hm-live-pnl-sub">Real: $0.00 | Open: $0.00</small>
+          </div>
+        </div>
+
+        <!-- Paper P/L -->
+        <div class="col-xl-2 col-lg-2 col-md-6">
+          <div class="pnl-card" style="background:#1a1d27;border:1px solid #0284c744;border-left:3px solid #38bdf8;">
+            <div class="section-title d-flex justify-content-between align-items-center">
+              <span class="text-info fw-bold"><i class="bi bi-journal-text me-1"></i>Paper P/L</span>
+              <span class="badge bg-secondary text-light" style="font-size:0.65rem;">SIM</span>
+            </div>
+            <div id="drma-hm-paper-pnl" class="fs-4 fw-bold mt-1 text-light">$0.00</div>
+            <small class="text-muted d-block mt-1" id="drma-hm-paper-pnl-sub">Real: $0.00 | Open: $0.00</small>
           </div>
         </div>
 
         <!-- Quick Controls -->
-        <div class="col-md-3">
+        <div class="col-xl-2 col-lg-2 col-md-6">
           <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
             <div class="section-title">Controls &amp; Actions</div>
             <div class="d-flex gap-2 flex-wrap mt-2">
@@ -1889,7 +1964,7 @@
         </div>
 
         <!-- Setup Confluence Badge & Recommendation -->
-        <div class="col-md-3">
+        <div class="col-xl-3 col-lg-3 col-md-6">
           <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
             <div class="section-title">Live Setup Confluence</div>
             <div class="d-flex align-items-center gap-2 mt-1">
@@ -1900,6 +1975,10 @@
           </div>
         </div>
       </div>
+      <!-- Hidden legacy elements for JS compatibility -->
+      <span id="drma-hm-pnl-label" style="display:none;"></span>
+      <span id="drma-hm-pnl" style="display:none;"></span>
+      <span id="drma-hm-pnl-sub" style="display:none;"></span>
 
       <!-- Second Row: Technical Matrix & Key Reference Levels -->
       <div class="row g-3 mb-3">
@@ -2113,6 +2192,13 @@
                 </button>
               </div>
               <div class="row g-2">
+                <div class="col-12">
+                  <label class="form-label small mb-1" title="Master toggle to enable or disable Directional ES Futures trading entirely">Futures Trading Switch</label>
+                  <select id="drma-hm-ov-futures-enabled" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
+                    <option value="true">Enabled (Trade /ES Outright on Grade A+)</option>
+                    <option value="false">Disabled (Turn Off Futures Completely)</option>
+                  </select>
+                </div>
                 <div class="col-12">
                   <label class="form-label small mb-1">Execution Mode</label>
                   <select id="drma-hm-ov-fut-paper" class="form-select form-select-sm" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
@@ -2737,12 +2823,12 @@
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
           <div>
             <div class="d-flex align-items-center gap-2">
-              <h5 class="mb-0 fw-bold"><i class="bi bi-copy text-info me-2"></i>Discretionary Clone Trades</h5>
+              <h5 class="mb-0 fw-bold text-light"><i class="bi bi-copy text-info me-2"></i>Discretionary Clone Trades</h5>
               <span class="badge bg-info text-dark" style="font-size:0.75rem;">WEBHOOK ENGINE</span>
               <span id="clone-market-badge" class="badge bg-secondary" style="font-size:0.75rem;">CHECKING MARKET...</span>
               <span id="clone-broker-badge" class="badge bg-secondary" style="font-size:0.75rem;">CHECKING BROKER...</span>
             </div>
-            <small class="text-muted">Automated options cloning with 25% chase guard, budget sizing, and unbalanced OCO ladders</small>
+            <small class="d-block mt-1" style="color:#cbd5e1;font-size:0.82rem;">Automated options cloning with 25% chase guard, budget sizing, and unbalanced OCO ladders</small>
           </div>
 
           <!-- Daily Auto-Take Toggle & Quick Actions -->
@@ -2750,7 +2836,7 @@
             <button id="clone-autotake-btn" class="btn btn-outline-warning fw-bold px-3 py-2" onclick="toggleCloneAutoTake()" style="border-radius:8px;">
               <i class="bi bi-pause-circle me-1"></i>Auto-Take: OFF (Skip Brokerage)
             </button>
-            <button class="btn btn-outline-secondary px-3 py-2" onclick="loadCloneTrades()" style="border-radius:8px;">
+            <button class="btn btn-outline-light px-3 py-2" onclick="loadCloneTrades()" style="border-radius:8px;">
               <i class="bi bi-arrow-clockwise me-1"></i>Refresh
             </button>
           </div>
@@ -2759,27 +2845,64 @@
         <!-- Metric Cards Row -->
         <div class="row g-2 mt-2">
           <div class="col-6 col-md-3">
-            <div class="p-2 rounded" style="background:#1c2030;border:1px solid #2d3148;">
-              <div class="text-muted text-uppercase" style="font-size:0.68rem;letter-spacing:0.05em;">Open Contracts</div>
-              <div class="fw-bold fs-5 text-light" id="clone-stat-contracts">0</div>
+            <div class="p-2 rounded h-100 d-flex flex-column justify-content-between" style="background:#1c2030;border:1px solid #2d3148;">
+              <div class="fw-bold text-uppercase" style="font-size:0.75rem;letter-spacing:0.05em;color:#f1f5f9;">Open Contracts</div>
+              <div class="fw-bold fs-4 text-light font-monospace my-1" id="clone-stat-contracts">0</div>
+              <div class="d-flex justify-content-between align-items-center font-monospace" style="font-size:0.74rem;color:#cbd5e1;border-top:1px solid #2d344d;padding-top:4px;">
+                <span>Live: <strong class="text-light" id="clone-stat-contracts-live">0</strong></span>
+                <span>Paper: <strong class="text-warning" id="clone-stat-contracts-paper">0</strong></span>
+              </div>
             </div>
           </div>
           <div class="col-6 col-md-3">
-            <div class="p-2 rounded" style="background:#1c2030;border:1px solid #2d3148;">
-              <div class="text-muted text-uppercase" style="font-size:0.68rem;letter-spacing:0.05em;">Unrealized P&amp;L</div>
-              <div class="fw-bold fs-5" id="clone-stat-unrealized" style="font-family:monospace;color:#cbd5e1;">$0.00</div>
+            <div class="p-2 rounded h-100 d-flex flex-column justify-content-between" style="background:#1c2030;border:1px solid #2d3148;">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-uppercase" style="font-size:0.75rem;letter-spacing:0.05em;color:#f1f5f9;">Unrealized P&amp;L</span>
+                <span class="font-monospace fw-bold" id="clone-stat-unrealized" style="font-size:0.82rem;color:#f1f5f9;">$0.00</span>
+              </div>
+              <div class="d-flex justify-content-between align-items-center my-1 gap-2 flex-wrap">
+                <div>
+                  <span class="badge bg-danger me-1" style="font-size:0.65rem;">LIVE</span>
+                  <span class="fw-bold fs-5 font-monospace text-light" id="clone-stat-unrealized-live">$0.00</span>
+                </div>
+                <div>
+                  <span class="badge bg-dark border border-warning text-warning me-1" style="font-size:0.65rem;">PAPER</span>
+                  <span class="fw-bold fs-5 font-monospace text-light" id="clone-stat-unrealized-paper">$0.00</span>
+                </div>
+              </div>
+              <div class="font-monospace" style="font-size:0.71rem;color:#cbd5e1;border-top:1px solid #2d344d;padding-top:4px;">
+                Active open positions (Live &amp; Paper)
+              </div>
             </div>
           </div>
           <div class="col-6 col-md-3">
-            <div class="p-2 rounded" style="background:#1c2030;border:1px solid #2d3148;">
-              <div class="text-muted text-uppercase" style="font-size:0.68rem;letter-spacing:0.05em;">Today's Realized P&amp;L</div>
-              <div class="fw-bold fs-5" id="clone-stat-realized" style="font-family:monospace;color:#cbd5e1;">$0.00</div>
+            <div class="p-2 rounded h-100 d-flex flex-column justify-content-between" style="background:#1c2030;border:1px solid #2d3148;">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-uppercase" style="font-size:0.75rem;letter-spacing:0.05em;color:#f1f5f9;">Today's Realized P&amp;L</span>
+                <span class="font-monospace fw-bold" id="clone-stat-realized" style="font-size:0.82rem;color:#f1f5f9;">$0.00</span>
+              </div>
+              <div class="d-flex justify-content-between align-items-center my-1 gap-2 flex-wrap">
+                <div>
+                  <span class="badge bg-danger me-1" style="font-size:0.65rem;">LIVE</span>
+                  <span class="fw-bold fs-5 font-monospace text-light" id="clone-stat-realized-live">$0.00</span>
+                </div>
+                <div>
+                  <span class="badge bg-dark border border-warning text-warning me-1" style="font-size:0.65rem;">PAPER</span>
+                  <span class="fw-bold fs-5 font-monospace text-light" id="clone-stat-realized-paper">$0.00</span>
+                </div>
+              </div>
+              <div class="font-monospace" style="font-size:0.71rem;color:#cbd5e1;border-top:1px solid #2d344d;padding-top:4px;">
+                Closed &amp; scaled legs today (Live &amp; Paper)
+              </div>
             </div>
           </div>
           <div class="col-6 col-md-3">
-            <div class="p-2 rounded" style="background:#1c2030;border:1px solid #2d3148;">
-              <div class="text-muted text-uppercase" style="font-size:0.68rem;letter-spacing:0.05em;">Signals Today</div>
-              <div class="fw-bold fs-5 text-info" id="clone-stat-signals">0</div>
+            <div class="p-2 rounded h-100 d-flex flex-column justify-content-between" style="background:#1c2030;border:1px solid #2d3148;">
+              <div class="fw-bold text-uppercase" style="font-size:0.75rem;letter-spacing:0.05em;color:#f1f5f9;">Signals Today</div>
+              <div class="fw-bold fs-4 text-info font-monospace my-1" id="clone-stat-signals">0</div>
+              <div class="font-monospace" style="font-size:0.71rem;color:#cbd5e1;border-top:1px solid #2d344d;padding-top:4px;">
+                Total webhook alerts received today
+              </div>
             </div>
           </div>
         </div>
@@ -2787,7 +2910,7 @@
         <!-- Sub-Strategy Filter Bar (PC / Genie / Others) -->
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 pt-2" style="border-top:1px solid #23293f;">
           <div class="d-flex align-items-center gap-2 flex-wrap">
-            <span class="text-muted fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">SUB-STRATEGIES:</span>
+            <span class="fw-bold" style="font-size:0.76rem;letter-spacing:0.04em;color:#f1f5f9;">SUB-STRATEGIES:</span>
             <div class="btn-group btn-group-sm" role="group" id="clone-substrat-filter-group">
               <button type="button" class="btn btn-info active fw-bold" id="btn-substrat-all" onclick="setCloneSubStrategyFilter('ALL')">
                 <i class="bi bi-grid-fill me-1"></i>All Sub-Strategies
@@ -3125,10 +3248,10 @@
     <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
       <div class="card-header d-flex justify-content-between align-items-center">
         <div class="d-flex align-items-center gap-2">
-          <span class="fw-bold"><i class="bi bi-calendar-check me-2 text-info"></i>Today's Signals &amp; Closed Trades</span>
+          <span class="fw-bold text-light"><i class="bi bi-calendar-check me-2 text-info"></i>Today's Signals &amp; Closed Trades</span>
           <span class="badge bg-primary font-monospace" id="clone-today-badge">TODAY (CST)</span>
         </div>
-        <small class="text-muted" style="font-size:0.75rem;"><i class="bi bi-clock me-1 text-info"></i>All times displayed in US Central Time (CST)</small>
+        <small style="font-size:0.75rem;color:#cbd5e1;"><i class="bi bi-clock me-1 text-info"></i>All times displayed in US Central Time (CST)</small>
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
@@ -3140,6 +3263,8 @@
                 <th>Option / Spec</th>
                 <th>Alert Px</th>
                 <th>Market @ Signal</th>
+                <th>Peak Px</th>
+                <th>Bottom Px</th>
                 <th>Premium Diff</th>
                 <th>Status</th>
                 <th>Realized P&amp;L</th>
@@ -3148,7 +3273,7 @@
               </tr>
             </thead>
             <tbody id="clone-today-tbody">
-              <tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today</td></tr>
+              <tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today</td></tr>
             </tbody>
           </table>
         </div>
@@ -3159,7 +3284,7 @@
     <div class="card mb-3" id="clone-history-container" style="background:#141722;border:1px solid #23293d;">
       <div class="card-header d-flex justify-content-between align-items-center py-2" style="background:#10131d;cursor:pointer;" onclick="const el=document.getElementById('clone-hist-collapse');el.classList.toggle('d-none');">
         <div class="d-flex align-items-center gap-2">
-          <span class="fw-bold text-muted" style="font-size:0.85rem;"><i class="bi bi-archive me-2 text-secondary"></i>Historical Archived Signals &amp; Closed Trades</span>
+          <span class="fw-bold text-light" style="font-size:0.85rem;"><i class="bi bi-archive me-2 text-info"></i>Historical Archived Signals &amp; Closed Trades</span>
           <span class="badge bg-secondary font-monospace" id="clone-hist-badge">0 HISTORICAL ARCHIVED</span>
         </div>
         <small class="text-info" style="font-size:0.75rem;"><i class="bi bi-chevron-expand me-1"></i>Toggle Past Sessions</small>
@@ -3175,6 +3300,8 @@
                   <th>Option / Spec</th>
                   <th>Alert Px</th>
                   <th>Market @ Signal</th>
+                  <th>Peak Px</th>
+                  <th>Bottom Px</th>
                   <th>Premium Diff</th>
                   <th>Status</th>
                   <th>Realized P&amp;L</th>
@@ -3183,7 +3310,7 @@
                 </tr>
               </thead>
               <tbody id="clone-history-tbody">
-                <tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>
+                <tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>
               </tbody>
             </table>
           </div>
@@ -11195,6 +11322,11 @@ function drmaHmFillOverrideForm(cfg) {
     document.getElementById('drma-hm-ov-fut-paper').value = fPaper ? 'true' : 'false';
   }
 
+  const fEnabled = ov['futures_enabled'] !== undefined ? (ov['futures_enabled'] !== false) : (eff['futures_enabled'] !== undefined ? (eff['futures_enabled'] !== false) : true);
+  if (document.getElementById('drma-hm-ov-futures-enabled')) {
+    document.getElementById('drma-hm-ov-futures-enabled').value = fEnabled ? 'true' : 'false';
+  }
+
   // Directional same-side non-directional trade lock
   const dirBlockSameSide = ov['dir_block_if_same_side_nondir'] != null ? ov['dir_block_if_same_side_nondir'] : eff['dir_block_if_same_side_nondir'];
   if (document.getElementById('drma-hm-ov-dir-block-same-side')) {
@@ -11397,36 +11529,79 @@ function renderDrmaHm(data, cfg) {
     }
   }
 
-  // P/L Calculation
-  const pnlEl = document.getElementById('drma-hm-pnl');
-  const pnlSub = document.getElementById('drma-hm-pnl-sub');
-  let openPnl = 0;
-  let realizedPnl = 0;
+  // P/L Calculation (Separate Live & Paper)
+  let liveRealized = 0;
+  let liveOpen = 0;
+  let paperRealized = 0;
+  let paperOpen = 0;
+
   for (const t of allTodayTrades) {
+    const isP = t.paper !== false;
     if (t.status === 'closed') {
-      realizedPnl += Number(t.realized_pnl_dollars ?? 0);
+      if (isP) paperRealized += Number(t.realized_pnl_dollars ?? 0);
+      else liveRealized += Number(t.realized_pnl_dollars ?? 0);
     } else {
-      openPnl += Number(t.unrealized_pnl_dollars ?? 0);
+      if (isP) paperOpen += Number(t.unrealized_pnl_dollars ?? 0);
+      else liveOpen += Number(t.unrealized_pnl_dollars ?? 0);
     }
   }
-  const history = data.history || [];
+
+  const rawHistory = data.history || [];
+  const history = rawHistory.slice().sort((a, b) => String(b.entered_at || '').localeCompare(String(a.entered_at || '')));
+
   for (const h of history) {
     const hDate = h.date || (h.entered_at ? h.entered_at.slice(0, 10) : (h.exited_at ? h.exited_at.slice(0, 10) : data.date));
     if ((!data.date || hDate === data.date) && !allTodayTrades.some(t => t.trade_id === h.trade_id)) {
-      realizedPnl += Number(h.realized_pnl_dollars ?? 0);
+      const isP = h.paper !== false;
+      if (isP) paperRealized += Number(h.realized_pnl_dollars ?? 0);
+      else liveRealized += Number(h.realized_pnl_dollars ?? 0);
     }
   }
-  if (data.total_pnl != null && realizedPnl === 0 && openPnl === 0 && (data.realized_pnl != null || data.total_pnl != null)) {
-    realizedPnl = Number(data.realized_pnl ?? data.total_pnl ?? 0);
-    openPnl = Number(data.open_pnl ?? 0);
+
+  if (data.live_realized_pnl != null && liveRealized === 0 && liveOpen === 0) {
+    liveRealized = Number(data.live_realized_pnl ?? 0);
+    liveOpen = Number(data.live_open_pnl ?? 0);
   }
-  const totalPnl = openPnl + realizedPnl;
+  if (data.paper_realized_pnl != null && paperRealized === 0 && paperOpen === 0) {
+    paperRealized = Number(data.paper_realized_pnl ?? 0);
+    paperOpen = Number(data.paper_open_pnl ?? 0);
+  }
+
+  const liveTotal = liveRealized + liveOpen;
+  const paperTotal = paperRealized + paperOpen;
+  const totalPnl = liveTotal + paperTotal;
+
+  // Update Live P/L Card
+  const livePnlEl = document.getElementById('drma-hm-live-pnl');
+  const livePnlSub = document.getElementById('drma-hm-live-pnl-sub');
+  if (livePnlEl) {
+    livePnlEl.textContent = fmtPnl(liveTotal);
+    livePnlEl.className = 'fs-4 fw-bold mt-1 ' + (liveTotal >= 0 ? 'text-success' : 'text-danger');
+  }
+  if (livePnlSub) {
+    livePnlSub.textContent = `Real: ${fmtPnl(liveRealized)} | Open: ${fmtPnl(liveOpen)}`;
+  }
+
+  // Update Paper P/L Card
+  const paperPnlEl = document.getElementById('drma-hm-paper-pnl');
+  const paperPnlSub = document.getElementById('drma-hm-paper-pnl-sub');
+  if (paperPnlEl) {
+    paperPnlEl.textContent = fmtPnl(paperTotal);
+    paperPnlEl.className = 'fs-4 fw-bold mt-1 ' + (paperTotal >= 0 ? 'text-success' : 'text-danger');
+  }
+  if (paperPnlSub) {
+    paperPnlSub.textContent = `Real: ${fmtPnl(paperRealized)} | Open: ${fmtPnl(paperOpen)}`;
+  }
+
+  // Legacy fallback if referenced
+  const pnlEl = document.getElementById('drma-hm-pnl');
+  const pnlSub = document.getElementById('drma-hm-pnl-sub');
   if (pnlEl) {
     pnlEl.textContent = fmtPnl(totalPnl);
     pnlEl.className = 'fs-4 fw-bold mt-1 ' + (totalPnl >= 0 ? 'text-success' : 'text-danger');
   }
   if (pnlSub) {
-    pnlSub.textContent = `Realized: ${fmtPnl(realizedPnl)} | Open: ${fmtPnl(openPnl)}`;
+    pnlSub.textContent = `Realized: ${fmtPnl(liveRealized + paperRealized)} | Open: ${fmtPnl(liveOpen + paperOpen)}`;
   }
 
   // Confluence Indicators
@@ -11511,16 +11686,17 @@ function renderDrmaHm(data, cfg) {
       : (lvl.es_price != null ? `ES: ${Number(lvl.es_price).toFixed(2)}` : '— / —');
   }
 
-  // Active Position Table
+  // Active Position Table (Sorted descending by entered_at)
   const actTbody = document.getElementById('drma-hm-active-table');
   const actCaption = document.getElementById('drma-hm-active-caption');
+  const sortedOpenTrades = openTrades.slice().sort((a, b) => String(b.entered_at || '').localeCompare(String(a.entered_at || '')));
   if (actTbody) {
-    if (!openTrades.length) {
+    if (!sortedOpenTrades.length) {
       actTbody.innerHTML = '<tr><td colspan="15" class="text-muted text-center py-3">No active positions today</td></tr>';
       if (actCaption) actCaption.textContent = '0 Open Positions';
     } else {
-      if (actCaption) actCaption.textContent = `${openTrades.length} Open Position${openTrades.length === 1 ? '' : 's'}`;
-      actTbody.innerHTML = openTrades.map(t => {
+      if (actCaption) actCaption.textContent = `${sortedOpenTrades.length} Open Position${sortedOpenTrades.length === 1 ? '' : 's'}`;
+      actTbody.innerHTML = sortedOpenTrades.map(t => {
         const structs = t.structures || [];
         const struct = structs[0] || {};
         const legs = struct.legs || [];
@@ -11561,7 +11737,7 @@ function renderDrmaHm(data, cfg) {
     }
   }
 
-  // History Table
+  // History Table (Sorted descending by entered_at)
   const histTbody = document.getElementById('drma-hm-history-table');
   if (histTbody) {
     if (!history.length) {
@@ -11575,11 +11751,22 @@ function renderDrmaHm(data, cfg) {
         const strikes = isFutures ? 'ES Outright' : (legs.map(l => l.strike).join('/') || '—');
         const structName = isFutures ? (h.structure_name || 'ES Outright (5pt PT/SL)') : (struct.name || h.structure_type || '—');
         const fill = h.entry_price ?? h.net_credit ?? h.net_debit ?? 0;
-        const exit = h.exit_price ?? 0;
+        const exit = h.exit_price != null ? Number(h.exit_price) : 0;
         const pnl = h.realized_pnl_dollars ?? 0;
         const typeBadge = isFutures
           ? '<span class="badge bg-warning text-dark"><i class="bi bi-lightning-charge me-1"></i>FUTURES</span>'
           : `<span class="badge ${h.trade_type === 'DIRECTIONAL' ? 'bg-success' : 'bg-primary'}">${h.trade_type || 'SPREAD'}</span>`;
+        
+        const rawReason = h.exit_reason || h.close_reason || h.close_mechanism || 'EOD';
+        let reasonBadge = `<span class="badge bg-secondary">${rawReason}</span>`;
+        if (rawReason === 'manual_close') {
+          reasonBadge = '<span class="badge bg-warning text-dark fw-bold"><i class="bi bi-hand-index-thumb me-1"></i>manual close</span>';
+        } else if (String(rawReason).includes('profit')) {
+          reasonBadge = `<span class="badge bg-success">${rawReason}</span>`;
+        } else if (String(rawReason).includes('stop')) {
+          reasonBadge = `<span class="badge bg-danger">${rawReason}</span>`;
+        }
+
         return `
           <tr>
             <td class="font-monospace text-light" style="font-size:0.8rem;"><i class="bi bi-box-arrow-in-right me-1 text-muted"></i>${h.entered_at ? formatCST(h.entered_at, true) : (h.date || '—')}</td>
@@ -11589,8 +11776,8 @@ function renderDrmaHm(data, cfg) {
             <td class="text-light">${structName}</td>
             <td class="font-monospace text-warning">${strikes}</td>
             <td class="font-monospace">$${Number(fill).toFixed(2)}</td>
-            <td class="font-monospace">$${Number(exit).toFixed(2)}</td>
-            <td><span class="badge ${String(h.exit_reason || h.close_reason || '').includes('profit') ? 'bg-success' : (String(h.exit_reason || h.close_reason || '').includes('stop') ? 'bg-danger' : 'bg-secondary')}">${h.exit_reason || h.close_reason || 'EOD'}</span></td>
+            <td class="font-monospace font-semibold">$${Number(exit).toFixed(2)}</td>
+            <td>${reasonBadge}</td>
             <td class="font-monospace fw-bold ${pnlClass(pnl)}">${fmtPnl(pnl)}</td>
             <td>${moneyBadge(h.paper !== false)}</td>
           </tr>
@@ -11798,6 +11985,10 @@ async function drmaHmSaveOverrides() {
   if (dms !== '') body.dir_max_daily_signals = parseInt(dms, 10);
 
   // Directional Futures on ES (5pt PT / 5pt SL)
+  const futEnabledVal = getVal('drma-hm-ov-futures-enabled');
+  if (futEnabledVal === 'true') body.futures_enabled = true;
+  else if (futEnabledVal === 'false') body.futures_enabled = false;
+
   const fqty = getVal('drma-hm-ov-fut-qty');
   if (fqty !== '') body.futures_quantity = Number(fqty);
   const fpt = getVal('drma-hm-ov-fut-pt');
@@ -12613,9 +12804,9 @@ function renderCloneSignalRow(s, data, activeTrades) {
   else if (s.status === 'CHASE_EXCEEDED') stBadge = 'bg-warning text-dark';
   else if (s.status === 'FLOOR_EXCEEDED') stBadge = 'bg-danger text-light';
   else if (s.status === 'MARKET_CLOSED') stBadge = 'bg-dark border border-warning text-warning';
-  else if (s.status === 'SKIPPED') stBadge = 'bg-secondary';
-  else if (s.status === 'CANCELLED') stBadge = 'bg-secondary text-muted';
-  else if (s.status === 'DISMISSED_MANUAL') stBadge = 'bg-dark border border-secondary text-muted';
+  else if (s.status === 'SKIPPED') stBadge = 'bg-secondary text-light';
+  else if (s.status === 'CANCELLED') stBadge = 'bg-secondary text-light';
+  else if (s.status === 'DISMISSED_MANUAL') stBadge = 'bg-dark border border-secondary text-light';
   else if (s.status === 'REJECTED_ERROR' || s.status === 'REJECTED_BROKER' || s.status === 'REJECTED_NO_QUOTE') stBadge = 'bg-danger';
 
   // Find associated trade if closed or active
@@ -12630,6 +12821,32 @@ function renderCloneSignalRow(s, data, activeTrades) {
     if (relTrade.closed_at) {
       exitHtml = `${relTrade.status_reason} <small class="text-info d-block font-monospace" style="font-size:0.72rem;"><i class="bi bi-clock me-1"></i>${exitTimeCst}</small>`;
     }
+  }
+
+  // Resolve Peak Px and Bottom Px from signal and/or linked trade
+  const basePx = (relTrade && relTrade.entry_price > 0) ? Number(relTrade.entry_price) : (Number(s.alert_price) || Number(s.market_price) || 0);
+  const sigPeak = s.peak_price != null && s.peak_price > 0 ? Number(s.peak_price) : 0;
+  const trPeak = relTrade && relTrade.highest_price != null && relTrade.highest_price > 0 ? Number(relTrade.highest_price) : 0;
+  const rawPeak = Math.max(sigPeak, trPeak, Number(s.current_price || 0), Number(s.market_price || 0), Number(s.alert_price || 0));
+
+  const candidatesBottom = [
+    s.bottom_price,
+    relTrade ? relTrade.lowest_price : null,
+    s.current_price,
+    s.market_price,
+    s.alert_price
+  ].map(v => Number(v || 0)).filter(v => v > 0);
+  const rawBottom = candidatesBottom.length > 0 ? Math.min(...candidatesBottom) : 0;
+
+  let peakCellHtml = '<span style="color:#cbd5e1;">—</span>';
+  let bottomCellHtml = '<span style="color:#cbd5e1;">—</span>';
+  if (rawPeak > 0) {
+    const peakPct = basePx > 0 ? (((rawPeak - basePx) / basePx) * 100).toFixed(1) : '0.0';
+    peakCellHtml = `<span class="font-monospace fw-bold" style="color:#4ade80;font-size:0.86rem;">$${rawPeak.toFixed(2)}</span><small class="d-block font-monospace fw-semibold" style="font-size:0.71rem;color:#86efac;">${Number(peakPct) >= 0 ? '+' : ''}${peakPct}%</small>`;
+  }
+  if (rawBottom > 0) {
+    const botPct = basePx > 0 ? (((rawBottom - basePx) / basePx) * 100).toFixed(1) : '0.0';
+    bottomCellHtml = `<span class="font-monospace fw-bold" style="color:#f87171;font-size:0.86rem;">$${rawBottom.toFixed(2)}</span><small class="d-block font-monospace fw-semibold" style="font-size:0.71rem;color:#fca5a5;">${Number(botPct) > 0 ? '+' : ''}${botPct}%</small>`;
   }
 
   let actionBtn = '';
@@ -12647,7 +12864,7 @@ function renderCloneSignalRow(s, data, activeTrades) {
   if (subStrat === 'Genie') {
     subCell = `<span class="badge bg-info text-dark fw-bold">Genie</span>`;
   } else if (subStrat === 'Others') {
-    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small></div>`;
+    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace" style="font-size:0.65rem;color:#cbd5e1;">${calledBy}</small></div>`;
   }
 
   const timeStr = s.received_at_cst || formatCST(s.received_at, true);
@@ -12655,7 +12872,7 @@ function renderCloneSignalRow(s, data, activeTrades) {
     <tr class="align-middle">
       <td>${subCell}</td>
       <td class="font-monospace text-light" style="font-size:0.78rem;">
-        <i class="bi bi-calendar3 me-1 text-muted"></i>${timeStr}
+        <i class="bi bi-calendar3 me-1 text-info"></i>${timeStr}
       </td>
       <td>
         <div class="d-flex align-items-center gap-2">
@@ -12665,14 +12882,16 @@ function renderCloneSignalRow(s, data, activeTrades) {
           </span>
           <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
         </div>
-        <small class="font-monospace d-block" style="font-size:0.72rem;color:#94a3b8;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
+        <small class="font-monospace d-block" style="font-size:0.72rem;color:#cbd5e1;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
       </td>
       <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
       <td class="font-monospace" style="color:#38bdf8;font-weight:600;">${mktPx}</td>
+      <td>${peakCellHtml}</td>
+      <td>${bottomCellHtml}</td>
       <td class="font-monospace" style="color:#cbd5e1;font-weight:600;">${diff}</td>
       <td><span class="badge ${stBadge}">${s.status}</span></td>
       <td>${pnlHtml}</td>
-      <td><small style="color:#cbd5e1;">${exitHtml}</small></td>
+      <td><small style="color:#e2e8f0;">${exitHtml}</small></td>
       <td class="text-end">${actionBtn}</td>
     </tr>
   `;
@@ -12690,6 +12909,18 @@ function renderCloneTradeAsRow(t, data) {
   const otIcon = isCall ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
   const alertPx = Number(t.webhook_price || t.entry_price || 0).toFixed(2);
   const entryPx = Number(t.entry_price || 0).toFixed(2);
+  const entryNum = parseFloat(entryPx) || parseFloat(alertPx) || 0.01;
+  const peakNum = Number(t.highest_price || t.current_price || t.entry_price || 0);
+  const botNum = Number((t.lowest_price && t.lowest_price > 0) ? t.lowest_price : (t.current_price || t.entry_price || 0));
+  const peakPct = (((peakNum - entryNum) / entryNum) * 100).toFixed(1);
+  const botPct = (((botNum - entryNum) / entryNum) * 100).toFixed(1);
+  const peakCellHtml = peakNum > 0
+    ? `<span class="font-monospace fw-bold" style="color:#4ade80;font-size:0.86rem;">$${peakNum.toFixed(2)}</span><small class="d-block font-monospace fw-semibold" style="font-size:0.71rem;color:#86efac;">${Number(peakPct) >= 0 ? '+' : ''}${peakPct}%</small>`
+    : '<span style="color:#cbd5e1;">—</span>';
+  const bottomCellHtml = botNum > 0
+    ? `<span class="font-monospace fw-bold" style="color:#f87171;font-size:0.86rem;">$${botNum.toFixed(2)}</span><small class="d-block font-monospace fw-semibold" style="font-size:0.71rem;color:#fca5a5;">${Number(botPct) > 0 ? '+' : ''}${botPct}%</small>`
+    : '<span style="color:#cbd5e1;">—</span>';
+
   const diff = t.premium_pct_at_signal != null ? `${t.premium_pct_at_signal >= 0 ? '+' : ''}${t.premium_pct_at_signal.toFixed(1)}%` : '—';
   const rPnl = t.realized_pnl_usd || 0;
   const pnlHtml = `<span class="${pnlClass(rPnl)} fw-bold font-monospace">${fmtPnl(rPnl)}</span>`;
@@ -12706,14 +12937,14 @@ function renderCloneTradeAsRow(t, data) {
   if (subStrat === 'Genie') {
     subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-info text-dark fw-bold">Genie</span>${modeBadge}</div>`;
   } else if (subStrat === 'Others') {
-    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small>${modeBadge}</div>`;
+    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace" style="font-size:0.65rem;color:#cbd5e1;">${calledBy}</small>${modeBadge}</div>`;
   }
 
   return `
     <tr class="align-middle">
       <td>${subCell}</td>
       <td class="font-monospace text-light" style="font-size:0.78rem;">
-        <i class="bi bi-calendar3 me-1 text-muted"></i>${timeStr}
+        <i class="bi bi-calendar3 me-1 text-info"></i>${timeStr}
       </td>
       <td>
         <div class="d-flex align-items-center gap-2">
@@ -12723,14 +12954,16 @@ function renderCloneTradeAsRow(t, data) {
           </span>
           <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
         </div>
-        <small class="font-monospace d-block" style="font-size:0.72rem;color:#94a3b8;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
+        <small class="font-monospace d-block" style="font-size:0.72rem;color:#cbd5e1;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
       </td>
       <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
       <td class="font-monospace" style="color:#38bdf8;font-weight:600;">$${entryPx}</td>
+      <td>${peakCellHtml}</td>
+      <td>${bottomCellHtml}</td>
       <td class="font-monospace" style="color:#cbd5e1;font-weight:600;">${diff}</td>
       <td><span class="badge ${t.status === 'CLOSED' ? 'bg-success' : 'bg-primary'}">${t.status}</span></td>
       <td>${pnlHtml}</td>
-      <td><small style="color:#cbd5e1;">${exitHtml}</small></td>
+      <td><small style="color:#e2e8f0;">${exitHtml}</small></td>
       <td class="text-end">${actionBtn}</td>
     </tr>
   `;
@@ -12799,30 +13032,94 @@ function renderCloneTrades(data) {
     }
   }
 
-  // 2. Metric Counters
+  // 2. Metric Counters (Live & Paper split)
   let totalOpenContracts = 0;
-  activeTrades.forEach(t => { totalOpenContracts += (t.remaining_quantity || 0); });
+  let liveOpenContracts = 0;
+  let paperOpenContracts = 0;
+  let calcLiveUnrealized = 0;
+  let calcPaperUnrealized = 0;
+  let calcActiveLiveRealized = 0;
+  let calcActivePaperRealized = 0;
+
+  activeTrades.forEach(t => {
+    const rem = t.remaining_quantity || 0;
+    const isP = t.paper_mode ?? ((t.sub_strategy || 'PC') !== 'PC');
+    totalOpenContracts += rem;
+    if (isP) {
+      paperOpenContracts += rem;
+      calcPaperUnrealized += (t.unrealized_pnl_usd || 0);
+      calcActivePaperRealized += (t.realized_pnl_usd || 0);
+    } else {
+      liveOpenContracts += rem;
+      calcLiveUnrealized += (t.unrealized_pnl_usd || 0);
+      calcActiveLiveRealized += (t.realized_pnl_usd || 0);
+    }
+  });
+
   const cntEl = document.getElementById('clone-stat-contracts');
   if (cntEl) cntEl.textContent = totalOpenContracts;
+  const cntLiveEl = document.getElementById('clone-stat-contracts-live');
+  if (cntLiveEl) cntLiveEl.textContent = liveOpenContracts;
+  const cntPaperEl = document.getElementById('clone-stat-contracts-paper');
+  if (cntPaperEl) cntPaperEl.textContent = paperOpenContracts;
 
+  const uLive = stats.live_unrealized_pnl_usd != null ? stats.live_unrealized_pnl_usd : calcLiveUnrealized;
+  const uPaper = stats.paper_unrealized_pnl_usd != null ? stats.paper_unrealized_pnl_usd : calcPaperUnrealized;
+  const uTotal = stats.total_unrealized_pnl_usd != null ? stats.total_unrealized_pnl_usd : (uLive + uPaper);
+
+  const unrelLiveEl = document.getElementById('clone-stat-unrealized-live');
+  if (unrelLiveEl) {
+    unrelLiveEl.textContent = fmtPnl(uLive);
+    unrelLiveEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(uLive);
+  }
+  const unrelPaperEl = document.getElementById('clone-stat-unrealized-paper');
+  if (unrelPaperEl) {
+    unrelPaperEl.textContent = fmtPnl(uPaper);
+    unrelPaperEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(uPaper);
+  }
   const unrelEl = document.getElementById('clone-stat-unrealized');
   if (unrelEl) {
-    const uPnl = stats.total_unrealized_pnl_usd || 0;
-    unrelEl.textContent = fmtPnl(uPnl);
-    unrelEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(uPnl);
+    unrelEl.textContent = `Total: ${fmtPnl(uTotal)}`;
+    unrelEl.className = 'fw-bold font-monospace ' + pnlClass(uTotal);
   }
+
+  const todayClosedForPnl = data.today_closed_trades || data.closed_trades || [];
+  let calcClosedLiveRealized = 0;
+  let calcClosedPaperRealized = 0;
+  todayClosedForPnl.forEach(t => {
+    const isP = t.paper_mode ?? ((t.sub_strategy || 'PC') !== 'PC');
+    if (isP) calcClosedPaperRealized += (t.realized_pnl_usd || 0);
+    else calcClosedLiveRealized += (t.realized_pnl_usd || 0);
+  });
+
+  const rLive = stats.today_live_realized_pnl_usd != null ? stats.today_live_realized_pnl_usd : (calcClosedLiveRealized + calcActiveLiveRealized);
+  const rPaper = stats.today_paper_realized_pnl_usd != null ? stats.today_paper_realized_pnl_usd : (calcClosedPaperRealized + calcActivePaperRealized);
+  const rTotal = stats.today_realized_pnl_usd != null ? stats.today_realized_pnl_usd : (rLive + rPaper);
 
   const clonePnlToday = document.getElementById('pnl-clone-today');
   if (clonePnlToday) {
-    const rPnl = stats.total_realized_pnl_usd || 0;
-    clonePnlToday.textContent = fmtPnl(rPnl);
-    clonePnlToday.className = 'stat-val ' + (rPnl >= 0 ? 'text-success' : 'text-danger');
+    clonePnlToday.textContent = fmtPnl(rTotal);
+    clonePnlToday.className = 'stat-val ' + (rTotal >= 0 ? 'text-success' : 'text-danger');
+  }
+  const clonePnlTodaySub = document.getElementById('pnl-clone-today-sub');
+  if (clonePnlTodaySub) {
+    clonePnlTodaySub.textContent = `Live: ${fmtPnl(rLive)} | Paper: ${fmtPnl(rPaper)}`;
+  }
+
+  const relLiveEl = document.getElementById('clone-stat-realized-live');
+  if (relLiveEl) {
+    relLiveEl.textContent = fmtPnl(rLive);
+    relLiveEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(rLive);
+  }
+  const relPaperEl = document.getElementById('clone-stat-realized-paper');
+  if (relPaperEl) {
+    relPaperEl.textContent = fmtPnl(rPaper);
+    relPaperEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(rPaper);
   }
   const relEl = document.getElementById('clone-stat-realized');
   if (relEl) {
-    const rPnl = stats.total_realized_pnl_usd || 0;
-    relEl.textContent = fmtPnl(rPnl);
-    relEl.className = 'fw-bold fs-5 font-monospace ' + pnlClass(rPnl);
+    relEl.textContent = `Total: ${fmtPnl(rTotal)}`;
+    relEl.className = 'fw-bold font-monospace ' + pnlClass(rTotal);
   }
 
   const sigsEl = document.getElementById('clone-stat-signals');
@@ -13265,15 +13562,17 @@ function renderCloneTrades(data) {
     });
   }
 
-  // 8a. Today's Table (Reconcile signals and any closed trades)
+  // 8a. Today's Table (Reconcile signals and any closed trades; exclude signals currently in Tracking table)
   const todayBadge = document.getElementById('clone-today-badge');
   const todayClosed = data.today_closed_trades || data.closed_trades || [];
-  const todaySignalTradeIds = new Set(todaySignals.map(s => s.trade_id).filter(Boolean));
+  const trackedSignalIds = new Set((data.tracked_signals || []).map(s => s.id));
+  const nonTrackedTodaySignals = todaySignals.filter(s => s.status !== 'TRACKING' && !trackedSignalIds.has(s.id));
+  const todaySignalTradeIds = new Set(nonTrackedTodaySignals.map(s => s.trade_id).filter(Boolean));
   const unlinkedTodayClosed = todayClosed.filter(t => !todaySignalTradeIds.has(t.id));
 
   const filteredTodaySignals = activeCloneSubStrategyFilter === 'ALL'
-    ? todaySignals
-    : todaySignals.filter(s => (s.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+    ? nonTrackedTodaySignals
+    : nonTrackedTodaySignals.filter(s => (s.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
   const filteredTodayClosed = activeCloneSubStrategyFilter === 'ALL'
     ? unlinkedTodayClosed
     : unlinkedTodayClosed.filter(t => (t.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
@@ -13287,7 +13586,7 @@ function renderCloneTrades(data) {
   if (todayBody) {
     if (totalTodayCount === 0) {
       const filterNote = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
-      todayBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today${filterNote}</td></tr>`;
+      todayBody.innerHTML = `<tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-calendar-x me-2"></i>No discretionary signals or trades recorded today${filterNote}</td></tr>`;
     } else {
       const rows = [
         ...filteredTodaySignals.map(s => renderCloneSignalRow(s, data, activeTrades)),
@@ -13310,7 +13609,7 @@ function renderCloneTrades(data) {
   const histBody = document.getElementById('clone-history-tbody');
   if (histBody) {
     if (totalHistCount === 0) {
-      histBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>';
+      histBody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-archive me-2"></i>No historical signals from previous sessions</td></tr>';
     } else {
       const rows = [
         ...historicalSignals.map(s => renderCloneSignalRow(s, data, activeTrades)),

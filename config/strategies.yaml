@@ -153,7 +153,10 @@ strategies:
       filter_lunch_chop: false
       enable_debounce: true
       cooldown_bars: 5
-      max_daily_signals: 4
+      max_daily_signals: 60
+      dir_max_daily_signals: 20
+      non_dir_max_daily_signals: 20
+      futures_max_daily_signals: 20
       force_eod_exit: true
       eod_exit_time_cst: '14:50'
       # Session & Overnight Futures Timing

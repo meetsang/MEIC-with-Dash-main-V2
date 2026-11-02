@@ -217,6 +217,9 @@ class IronFlyXspStrategy(BaseStrategy):
             except Exception as exc:
                 log.warning('Failed to load Mean Reversion session for XSP EM open recovery: %s', exc)
 
+        from common.market_hours import is_cash_session_open_ct
+        if not is_cash_session_open_ct() and getattr(self, 'prices', None) is None:
+            return
         spot = self._get_live_spot()
         if spot and spot > 100:
             estimated = round(spot * 0.008, 2)
@@ -245,14 +248,26 @@ class IronFlyXspStrategy(BaseStrategy):
         log.info('IronFlyXspStrategy initialized for %s (mode=%s)', self._today_str, self.config.mode)
 
     def run(self) -> None:
+        from meic0dte.app.utilities import central_now
+
         self.start()
         interval = max(1.0, self.config.tick_ms / 1000.0)
-        while not self._cut_stop.is_set():
-            try:
-                self.on_tick()
-            except Exception as e:
-                log.exception('Error in IronFlyXspStrategy tick: %s', e)
-            time.sleep(interval)
+        try:
+            while not self._cut_stop.is_set():
+                now_t = central_now().time()
+                if now_t < dtime(8, 30, 0):
+                    self._cut_stop.wait(10.0)
+                    continue
+                if now_t >= dtime(15, 0, 0):
+                    log.info('Market closed (15:00 CT). Stopping IronFlyXspStrategy for today.')
+                    break
+                try:
+                    self.on_tick()
+                except Exception as e:
+                    log.exception('Error in IronFlyXspStrategy tick: %s', e)
+                self._cut_stop.wait(interval)
+        finally:
+            self.stop()
 
     def stop(self) -> None:
         self._running = False
@@ -321,8 +336,16 @@ class IronFlyXspStrategy(BaseStrategy):
 
     def _spot_cut_loop(self) -> None:
         """2-second background cadence: checks live spot against beyond break-even boundaries."""
+        from meic0dte.app.utilities import central_now
+
         interval = max(0.5, self.config.cut_check_ms / 1000.0)
         while not self._cut_stop.is_set():
+            now_t = central_now().time()
+            if now_t < dtime(8, 30, 0):
+                self._cut_stop.wait(5.0)
+                continue
+            if now_t >= dtime(15, 0, 0):
+                break
             try:
                 self._check_spot_cuts()
             except Exception as exc:
@@ -333,6 +356,9 @@ class IronFlyXspStrategy(BaseStrategy):
         with self._lock:
             if not self.book:
                 return
+            open_pairs = [p for p in self.book.pairs.values() if p.status == FlyStatus.OPEN]
+            if not open_pairs:
+                return
             spot = self._get_live_spot()
             if spot is None:
                 return
@@ -340,10 +366,6 @@ class IronFlyXspStrategy(BaseStrategy):
 
             # Check quote staleness
             if time.time() - self.last_spot_update_ts > self.config.stale_spot_s:
-                return
-
-            open_pairs = [p for p in self.book.pairs.values() if p.status == FlyStatus.OPEN]
-            if not open_pairs:
                 return
 
             chain = self._fetch_xsp_chain()

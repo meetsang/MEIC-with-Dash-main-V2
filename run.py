@@ -125,17 +125,31 @@ def _terminal_warn_once(key: str, msg: str) -> None:
     log.warning(msg)
 
 
-def _check_running_services_health(*, stop_mon_running: bool) -> None:
-    ok, detail = check_streamer_health(ROOT)
-    if not ok:
-        _terminal_warn_once('streamer_stale', detail)
+def _is_overnight_runner(s_runner) -> bool:
+    cfg = getattr(s_runner, 'config', None) or getattr(s_runner.strategy, 'config', None)
+    return bool(
+        getattr(cfg, 'enable_overnight_futures', False)
+        and getattr(cfg, 'is_directional_futures_enabled', False)
+    )
+
+
+def _check_running_services_health(*, stop_mon_running: bool, services_started_mono: float = 0.0) -> None:
+    if services_started_mono > 0 and (time.monotonic() - services_started_mono) < 60.0:
+        return
+    from common.market_hours import is_cash_session_open_ct
+
+    if is_cash_session_open_ct():
+        ok, detail = check_streamer_health(ROOT)
+        if not ok:
+            _terminal_warn_once('streamer_stale', detail)
     if stop_mon_running:
         ok, detail = check_stop_monitor_health(ROOT)
         if not ok:
             _terminal_warn_once('stop_monitor_stale', detail)
-        ok, detail = check_mqtt_cache_health(ROOT)
-        if not ok:
-            _terminal_warn_once('stop_monitor_mqtt_stale', detail)
+        if is_cash_session_open_ct():
+            ok, detail = check_mqtt_cache_health(ROOT)
+            if not ok:
+                _terminal_warn_once('stop_monitor_mqtt_stale', detail)
     ok, detail = scan_price_gate_trades(ROOT)
     if not ok:
         _terminal_warn_once('price_gates', detail)
@@ -360,8 +374,6 @@ def check_trading_day():
         return False, f"NYSE is CLOSED today ({today_fmt}). No trading."
     if today_str in fomc_days:
         return False, f"Today ({today_fmt}) is a FOMC day. Skipping trading."
-    if yesterday_str in fomc_days:
-        return False, f"Yesterday ({yesterday.strftime('%Y-%m-%d')}) was a FOMC day — skipping the day after. No trading."
     return True, f"{today_fmt} is a normal trading day. Proceeding."
 
 
@@ -377,6 +389,20 @@ def _run_eod_cleanup_if_due(logger) -> None:
         run_session_cleanup('eod', logger)
     except Exception:
         logger.exception('End-of-day session sync failed')
+
+
+def has_active_overnight_strategy(root: str) -> bool:
+    """Return True if any enabled standalone strategy has overnight futures trading enabled."""
+    try:
+        from strategies.loader import load_standalone_strategies
+        from common.daily_overrides import effective_config
+        for strat, cfg in load_standalone_strategies():
+            eff = effective_config(cfg, cfg.name, root)
+            if getattr(eff, 'enable_overnight_futures', False) and getattr(eff, 'is_directional_futures_enabled', False):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def main(
@@ -442,12 +468,15 @@ def main(
 
     _write_status('running', 'Bot is active.')
 
+    overnight_active = has_active_overnight_strategy(ROOT)
+
     # Wait for stream start time if we're early (unless force + tranche_now)
     if not force and now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
         log.info(f"Waiting until {STREAM_START_HOUR:02d}:{STREAM_START_MIN:02d} to start streamer ...")
         wait_until(STREAM_START_HOUR, STREAM_START_MIN)
 
     session_started = _central_now()
+    meic_closed = False
     if (
         not force
         and not tranche_now
@@ -469,6 +498,7 @@ def main(
     streamer = start_streamer()
     market_data = start_market_data_recorder()
     stop_mon = None if no_stop_monitor else start_stop_monitor(paper=paper)
+    services_started_mono = time.monotonic()
     if no_stop_monitor:
         log.info('stop_monitor disabled for this session.')
     time.sleep(10)  # give streamer time to connect before first tranche
@@ -523,11 +553,13 @@ def main(
         log.info('Tranche-now: firing entry workers for lot via app_main ...')
         code = run_tranche(wait=True, lot=lot or 'test-offhours')
         log.info('Tranche-now finished (exit %s).', code)
-        streamer.terminate()
-        streamer.wait()
-        market_data.terminate()
-        market_data.wait()
-        if stop_mon:
+        if streamer is not None:
+            streamer.terminate()
+            streamer.wait()
+        if market_data is not None:
+            market_data.terminate()
+            market_data.wait()
+        if stop_mon is not None:
             stop_mon.terminate()
             stop_mon.wait()
         stop_coordinator()
@@ -561,21 +593,103 @@ def main(
                 )
 
             # MEIC SPX 0DTE daytime session — not a global platform shutdown rule.
-            if runtime_should_stop_for_session(
+            if not meic_closed and runtime_should_stop_for_session(
                 session_started,
                 now,
                 profile=MEIC_SPX_0DTE,
             ):
-                log.info("MEIC SPX 0DTE session end — shutting down trading runtime.")
-                break
+                log.info("MEIC SPX 0DTE session end — shutting down daytime trading runtime.")
+                meic_closed = True
+                if entry_coord is not None:
+                    stop_entry_coordinator()
+                    entry_coord = None
+                if entry_runner is not None:
+                    entry_runner = None
+                stop_coordinator()
+                for s_runner in standalone_runners:
+                    if not _is_overnight_runner(s_runner):
+                        try:
+                            s_runner.stop()
+                        except Exception:
+                            log.exception('Failed to stop daytime standalone runner %s', s_runner.strategy.config.name)
+                if stop_mon is not None:
+                    try:
+                        stop_mon.terminate()
+                        stop_mon.wait()
+                    except Exception:
+                        pass
+                    stop_mon = None
+                keep_overnight_stream = (
+                    any(s.is_alive() and _is_overnight_runner(s) for s in standalone_runners)
+                    and not once
+                    and not tranche_now
+                )
+                if not keep_overnight_stream:
+                    if market_data is not None:
+                        try:
+                            market_data.terminate()
+                            market_data.wait()
+                        except Exception:
+                            pass
+                        market_data = None
+                    if streamer is not None:
+                        try:
+                            streamer.terminate()
+                            streamer.wait()
+                        except Exception:
+                            pass
+                        streamer = None
+                else:
+                    log.info(
+                        "Keeping streamer and market_data recorder running overnight for active futures strategy."
+                    )
+                _run_eod_cleanup_if_due(log)
+                last_tick_mono = time.monotonic()
 
-            # --- Health checks: restart crashed subprocesses ---
-            if streamer.poll() is not None:
+            if meic_closed:
+                still_overnight = any(
+                    s.is_alive() and _is_overnight_runner(s)
+                    for s in standalone_runners
+                )
+                if not still_overnight or once or tranche_now:
+                    log.info("No active overnight strategies or single-shot run — platform shutdown.")
+                    break
+
+            # Morning transition for overnight runtime (at 08:20 CST before 08:30 open)
+            if meic_closed and now.time() >= t(8, 20) and now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
+                log.info("08:20 CST morning preparation reached — running morning cleanup and waiting until 08:30 CST...")
+                try:
+                    run_session_cleanup('morning', log)
+                except Exception:
+                    log.exception('Morning session cleanup failed')
+                wait_until(STREAM_START_HOUR, STREAM_START_MIN)
+                now = _central_now()
+                if should_trade:
+                    if streamer is None or streamer.poll() is not None:
+                        streamer = start_streamer()
+                    if market_data is None or market_data.poll() is not None:
+                        market_data = start_market_data_recorder()
+                    stop_mon = None if no_stop_monitor else start_stop_monitor(paper=paper)
+                    services_started_mono = time.monotonic()
+                    bootstrap_meic_session_if_missing(ROOT)
+                    entry_runner = EntryMonitorRunner(root=ROOT, logger=log)
+                    entry_coord = start_entry_coordinator(entry_runner, root=ROOT, logger=log)
+                    for s_runner in standalone_runners:
+                        if not _is_overnight_runner(s_runner) and not s_runner.is_alive():
+                            s_runner.start()
+                session_started = now
+                meic_closed = False
+                last_tick_mono = time.monotonic()
+                log.info("Daytime services initialized for 08:30 CST market open.")
+
+            # --- Health checks: restart crashed subprocesses when daytime active ---
+            if streamer is not None and streamer.poll() is not None:
                 log.critical(
                     'STREAMER exited unexpectedly (code %s) — restarting ...',
                     streamer.returncode,
                 )
                 streamer = start_streamer()
+                services_started_mono = time.monotonic()
 
             if stop_mon is not None and stop_mon.poll() is not None:
                 log.critical(
@@ -583,18 +697,25 @@ def main(
                     stop_mon.returncode,
                 )
                 stop_mon = start_stop_monitor(paper=paper)
+                services_started_mono = time.monotonic()
 
-            if market_data.poll() is not None:
+            if market_data is not None and market_data.poll() is not None:
                 log.critical(
                     'MARKET_DATA exited unexpectedly (code %s) — restarting ...',
                     market_data.returncode,
                 )
                 market_data = start_market_data_recorder()
 
-            _check_running_services_health(stop_mon_running=stop_mon is not None)
+            if streamer is not None or stop_mon is not None:
+                _check_running_services_health(
+                    stop_mon_running=stop_mon is not None,
+                    services_started_mono=services_started_mono,
+                )
 
             if should_trade:
                 for s_runner in standalone_runners:
+                    if meic_closed and not _is_overnight_runner(s_runner):
+                        continue
                     if hasattr(s_runner, 'check_health'):
                         s_runner.check_health()
 
@@ -620,16 +741,27 @@ def main(
                 log.exception('Failed to stop standalone runner %s', runner.strategy.config.name)
         stop_entry_coordinator()
         stop_coordinator()
-        log.info("Stopping streamer ...")
-        streamer.terminate()
-        streamer.wait()
-        log.info("Stopping market_data recorder ...")
-        market_data.terminate()
-        market_data.wait()
-        if stop_mon:
+        if streamer is not None:
+            log.info("Stopping streamer ...")
+            try:
+                streamer.terminate()
+                streamer.wait()
+            except Exception:
+                pass
+        if market_data is not None:
+            log.info("Stopping market_data recorder ...")
+            try:
+                market_data.terminate()
+                market_data.wait()
+            except Exception:
+                pass
+        if stop_mon is not None:
             log.info("Stopping stop_monitor ...")
-            stop_mon.terminate()
-            stop_mon.wait()
+            try:
+                stop_mon.terminate()
+                stop_mon.wait()
+            except Exception:
+                pass
         _run_eod_cleanup_if_due(log)
         _write_status('stopped', 'Bot finished for the day.')
         log.info("All done.")

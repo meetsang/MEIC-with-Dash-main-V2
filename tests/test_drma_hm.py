@@ -1938,6 +1938,83 @@ class TestDRMAHMClosingOrderChase(unittest.TestCase):
         self.assertEqual(hist_trade['exit_price'], 1.35)
 
 
+class TestTastyTradeOvernightFuturesFeed(unittest.TestCase):
+    """Verify overnight futures bars and live quotes come from TastyTrade (never Yahoo), and Yahoo is only used at 08:30 CST for ONH/ONL."""
+
+    def test_load_es_5m_bars_from_local_tastytrade_csv(self):
+        from strategies.drma_hm.market_data_feed import load_es_5m_bars
+
+        tmp = tempfile.mkdtemp()
+        prev_day = os.path.join(tmp, '2026-10-27')
+        curr_day = os.path.join(tmp, '2026-10-28')
+        os.makedirs(prev_day, exist_ok=True)
+        os.makedirs(curr_day, exist_ok=True)
+
+        pd.DataFrame([
+            {'datetime': '2026-10-27 14:55:00', 'open': 5800.0, 'high': 5802.0, 'low': 5799.0, 'close': 5801.0},
+            {'datetime': '2026-10-27 17:00:00', 'open': 5805.0, 'high': 5810.0, 'low': 5804.0, 'close': 5808.0},
+            {'datetime': '2026-10-27 17:05:00', 'open': 5808.0, 'high': 5812.0, 'low': 5807.0, 'close': 5811.0},
+        ]).to_csv(os.path.join(prev_day, 'ES_5m.csv'), index=False)
+
+        pd.DataFrame([
+            {'datetime': '2026-10-28 00:00:00', 'open': 5811.0, 'high': 5815.0, 'low': 5810.0, 'close': 5814.0},
+            {'datetime': '2026-10-28 00:05:00', 'open': 5814.0, 'high': 5818.0, 'low': 5813.0, 'close': 5817.0},
+        ]).to_csv(os.path.join(curr_day, 'ES_5m.csv'), index=False)
+
+        with patch('requests.get', side_effect=AssertionError('Yahoo Finance must not be called for 5m bars')):
+            df = load_es_5m_bars(tmp, date(2026, 10, 28), symbol='ES', include_overnight=True, allow_backfill=False)
+
+        self.assertEqual(len(df), 5)
+        # 14:55 bar is warmup (is_today=False); 17:00+ and 2026-10-28 bars are current Globex cycle (is_today=True)
+        self.assertFalse(bool(df.iloc[0]['is_today']))
+        self.assertTrue(bool(df.iloc[1]['is_today']))
+        self.assertTrue(bool(df.iloc[-1]['is_today']))
+        self.assertEqual(float(df.iloc[-1]['close']), 5817.0)
+
+    def test_fetch_es_current_price_never_calls_yahoo(self):
+        from common.mqtt_prices import MqttPriceCache
+
+        empty_cache = MqttPriceCache(topic_prefix='TASTYTRADE/')
+        with patch('common.mqtt_prices.get_mqtt_price_cache', return_value=empty_cache), \
+             patch('requests.get', side_effect=AssertionError('Yahoo Finance must never be called for live ES price')):
+            px = fetch_es_current_price(broker=None, allow_synthetic_fallback=False, symbol='ES')
+            self.assertIsNone(px)
+
+        # MES lookup works via MQTT cache
+        empty_cache._prices['MES'] = 5822.75
+        empty_cache._last_msg_at = time.time()
+        with patch('common.mqtt_prices.get_mqtt_price_cache', return_value=empty_cache), \
+             patch('requests.get', side_effect=AssertionError('Yahoo Finance must never be called for live MES price')):
+            px_mes = fetch_es_current_price(broker=None, allow_synthetic_fallback=False, symbol='MES')
+            self.assertEqual(px_mes, 5822.75)
+
+    def test_fetch_yahoo_market_levels_skips_yahoo_overnight_and_uses_local_csv(self):
+        tmp = tempfile.mkdtemp()
+        prev_day = os.path.join(tmp, 'data', '2026-10-27')
+        curr_day = os.path.join(tmp, 'data', '2026-10-28')
+        os.makedirs(prev_day, exist_ok=True)
+        os.makedirs(curr_day, exist_ok=True)
+
+        pd.DataFrame([
+            {'datetime': '2026-10-27 14:50:00', 'open': 5800.0, 'high': 5825.0, 'low': 5780.0, 'close': 5810.0},
+        ]).to_csv(os.path.join(prev_day, 'SPX_5m.csv'), index=False)
+
+        pd.DataFrame([
+            {'datetime': '2026-10-27 18:00:00', 'open': 5815.0, 'high': 5830.0, 'low': 5805.0, 'close': 5820.0},
+            {'datetime': '2026-10-28 02:00:00', 'open': 5820.0, 'high': 5840.0, 'low': 5795.0, 'close': 5835.0},
+        ]).to_csv(os.path.join(curr_day, 'ES_5m.csv'), index=False)
+
+        cfg = DRMAHMConfig(root=tmp, enable_yahoo_finance=True)
+        with patch('requests.get', side_effect=AssertionError('Yahoo must not be called when allow_yahoo=False')):
+            levels = fetch_yahoo_market_levels(date(2026, 10, 28), cfg, tmp, allow_yahoo=False)
+
+        self.assertEqual(levels['pdh'], 5825.0)
+        self.assertEqual(levels['pdl'], 5780.0)
+        self.assertEqual(levels['pdc'], 5810.0)
+        self.assertEqual(levels['onh'], 5840.0)
+        self.assertEqual(levels['onl'], 5795.0)
+
+
 if __name__ == '__main__':
     unittest.main()
 

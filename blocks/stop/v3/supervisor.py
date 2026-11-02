@@ -616,7 +616,7 @@ class StopSupervisor:
             self._enqueue_manual_kill(slot, reason=str(reason))
             return True
         if route in ('poll_close_order', 'resume_long_chase'):
-            log.info('Recover route %s path=%s', route, slot.path)
+            log.debug('Recover route %s path=%s', route, slot.path)
             self._poll_closing(slot)
             return True
         if route == 'resume_breach_exit':

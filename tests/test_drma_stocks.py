@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import pytest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from strategies.drma_stocks.config import DRMAStocksConfig
 from strategies.drma_stocks.watchlist import (
@@ -394,3 +394,96 @@ def test_drma_stocks_force_eod_exit(temp_root):
     assert not os.path.exists(trade_path)
     assert os.path.exists(os.path.join(hist_dir, 'NVDA_equity_long_123456.json'))
 
+
+
+def test_drma_stocks_flattens_prior_day_trade_immediately(temp_root):
+    """DRMA stocks is day-trading only: trades carried over from a prior day must flatten immediately."""
+    trades_layout.ensure_all_trade_dirs(temp_root)
+    cfg = DRMAStocksConfig(name=trades_layout.STRATEGY_DRMA_STOCKS, root=temp_root)
+    strat = DRMAStocksStrategy(config=cfg)
+    active_dir = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, temp_root)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, temp_root)
+
+    trade_path = os.path.join(active_dir, 'NVDA_pcs_prior_day.json')
+    # Entered 2 days ago on 2026-10-27
+    trade_data = {
+        'trade_id': 'NVDA_pcs_prior_day',
+        'ticker': 'NVDA',
+        'status': 'open',
+        'sub_strategy': 'DRMA_STOCK_NONDIR',
+        'structure_type': 'credit_spread',
+        'side': 'LONG',
+        'opt_type': 'P',
+        'entry_price': 1.00,
+        'current_mark': 0.80,
+        'entered_at': '2026-10-27T09:48:12.384375',
+        'profit_target_price': 0.50,
+        'stop_loss_price': 2.00,
+    }
+    with open(trade_path, 'w', encoding='utf-8') as f:
+        json.dump(trade_data, f)
+
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+    # Evaluated at 09:30 AM CST on 2026-10-29 (2 days later during normal market hours)
+    mock_morning = datetime(2026, 10, 29, 9, 30, 0, tzinfo=ZoneInfo('America/Chicago'))
+    with patch('strategies.drma_stocks.strategy.datetime') as mock_dt:
+        mock_dt.now.return_value = mock_morning
+        strat._check_trade_exit(trade_data, trade_path, 142.50, hist_dir, today=date(2026, 10, 29))
+
+    assert trade_data['status'] == 'closed'
+    assert 'EOD Cutoff' in trade_data.get('exit_reason', '')
+    assert not os.path.exists(trade_path)
+    assert os.path.exists(os.path.join(hist_dir, 'NVDA_pcs_prior_day.json'))
+
+
+def test_drma_stocks_aligns_with_drma_hm_flatten_override(temp_root):
+    """DRMA stocks must align with DRMA_HM_SPX flatten time override."""
+    trades_layout.ensure_all_trade_dirs(temp_root)
+    cfg = DRMAStocksConfig(name=trades_layout.STRATEGY_DRMA_STOCKS, root=temp_root)
+    strat = DRMAStocksStrategy(config=cfg)
+
+    # By default, 14:50
+    assert strat._resolve_eod_exit_time(temp_root) == '14:50'
+
+    # Set override on DRMA_HM_SPX to 14:40
+    from common.daily_overrides import set_overrides
+    from strategies.drma_hm.config import DRMAHMConfig
+    set_overrides('DRMA_HM_SPX', temp_root, {'eod_exit_time_cst': '14:40'}, DRMAHMConfig)
+
+    # DRMA stocks automatically aligns with DRMA_HM_SPX flatten time
+    assert strat._resolve_eod_exit_time(temp_root) == '14:40'
+
+
+def test_drma_stocks_settle_open_stock_trade(temp_root):
+    """settle_open_stock_trade flattens open stock trades during EOD session cleanup."""
+    trades_layout.ensure_all_trade_dirs(temp_root)
+    from strategies.drma_stocks.settlement import settle_open_stock_trade
+    active_dir = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, temp_root)
+    hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, temp_root)
+
+    trade_path = os.path.join(active_dir, 'MU_equity_cleanup_test.json')
+    trade_data = {
+        'trade_id': 'MU_equity_cleanup_test',
+        'ticker': 'MU',
+        'strategy': 'DRMA_HM_STOCKS',
+        'status': 'open',
+        'structure_type': 'equity_stock',
+        'side': 'LONG',
+        'shares': 50,
+        'entry_price': 100.0,
+        'current_spot': 102.0,
+    }
+    with open(trade_path, 'w', encoding='utf-8') as f:
+        json.dump(trade_data, f)
+
+    res = settle_open_stock_trade(trade_path, temp_root, for_date=date(2026, 10, 30))
+    assert res is True
+    assert not os.path.exists(trade_path)
+    hist_file = os.path.join(hist_dir, 'MU_equity_cleanup_test.json')
+    assert os.path.exists(hist_file)
+    with open(hist_file, 'r', encoding='utf-8') as f:
+        saved = json.load(f)
+    assert saved['status'] == 'closed'
+    assert 'EOD Cutoff' in saved['exit_reason']
+    assert saved['realized_pnl_dollars'] == 100.0

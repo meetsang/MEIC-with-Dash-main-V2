@@ -329,6 +329,8 @@ class CloneTradeEngine:
             }
 
         # 4. Check Chase Guard (#4) using sub-strategy max_premium_pct
+        init_peak_px = max(alert_px, market_px) if market_px > 0 else alert_px
+        init_bottom_px = min(alert_px, market_px) if market_px > 0 else alert_px
         max_premium = getattr(sub_cfg, "max_premium_pct", self.config_mgr.max_premium_pct)
         if premium_pct > max_premium:
             reason = (
@@ -348,6 +350,10 @@ class CloneTradeEngine:
                 status_reason=reason,
                 called_by=called_by,
                 sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=init_peak_px,
+                bottom_price=init_bottom_px,
+                last_quote_time=now_iso,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -380,6 +386,10 @@ class CloneTradeEngine:
                 status_reason=reason,
                 called_by=called_by,
                 sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=init_peak_px,
+                bottom_price=init_bottom_px,
+                last_quote_time=now_iso,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -407,6 +417,10 @@ class CloneTradeEngine:
                 status_reason=reason,
                 called_by=called_by,
                 sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=init_peak_px,
+                bottom_price=init_bottom_px,
+                last_quote_time=now_iso,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -434,6 +448,10 @@ class CloneTradeEngine:
                 status_reason=reason,
                 called_by=called_by,
                 sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=init_peak_px,
+                bottom_price=init_bottom_px,
+                last_quote_time=now_iso,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -493,6 +511,10 @@ class CloneTradeEngine:
                 status_reason=f"Broker execution failed: {exc}",
                 called_by=called_by,
                 sub_strategy=sub_strat,
+                current_price=market_px,
+                peak_price=init_peak_px,
+                bottom_price=init_bottom_px,
+                last_quote_time=now_iso,
             )
             with self._lock:
                 self.signals.append(sig)
@@ -524,6 +546,10 @@ class CloneTradeEngine:
             trade_id=trade.id,
             called_by=called_by,
             sub_strategy=sub_strat,
+            current_price=trade.current_price,
+            peak_price=max(init_peak_px, trade.highest_price),
+            bottom_price=min(init_bottom_px, trade.lowest_price) if trade.lowest_price > 0 else init_bottom_px,
+            last_quote_time=now_iso,
         )
         with self._lock:
             self.signals.append(sig)
@@ -794,10 +820,10 @@ class CloneTradeEngine:
             open_trades = list(self.active_trades.values())
             tracking_sigs = [
                 s for s in self.signals
-                if s.status == "TRACKING" and s.spec and (s.date_cst == today_cst or (s.received_at_cst and s.received_at_cst.startswith(today_cst)))
+                if s.spec and (s.date_cst == today_cst or (s.received_at_cst and s.received_at_cst.startswith(today_cst)))
             ]
 
-        # Update real-time quotes for tracked alerts / signals (Tracking Mode)
+        # Update real-time quotes for today's alerts / signals
         for sig in tracking_sigs:
             try:
                 q = self.quote_service.get_quote(sig.spec)
@@ -807,7 +833,7 @@ class CloneTradeEngine:
                         sig.current_price = px
                         if sig.peak_price is None or px > sig.peak_price:
                             sig.peak_price = px
-                        if sig.bottom_price is None or px < sig.bottom_price:
+                        if sig.bottom_price is None or sig.bottom_price <= 0 or px < sig.bottom_price:
                             sig.bottom_price = px
                         sig.last_quote_time = utc_now_iso()
             except Exception as exc:
@@ -1276,10 +1302,38 @@ class CloneTradeEngine:
             today_realized = sum(t.get("realized_pnl_usd", 0.0) for t in today_closed) + sum(
                 t.realized_pnl_usd for t in self.active_trades.values()
             )
+            today_live_realized = sum(
+                t.get("realized_pnl_usd", 0.0) for t in today_closed if not t.get("paper_mode", False)
+            ) + sum(
+                t.realized_pnl_usd for t in self.active_trades.values() if not getattr(t, "paper_mode", False)
+            )
+            today_paper_realized = sum(
+                t.get("realized_pnl_usd", 0.0) for t in today_closed if t.get("paper_mode", False)
+            ) + sum(
+                t.realized_pnl_usd for t in self.active_trades.values() if getattr(t, "paper_mode", False)
+            )
+
             total_realized = sum(t.realized_pnl_usd for t in self.closed_trades) + sum(
                 t.realized_pnl_usd for t in self.active_trades.values()
             )
+            total_live_realized = sum(
+                t.realized_pnl_usd for t in self.closed_trades if not getattr(t, "paper_mode", False)
+            ) + sum(
+                t.realized_pnl_usd for t in self.active_trades.values() if not getattr(t, "paper_mode", False)
+            )
+            total_paper_realized = sum(
+                t.realized_pnl_usd for t in self.closed_trades if getattr(t, "paper_mode", False)
+            ) + sum(
+                t.realized_pnl_usd for t in self.active_trades.values() if getattr(t, "paper_mode", False)
+            )
+
             total_unrealized = sum(t.unrealized_pnl_usd for t in self.active_trades.values())
+            live_unrealized = sum(
+                t.unrealized_pnl_usd for t in self.active_trades.values() if not getattr(t, "paper_mode", False)
+            )
+            paper_unrealized = sum(
+                t.unrealized_pnl_usd for t in self.active_trades.values() if getattr(t, "paper_mode", False)
+            )
 
         is_broker_live = (
             self.broker is not None
@@ -1358,8 +1412,14 @@ class CloneTradeEngine:
                 "total_signals_count": len(self.signals),
                 "pending_decisions_count": len(pending_decisions),
                 "today_realized_pnl_usd": round(today_realized, 2),
+                "today_live_realized_pnl_usd": round(today_live_realized, 2),
+                "today_paper_realized_pnl_usd": round(today_paper_realized, 2),
                 "total_realized_pnl_usd": round(total_realized, 2),
+                "total_live_realized_pnl_usd": round(total_live_realized, 2),
+                "total_paper_realized_pnl_usd": round(total_paper_realized, 2),
                 "total_unrealized_pnl_usd": round(total_unrealized, 2),
+                "live_unrealized_pnl_usd": round(live_unrealized, 2),
+                "paper_unrealized_pnl_usd": round(paper_unrealized, 2),
             },
         }
 

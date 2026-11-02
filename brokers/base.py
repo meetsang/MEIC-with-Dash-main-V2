@@ -171,6 +171,17 @@ class BrokerBase(ABC):
         """REST market-data mids for option symbols (batch, scan path)."""
         return {}
 
+    def inspect_legs_closable(
+        self,
+        legs: List[ComboLeg],
+        *,
+        priority: str = 'HIGH',
+    ) -> Tuple[bool, str]:
+        """
+        Pre-close position check on combo legs. Returns (closable_bool, reason_string).
+        """
+        return True, 'closable'
+
     def inspect_spread_position(
         self,
         short_symbol: str,

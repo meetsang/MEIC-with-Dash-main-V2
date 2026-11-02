@@ -2,13 +2,34 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+import os
 from typing import Any, Dict, Optional
 
 from common import trades_layout
 
-# Match run.py STREAM_STOP_HOUR / streamer 3 PM CT shutdown.
+# Match run.py STREAM_START_HOUR / STREAM_STOP_HOUR (8:30 AM - 3:00 PM CT cash RTH).
+MARKET_OPEN_HOUR_CT = 8
+MARKET_OPEN_MINUTE_CT = 30
 MARKET_CLOSE_HOUR_CT = 15
 MARKET_CLOSE_MINUTE_CT = 0
+
+
+def is_cash_session_open_ct(now: Optional[datetime] = None) -> bool:
+    """True when cash index (SPX/XSP) Regular Trading Hours are open (08:30–15:00 CT).
+
+    Outside this window only futures (/ES, /NQ) trade overnight; cash SPX does not tick.
+    Returns True when MEIC_INTEGRATION=1 or MEIC_FORCE_TRADE=1 for off-hours integration tests.
+    """
+    if os.environ.get('MEIC_INTEGRATION') == '1' or os.environ.get('MEIC_FORCE_TRADE') == '1':
+        return True
+    from meic0dte.app.utilities import central_now
+
+    now = now or central_now()
+    if now.weekday() >= 5:
+        return False
+    open_t = time(MARKET_OPEN_HOUR_CT, MARKET_OPEN_MINUTE_CT)
+    close_t = time(MARKET_CLOSE_HOUR_CT, MARKET_CLOSE_MINUTE_CT)
+    return open_t <= now.time() < close_t
 
 
 def is_after_market_close_ct(now: Optional[datetime] = None) -> bool:

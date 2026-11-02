@@ -131,6 +131,7 @@ def close_structure(
 
     if is_futures:
         close_order_id = f'paper-close-{trade.get("trade_id", "fut")}'
+        exit_px = float(trade.get('current_mark') or 0.0)
         if not paper:
             fut_action = legs[0].action
             res = broker.place_market_order(fut_action, legs[0].symbol, legs[0].quantity)
@@ -139,16 +140,26 @@ def close_structure(
                 _atomic_write(path, trade)
                 return CloseResult(structure_id, False, res.message or 'futures close order rejected')
             close_order_id = res.order_id
+            if getattr(res, 'filled_price', None) is not None and abs(float(res.filled_price)) > 0:
+                exit_px = abs(float(res.filled_price))
     else:
-        mids = broker.fetch_option_mids_api([leg.symbol for leg in legs])
+        try:
+            mids = broker.fetch_option_mids_api([leg.symbol for leg in legs])
+            if not isinstance(mids, dict):
+                mids = {}
+        except Exception:
+            mids = {}
         net = 0.0
         for leg in legs:
-            mid = mids.get(leg.symbol, 0.5)
+            raw_mid = mids.get(leg.symbol, 0.5)
+            try:
+                mid = float(raw_mid)
+            except (TypeError, ValueError):
+                mid = 0.5
             if leg.action.startswith('BUY'):
                 net -= mid * leg.quantity
             else:
                 net += mid * leg.quantity
-        # Closing a debit structure: expect credit (positive net)
         price = net if net >= 0 else net
 
         target['status'] = 'closing'
@@ -156,46 +167,102 @@ def close_structure(
 
         result = broker.place_multi_leg_order(legs, price=price)
         if not result.success:
-            target['status'] = 'open'
-            _atomic_write(path, trade)
-            return CloseResult(structure_id, False, result.message or 'order rejected')
-        close_order_id = result.order_id
+            err_msg = str(getattr(result, 'message', '') or '')
+            if getattr(result, 'status', '') == 'rejected_preflight' and (
+                'position_flat' in err_msg.lower() or 'flat' in err_msg.lower()
+            ):
+                log.info(
+                    'MANUAL_CLOSE: Position already flat on broker for %s — finalizing as closed without duplicate order',
+                    structure_id,
+                )
+                close_order_id = 'already_flat_on_broker'
+            else:
+                target['status'] = 'open'
+                _atomic_write(path, trade)
+                return CloseResult(structure_id, False, result.message or 'order rejected')
+        else:
+            close_order_id = result.order_id
+
+        fill_px = getattr(result, 'filled_price', None)
+        if fill_px is not None and abs(float(fill_px)) > 0:
+            exit_px = abs(float(fill_px))
+        else:
+            exit_px = abs(float(price))
+
+    is_debit = (
+        str(trade.get('structure_type', '')).lower() == 'debit_spread'
+        or str(trade.get('trade_type', '')).upper() == 'DIRECTIONAL'
+        or str(trade.get('sub_strategy', '')).upper() == 'DRMA_HM_DIR'
+        or 'net_debit' in trade
+        or 'net_debit' in target
+    )
+    qty = int(trade.get('quantity') or target.get('quantity') or 1)
+    multiplier = float(trade.get('multiplier') or (50.0 if is_futures else 100.0))
+    entry_px = float(trade.get('entry_price') or trade.get('net_credit') or trade.get('net_debit') or target.get('entry_price') or target.get('net_credit') or target.get('net_debit') or exit_px)
+
+    if is_futures:
+        is_long = str(trade.get('side', '')).upper() in ('LONG', 'BUY')
+        realized_pts = round((exit_px - entry_px) if is_long else (entry_px - exit_px), 2)
+    elif is_debit:
+        realized_pts = round(exit_px - entry_px, 2)
+    else:
+        realized_pts = round(entry_px - exit_px, 2)
+    realized_dollars = round(realized_pts * multiplier * qty, 2)
 
     now_iso = datetime.now().isoformat()
     target['status'] = 'closed'
     target['closed_manually'] = True
+    target['close_mechanism'] = 'manual_close'
+    target['close_reason'] = 'manual_close'
+    target['exit_reason'] = 'manual_close'
+    target['exit_price'] = exit_px
     target['closed_at'] = now_iso
     target['exit_fill_time'] = now_iso
     target['close_order_id'] = close_order_id
-    target['realized_pnl'] = target.get('unrealized_pnl', 0.0)
+    target['realized_pnl'] = realized_pts
+    target['realized_pnl_dollars'] = realized_dollars
 
     open_count = sum(1 for s in structures if s.get('status') not in ('closed', 'cancelled'))
     if open_count == 0:
         trade['status'] = 'closed'
+        trade['closed_manually'] = True
         trade['close_mechanism'] = 'manual_close'
+        trade['close_reason'] = 'manual_close'
+        trade['exit_reason'] = 'manual_close'
+        trade['exit_price'] = exit_px
         trade['closed_at'] = now_iso
         trade['exited_at'] = now_iso
-        trade['realized_pnl'] = trade.get('unrealized_pnl', 0.0)
+        trade['realized_pnl'] = realized_pts
+        trade['realized_pnl_dollars'] = realized_dollars
         trade['unrealized_pnl'] = 0.0
         trade['unrealized_pnl_dollars'] = 0.0
-        multiplier = float(trade.get('multiplier') or (50.0 if is_futures else 100.0))
-        if 'realized_pnl_dollars' not in trade or trade['realized_pnl_dollars'] == 0.0:
-            trade['realized_pnl_dollars'] = round(float(trade['realized_pnl']) * int(trade.get('quantity') or 1) * multiplier, 2)
+
+        # Update active file so that even if removal is delayed by file locks (OneDrive/AV),
+        # any concurrent scan sees status='closed' and never re-adds or re-exits
+        try:
+            _atomic_write(path, trade)
+        except OSError:
+            pass
+
         # Move trade to history directory
         hist_dir = history_dir_for_strategy(strategy_name, root)
         os.makedirs(hist_dir, exist_ok=True)
         hist_path = os.path.join(hist_dir, os.path.basename(path))
         with open(hist_path, 'w', encoding='utf-8') as f:
             json.dump(trade, f, indent=2)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+
+        import time
+        for _ in range(5):
+            try:
+                os.remove(path)
+                break
+            except OSError:
+                time.sleep(0.15)
     else:
         _atomic_write(path, trade)
 
-    log.info('MANUAL_CLOSE_FILLED strategy=%s structure=%s order=%s', strategy_name, structure_id, result.order_id)
-    return CloseResult(structure_id, True, 'filled', order_id=result.order_id)
+    log.info('MANUAL_CLOSE_FILLED strategy=%s structure=%s order=%s', strategy_name, structure_id, close_order_id)
+    return CloseResult(structure_id, True, 'filled', order_id=close_order_id)
 
 
 def close_all_structures(strategy_name: str, *, root: str, paper: bool = True) -> List[CloseResult]:

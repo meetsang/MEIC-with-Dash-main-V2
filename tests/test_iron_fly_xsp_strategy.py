@@ -173,3 +173,19 @@ class TestIronFlyXspStrategy(unittest.TestCase):
             self.assertEqual(len(strat.book.pairs), 1)
             strat.stop()
 
+    def test_check_spot_cuts_skips_spot_poll_when_no_open_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = IronFlyXspConfig(
+                name='IRON_FLY_XSP',
+                paper=True,
+                mode='PAPER',
+            )
+            strat = IronFlyXspStrategy(cfg)
+            strat.trades_dir = tmp
+            strat.start()
+            strat._get_live_spot = MagicMock(return_value=775.5)
+
+            strat._check_spot_cuts()
+            strat._get_live_spot.assert_not_called()
+            strat.stop()
+

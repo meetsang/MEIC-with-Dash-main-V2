@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import uuid
-from datetime import date, datetime
+import time
+from datetime import date, datetime, time as dt_time
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -64,6 +65,23 @@ class DRMAStocksStrategy(BaseStrategy):
     def get_status(self) -> Dict[str, Any]:
         return dict(self._status)
 
+    def _resolve_eod_exit_time(self, root: Optional[str] = None) -> str:
+        """Resolve EOD flatten cutoff, dynamically aligning with DRMA_HM_SPX if configured."""
+        if root:
+            try:
+                from common.daily_overrides import get_overrides
+                # First check if DRMA_HM_STOCKS has an override
+                stocks_ov = get_overrides(self.config.name, root)
+                if stocks_ov and stocks_ov.get('eod_exit_time_cst'):
+                    return str(stocks_ov['eod_exit_time_cst'])
+                # Then check if DRMA_HM_SPX has an override to align with it
+                hm_ov = get_overrides('DRMA_HM_SPX', root)
+                if hm_ov and hm_ov.get('eod_exit_time_cst'):
+                    return str(hm_ov['eod_exit_time_cst'])
+            except Exception:
+                pass
+        return getattr(self.config, 'eod_exit_time_cst', '14:50') or '14:50'
+
     def run(self) -> None:
         self._running = True
         self._status['running'] = True
@@ -71,12 +89,41 @@ class DRMAStocksStrategy(BaseStrategy):
         root = getattr(self.config, 'root', None) or os.path.abspath(
             os.path.join(os.path.dirname(__file__), '..', '..')
         )
+        poll_interval = float(getattr(self.config, 'poll_interval_sec', 10.0) or 10.0)
+
         try:
-            self.evaluate_all_stocks(root)
+            while self._running:
+                today = central_today()
+                now_ct = datetime.now(_CT)
+                now_t = now_ct.time()
+                market_close = dt_time(15, 0)
+
+                # Check if trading day
+                try:
+                    import run as launcher
+                    should_trade, reason = launcher.check_trading_day()
+                    if not should_trade:
+                        self.logger.info("Not a trading day (%s) ? exiting %s run loop", reason, self.config.name)
+                        break
+                except Exception:
+                    pass
+
+                self.evaluate_all_stocks(root, target_date=today)
+
+                # Past market close (15:00 CST), finish daytime session
+                if now_t >= market_close:
+                    self.logger.info("Market close (15:00 CST) reached ? %s session complete", self.config.name)
+                    break
+
+                time.sleep(poll_interval)
         except Exception as exc:
             self.logger.error("Error running %s: %s", self.config.name, exc, exc_info=True)
             self._status['state'] = 'ERROR'
             self._status['error'] = str(exc)
+        finally:
+            self._running = False
+            self._status['running'] = False
+            self._status['state'] = 'STOPPED'
 
     def _get_ticker_state(self, ticker: str) -> Dict[str, Any]:
         if ticker not in self._ticker_states:
@@ -100,12 +147,19 @@ class DRMAStocksStrategy(BaseStrategy):
         results: Dict[str, Any] = {}
         active_trades = self._load_active_trades(active_dir, today_str)
 
+        current_spots: Dict[str, float] = {}
+
         for sym in symbols:
             try:
                 stock_res = self._evaluate_single_stock(sym, today, root, active_trades, active_dir, hist_dir)
                 results[sym] = stock_res
+                if stock_res and stock_res.get('spot', 0.0) > 0:
+                    current_spots[sym] = float(stock_res['spot'])
             except Exception as exc:
                 self.logger.warning("Error evaluating stock %s: %s", sym, exc)
+
+        # Enforce open trade management and day-trade flattening across ALL active trades
+        self._manage_all_active_trades(active_trades, hist_dir, current_spots, today, root)
 
         # Write session snapshot
         session_path = os.path.join(active_dir, f'session_{today_str}.json')
@@ -122,6 +176,46 @@ class DRMAStocksStrategy(BaseStrategy):
             'updated_at': datetime.now().isoformat(),
         }
         return results
+
+    def _manage_all_active_trades(
+        self,
+        active_trades: List[Dict[str, Any]],
+        hist_dir: str,
+        current_spots: Dict[str, float],
+        today: date,
+        root: Optional[str] = None,
+    ) -> None:
+        """Enforce day-trading rules, EOD flattening, and exits across all active trades."""
+        now_ct = datetime.now(_CT)
+        now_ct_str = now_ct.strftime('%H:%M')
+        today_str = today.isoformat()
+        eod_cutoff = self._resolve_eod_exit_time(root)
+        force_eod = getattr(self.config, 'force_eod_exit', True)
+
+        for t_info in active_trades:
+            trade = t_info['trade']
+            trade_path = t_info['path']
+            ticker = t_info.get('ticker') or trade.get('ticker')
+
+            if trade.get('status') != 'open':
+                continue
+
+            # Prior day trade: Day trading only - must never carry trades to more than a single day
+            entered_at_str = str(trade.get('entered_at') or '')
+            trade_date_str = entered_at_str[:10] if len(entered_at_str) >= 10 else today_str
+            is_prior_day = bool(trade_date_str and trade_date_str < today_str)
+            is_eod_cutoff = (now_ct_str >= eod_cutoff)
+
+            spot = current_spots.get(ticker, 0.0)
+            if spot <= 0:
+                spot = float(trade.get('current_spot') or trade.get('underlying_entry_price') or trade.get('entry_price') or 1.0)
+
+            if spot > 0:
+                update_stock_unrealized_marks(trade, spot)
+
+            # If prior day or EOD cutoff reached, ensure trade exits immediately
+            if force_eod and (is_prior_day or is_eod_cutoff):
+                self._check_trade_exit(trade, trade_path, spot, hist_dir, today=today, root=root)
 
     def _evaluate_single_stock(
         self,
@@ -150,9 +244,10 @@ class DRMAStocksStrategy(BaseStrategy):
         for t_info in ticker_trades:
             t = t_info['trade']
             p = t_info['path']
-            if current_spot > 0:
-                update_stock_unrealized_marks(t, current_spot)
-                self._check_trade_exit(t, p, current_spot, hist_dir)
+            eff_spot = current_spot if current_spot > 0 else float(t.get('current_spot') or t.get('underlying_entry_price') or t.get('entry_price') or 1.0)
+            if eff_spot > 0:
+                update_stock_unrealized_marks(t, eff_spot)
+                self._check_trade_exit(t, p, eff_spot, hist_dir, today=today, root=root)
 
         # Signal Generation and Entry
         if latest_snap and current_spot > 0:
@@ -241,7 +336,7 @@ class DRMAStocksStrategy(BaseStrategy):
         # 3. Do not enter new positions after EOD cutoff (14:50 CST)
         eod_cutoff = getattr(self.config, 'eod_exit_time_cst', '14:50')
         now_ct_str = datetime.now(_CT).strftime('%H:%M')
-        if now_ct_str >= eod_cutoff:
+        if now_ct_str >= eod_cutoff or eval_time >= eod_cutoff:
             return
 
         is_bull = (snap.bias == 'BULL')
@@ -427,8 +522,10 @@ class DRMAStocksStrategy(BaseStrategy):
         trade_path: str,
         spot: float,
         hist_dir: str,
+        today: Optional[date] = None,
+        root: Optional[str] = None,
     ) -> None:
-        """Evaluate profit target and stop loss rules for an active stock trade."""
+        """Evaluate profit target, stop loss, and EOD cutoff rules for an active stock trade."""
         if trade.get('status') != 'open':
             return
 
@@ -445,13 +542,27 @@ class DRMAStocksStrategy(BaseStrategy):
         exit_reason = ''
         structure = str(trade.get('structure_type') or '').lower()
 
-        # EOD Cutoff Check (14:50 CST)
-        now_ct_str = datetime.now(_CT).strftime('%H:%M')
-        eod_cutoff = getattr(self.config, 'eod_exit_time_cst', '14:50')
-        if getattr(self.config, 'force_eod_exit', True) and now_ct_str >= eod_cutoff:
+        now_ct = datetime.now(_CT)
+        now_ct_str = now_ct.strftime('%H:%M')
+        today_date = today or now_ct.date()
+        today_str = today_date.isoformat()
+
+        # Day trading algo only: Never carry trades to more than a single day
+        entered_at_str = str(trade.get('entered_at') or '')
+        trade_date_str = entered_at_str[:10] if len(entered_at_str) >= 10 else today_str
+        is_prior_day = bool(trade_date_str and trade_date_str < today_str)
+
+        # EOD Cutoff Check: Align with DRMA flatten time (default 14:50 CST)
+        eod_cutoff = self._resolve_eod_exit_time(root)
+        is_eod_cutoff = (now_ct_str >= eod_cutoff)
+
+        if getattr(self.config, 'force_eod_exit', True) and (is_prior_day or is_eod_cutoff):
             should_exit = True
             exit_reason = f'EOD Cutoff ({eod_cutoff} CST)'
-            exit_price = spot if ('stock' in structure or 'equity' in structure) else float(trade.get('current_mark') or 1.0)
+            if 'stock' in structure or 'equity' in structure:
+                exit_price = spot if spot > 0 else float(trade.get('current_spot') or trade.get('underlying_entry_price') or trade.get('entry_price') or 1.0)
+            else:
+                exit_price = float(trade.get('current_mark') or trade.get('entry_price') or 1.0)
         elif 'stock' in structure or 'equity' in structure:
             side = str(trade.get('side', 'LONG')).upper()
             pt_px = float(trade.get('profit_target_price') or 0.0)

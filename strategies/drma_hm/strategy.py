@@ -34,6 +34,7 @@ from strategies.drma_hm.market_data_feed import (
     fetch_es_current_price,
     fetch_yahoo_es_5m_bars,
     fetch_yahoo_market_levels,
+    load_es_5m_bars,
     load_spx_5m_bars,
 )
 from strategies.drma_hm.settlement import (
@@ -80,6 +81,7 @@ class DRMAHMStrategy(BaseStrategy):
         self._dir_options_trade_paper: Optional[bool] = None
         self._credit_options_trade_paper: Optional[bool] = None
         self._levels: Dict[str, Optional[float]] = {}
+        self._morning_levels_fetched_date: Optional[date] = None
         self._paper_broker = None
         self._live_broker = None
 
@@ -145,33 +147,30 @@ class DRMAHMStrategy(BaseStrategy):
 
     def _load_session_state(self, root: str, for_date: date) -> Dict[str, Any]:
         path = self._session_state_path(root, for_date)
+        persisted = {}
+        try:
+            from common.strategy_overrides import get_persistent_overrides_for_strategy
+            persisted.update(get_persistent_overrides_for_strategy(self.config.name, root))
+        except Exception:
+            pass
+        try:
+            from common.strategy_modes import get_persistent_modes_for_strategy
+            persisted.update(get_persistent_modes_for_strategy(self.config.name, root))
+        except Exception:
+            pass
+
         if not os.path.isfile(path):
-            try:
-                from common.strategy_modes import get_persistent_modes_for_strategy
-                persisted = get_persistent_modes_for_strategy(self.config.name, root)
-            except Exception:
-                persisted = {}
             return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': dict(persisted)}
         try:
             with open(path, encoding='utf-8') as f:
                 state = json.load(f)
                 if 'overrides' not in state:
                     state['overrides'] = {}
-                try:
-                    from common.strategy_modes import get_persistent_modes_for_strategy
-                    persisted = get_persistent_modes_for_strategy(self.config.name, root)
-                    for k, v in persisted.items():
-                        if k not in state['overrides']:
-                            state['overrides'][k] = v
-                except Exception:
-                    pass
+                for k, v in persisted.items():
+                    if k not in state['overrides']:
+                        state['overrides'][k] = v
                 return state
         except Exception:
-            try:
-                from common.strategy_modes import get_persistent_modes_for_strategy
-                persisted = get_persistent_modes_for_strategy(self.config.name, root)
-            except Exception:
-                persisted = {}
             return {'entered': False, 'signal_count': 0, 'skip_reason': None, 'overrides': dict(persisted)}
 
     def _save_session_state(self, root: str, for_date: date, **fields) -> None:
@@ -364,7 +363,17 @@ class DRMAHMStrategy(BaseStrategy):
             )
 
             # 2. Fetch / initialize market levels (ONH, ONL, PDH, PDL, PDC, ES Offset)
-            self._levels = fetch_yahoo_market_levels(today, self.config, root)
+            # Only query Yahoo Finance around 08:30 AM CST / RTH for ONH & ONL; overnight uses local CSV.
+            startup_now_ct = util.central_now()
+            allow_yahoo_startup = self._is_rth(startup_now_ct)
+            self._levels = fetch_yahoo_market_levels(
+                today,
+                self.config,
+                root,
+                allow_yahoo=allow_yahoo_startup,
+            )
+            if allow_yahoo_startup:
+                self._morning_levels_fetched_date = today
             self._save_session_state(root, today, levels=self._levels)
             self.logger.info(
                 'Market Key Levels loaded: PDH=%.2f, PDL=%.2f, PDC=%.2f, ONH=%s, ONL=%s (source=%s)',
@@ -421,20 +430,67 @@ class DRMAHMStrategy(BaseStrategy):
 
             cached_snapshots = []
             last_cache_key = None
+            cached_overnight_snapshots = []
+            last_overnight_bars_ts = 0.0
 
             # 4. Main monitoring and execution loop
             while self._running:
                 try:
                     now_ct = util.central_now()
+                    if now_ct.date() != today:
+                        today = now_ct.date()
+                        expiry_yymmdd = today.strftime('%y%m%d')
+                        # Midnight date rollover: load local CSV levels only; wait until 08:30 AM CST for Yahoo ONH/ONL
+                        self._levels = fetch_yahoo_market_levels(
+                            today,
+                            self.config,
+                            root,
+                            allow_yahoo=self._is_rth(now_ct),
+                        )
+                        if self._is_rth(now_ct):
+                            self._morning_levels_fetched_date = today
+                        self._save_session_state(root, today, levels=self._levels)
+                        self._recount_daily_signals(root, today)
+                        cached_snapshots = []
+                        last_cache_key = None
+                        cached_overnight_snapshots = []
+                        last_overnight_bars_ts = 0.0
 
-                    # Dynamically re-apply persistent modes and daily overrides so dashboard updates take effect immediately
+                    # Grab ONL and ONH from Yahoo Finance once around 08:30 AM CST when morning RTH opens
+                    if self._is_rth(now_ct) and self._morning_levels_fetched_date != today:
+                        self._levels = fetch_yahoo_market_levels(
+                            today,
+                            self.config,
+                            root,
+                            allow_yahoo=True,
+                        )
+                        self._morning_levels_fetched_date = today
+                        self._save_session_state(root, today, levels=self._levels)
+                        last_cache_key = None
+
+                    # Dynamically re-apply persistent parameter overrides, modes, and daily session overrides
                     try:
+                        from common.strategy_overrides import get_persistent_overrides_for_strategy
+                        strat_ov = get_persistent_overrides_for_strategy(self.config.name, root=root)
+                        if strat_ov:
+                            for ov_k, ov_v in strat_ov.items():
+                                if hasattr(self.config, ov_k):
+                                    setattr(self.config, ov_k, ov_v)
+
                         from common.strategy_modes import get_persistent_modes_for_strategy
                         persisted = get_persistent_modes_for_strategy(self.config.name, root=root)
                         if persisted:
                             for ov_k, ov_v in persisted.items():
                                 if hasattr(self.config, ov_k):
                                     setattr(self.config, ov_k, ov_v)
+
+                        from common.daily_overrides import get_overrides
+                        daily_ov = get_overrides(self.config.name, root)
+                        if daily_ov:
+                            for ov_k, ov_v in daily_ov.items():
+                                if hasattr(self.config, ov_k):
+                                    setattr(self.config, ov_k, ov_v)
+
                         today_session = self._load_session_state(root, today)
                         session_ov = today_session.get('overrides') or {}
                         if session_ov:
@@ -462,6 +518,8 @@ class DRMAHMStrategy(BaseStrategy):
                         if f.startswith('drma_hm_') and f.endswith('.json') and not f.startswith('session_')
                     ] if os.path.isdir(active_dir) else []
 
+                    idle_sleep = 30.0 if self.config.poll_interval_sec >= 1.0 else self.config.poll_interval_sec
+
                     # 1. DAILY HALT (15:00 - 17:00 CST): CME Globex maintenance break
                     # End of active day cutoff: Ensure all open trades (futures and options) are flattened before halt
                     if phase == 'DAILY_HALT':
@@ -479,7 +537,7 @@ class DRMAHMStrategy(BaseStrategy):
                             self._status['state'] = 'SESSION_CLOSED'
                             break
                         self._status['state'] = 'STANDBY_UNTIL_1700'
-                        time.sleep(self.config.poll_interval_sec)
+                        time.sleep(idle_sleep)
                         continue
 
                     # 2. PRE-MARKET PREPARATION (07:00 - 08:30 CST):
@@ -497,7 +555,7 @@ class DRMAHMStrategy(BaseStrategy):
                             except Exception:
                                 pass
                         self._status['state'] = 'PRE_MARKET_READY'
-                        time.sleep(self.config.poll_interval_sec)
+                        time.sleep(idle_sleep)
                         continue
 
                     # 3. OVERNIGHT TRADING (< 07:00 CST or >= 17:00 CST):
@@ -505,33 +563,47 @@ class DRMAHMStrategy(BaseStrategy):
                     if phase == 'OVERNIGHT_TRADING':
                         if not getattr(self.config, 'enable_overnight_futures', True) or not self.config.is_directional_futures_enabled:
                             self._status['state'] = 'WAITING_FOR_OPEN'
-                            time.sleep(self.config.poll_interval_sec)
+                            time.sleep(idle_sleep)
                             continue
 
-                        # Load 5m bars for ES futures from Yahoo Finance
-                        df_es = fetch_yahoo_es_5m_bars(today, include_overnight=True)
-                        if df_es.empty or len(df_es) < 2:
-                            time.sleep(self.config.poll_interval_sec)
-                            continue
+                        # Load 5m bars for ES/MES futures from TastyTrade (cached 30s overnight to avoid running hot)
+                        fut_sym = str(getattr(self.config, 'futures_symbol', 'ES') or 'ES').upper()
+                        now_mono = time.monotonic()
+                        bars_refreshed = False
+                        if not cached_overnight_snapshots or (now_mono - last_overnight_bars_ts) >= 30.0:
+                            df_es = load_es_5m_bars(
+                                data_root,
+                                today,
+                                symbol=fut_sym,
+                                include_overnight=True,
+                            )
+                            if df_es.empty or len(df_es) < 2:
+                                time.sleep(idle_sleep)
+                                continue
 
-                        # Compute indicators on ES bars
-                        _, snapshots = compute_indicators(
-                            df_es,
-                            ma_type=self.config.ma_type,
-                            ma_len=self.config.ma_len,
-                            orb_minutes=self.config.orb_minutes,
-                            min_slope_pts=self.config.min_slope_pts,
-                            max_extension_pts=self.config.max_extension_pts,
-                            pullback_tol_pts=self.config.pullback_tol_pts,
-                            pdh=self._levels.get('pdh'),
-                            pdl=self._levels.get('pdl'),
-                            pdc=self._levels.get('pdc'),
-                            onh=self._levels.get('onh'),
-                            onl=self._levels.get('onl'),
-                        )
-                        if not snapshots:
-                            time.sleep(self.config.poll_interval_sec)
-                            continue
+                            # Compute indicators on ES bars
+                            _, snapshots = compute_indicators(
+                                df_es,
+                                ma_type=self.config.ma_type,
+                                ma_len=self.config.ma_len,
+                                orb_minutes=self.config.orb_minutes,
+                                min_slope_pts=self.config.min_slope_pts,
+                                max_extension_pts=self.config.max_extension_pts,
+                                pullback_tol_pts=self.config.pullback_tol_pts,
+                                pdh=self._levels.get('pdh'),
+                                pdl=self._levels.get('pdl'),
+                                pdc=self._levels.get('pdc'),
+                                onh=self._levels.get('onh'),
+                                onl=self._levels.get('onl'),
+                            )
+                            if not snapshots:
+                                time.sleep(idle_sleep)
+                                continue
+                            cached_overnight_snapshots = snapshots
+                            last_overnight_bars_ts = now_mono
+                            bars_refreshed = True
+                        else:
+                            snapshots = cached_overnight_snapshots
 
                         latest_snap = snapshots[-1]
                         bar_idx = latest_snap.bar_index
@@ -540,6 +612,8 @@ class DRMAHMStrategy(BaseStrategy):
                             broker=self.broker,
                             levels=self._levels,
                             spx_spot=latest_snap.close,
+                            allow_synthetic_fallback=False,
+                            symbol=fut_sym,
                         )
 
                         # Manage open overnight futures trade
@@ -573,6 +647,7 @@ class DRMAHMStrategy(BaseStrategy):
                         if self._futures_position_state == 0 and futs_limit_ok and is_cooled_down:
                             if latest_snap.active_score >= futs_min_thresh and latest_snap.bias in ('BULL', 'BEAR'):
                                 self._enter_directional_futures_trade(root, expiry_yymmdd, latest_snap, bar_idx)
+                                has_open_futures = (self._futures_position_state != 0)
 
                         self._status.update({
                             'state': 'OVERNIGHT_FUTURES_ACTIVE',
@@ -583,9 +658,16 @@ class DRMAHMStrategy(BaseStrategy):
                             'bias': latest_snap.bias,
                             'grade': latest_snap.setup_grade,
                             'active_score': latest_snap.active_score,
-                            'vehicle': 'DIRECTIONAL ES FUTURES (OVERNIGHT)',
+                            'vehicle': f'DIRECTIONAL {fut_sym} FUTURES (OVERNIGHT)',
                         })
-                        time.sleep(self.config.poll_interval_sec)
+                        if bars_refreshed:
+                            self._save_session_state(
+                                root, today,
+                                indicators=dict(self._status),
+                                levels=self._levels,
+                            )
+                        overnight_sleep = self.config.poll_interval_sec if has_open_futures else idle_sleep
+                        time.sleep(overnight_sleep)
                         continue
 
                     # Check if 5m bars file or indicator config has changed before recomputing
@@ -707,6 +789,12 @@ class DRMAHMStrategy(BaseStrategy):
                             with open(t_path, encoding='utf-8') as f:
                                 t_chk = json.load(f)
                             st = t_chk.get('status')
+                            if st == 'closed':
+                                try:
+                                    os.remove(t_path)
+                                except OSError:
+                                    pass
+                                continue
                             if st in ('open', 'closing'):
                                 self._active_trade_path = t_path
                                 is_fut = (t_chk.get('structure_type') == 'futures' or t_chk.get('trade_type') == 'DIRECTIONAL_FUTURES')
@@ -1738,13 +1826,28 @@ class DRMAHMStrategy(BaseStrategy):
         os.makedirs(hist_dir, exist_ok=True)
         hist_path = os.path.join(hist_dir, os.path.basename(trade_path))
 
+        # First update active file so that even if removal is temporarily delayed by file locks (OneDrive/AV),
+        # any concurrent scan sees status='closed' and never re-exits
+        try:
+            with open(trade_path, 'w', encoding='utf-8') as f:
+                json.dump(trade, f, indent=2)
+                f.flush()
+        except OSError:
+            pass
+
         with open(hist_path, 'w', encoding='utf-8') as f:
             json.dump(trade, f, indent=2)
 
-        try:
-            os.remove(trade_path)
-        except OSError:
-            pass
+        removed = False
+        for _ in range(5):
+            try:
+                os.remove(trade_path)
+                removed = True
+                break
+            except OSError:
+                time.sleep(0.15)
+        if not removed:
+            self.logger.warning('DRMA_HM: Active trade file %s marked closed but file lock delayed removal', trade_path)
 
         self.logger.info(
             'DRMA_HM trade %s closed: PnL=$%.2f, reason=%s',
@@ -1789,6 +1892,12 @@ class DRMAHMStrategy(BaseStrategy):
                 res = close_broker.place_multi_leg_order(close_legs, price=current_price, order_type='LIMIT')
                 if not res or not res.success:
                     err_msg = getattr(res, 'message', 'spread close rejected')
+                    if getattr(res, 'status', '') == 'rejected_preflight' and ('flat' in str(err_msg).lower() or 'position_flat' in str(err_msg).lower()):
+                        self.logger.info(
+                            'DRMA_HM: Position already FLAT on brokerage for %s — marking trade closed without sending duplicate orders',
+                            trade.get('trade_id'),
+                        )
+                        return True, 'already_flat_on_broker', abs(float(current_price))
                     self.logger.error('DRMA_HM: Live options spread close order FAILED: %s — aborting exit', err_msg)
                     return False, None, None
                 raw_cid = getattr(res, 'order_id', None)
@@ -1896,7 +2005,14 @@ class DRMAHMStrategy(BaseStrategy):
                     if new_res.status == 'filled' and new_res.filled_price is not None and abs(float(new_res.filled_price)) > 0:
                         return True, current_oid, abs(float(new_res.filled_price))
                 else:
-                    self.logger.error('DRMA_HM: Failed to place replacement order: %s', getattr(new_res, 'message', 'unknown'))
+                    new_msg = getattr(new_res, 'message', 'unknown')
+                    if getattr(new_res, 'status', '') == 'rejected_preflight' and ('flat' in str(new_msg).lower() or 'position_flat' in str(new_msg).lower()):
+                        self.logger.info(
+                            'DRMA_HM: Position confirmed FLAT during chase for %s — finalizing trade as closed',
+                            trade.get('trade_id'),
+                        )
+                        return True, current_oid or 'flat_during_chase', abs(float(new_price))
+                    self.logger.error('DRMA_HM: Failed to place replacement order: %s', new_msg)
             except Exception as place_err:
                 self.logger.error('DRMA_HM: Exception placing replacement order: %s', place_err)
 
@@ -1914,6 +2030,15 @@ class DRMAHMStrategy(BaseStrategy):
         try:
             with open(trade_path, encoding='utf-8') as f:
                 trade = json.load(f)
+
+            # Prevent duplicate exit calls on trades already closed or closing
+            current_st = trade.get('status')
+            if current_st == 'closed':
+                self.logger.info('DRMA_HM: Trade %s is already marked closed — skipping duplicate exit', trade_path)
+                return
+            if current_st == 'closing':
+                self.logger.info('DRMA_HM: Trade %s is already in CLOSING status — skipping duplicate exit call', trade_path)
+                return
 
             # Trade provenance safety: an active trade's own execution mode (paper vs live)
             # MUST always govern its close, regardless of what current strategy mode is.

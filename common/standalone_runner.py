@@ -273,7 +273,7 @@ class StandaloneStrategyRunner:
         state = self._load_session_state()
         has_open_trades = self._has_open_trades()
 
-        if state.get('entered') and self.config.name != 'DRMA_HM_SPX':
+        if state.get('entered') and self.config.name not in ('DRMA_HM_SPX', 'DRMA_HM_STOCKS'):
             self._register_open_trade_streamer_legs()
             if not has_open_trades:
                 self.log.info(
@@ -329,7 +329,7 @@ class StandaloneStrategyRunner:
             return
 
         state = self._load_session_state()
-        if self.config.name != 'DRMA_HM_SPX':
+        if self.config.name not in ('DRMA_HM_SPX', 'DRMA_HM_STOCKS'):
             if state.get('entered') and not self._has_open_trades():
                 self._completed = True
                 return

@@ -8,6 +8,7 @@ import time
 from typing import Optional, Set, Tuple
 
 from common.market_watch import (
+    FUTURES_WATCH_SYMBOLS,
     SPX_LADDER_MAX_ACTIVE_SYMBOLS,
     SPX_LADDER_VOLUME_ENABLED,
     SPX_SYMBOL,
@@ -47,7 +48,7 @@ def _read_optsymbols() -> Set[str]:
 
 
 def _watch_quote_symbols() -> Set[str]:
-    return {dxlink_quote_symbol(s) for s in WATCH_SYMBOLS}
+    return {dxlink_quote_symbol(s) for s in WATCH_SYMBOLS if s not in FUTURES_WATCH_SYMBOLS}
 
 
 def _capped_ladder_symbols(trade_legs: Set[str]) -> Tuple[Set[str], bool]:

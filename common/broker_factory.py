@@ -80,9 +80,10 @@ def get_shared_broker(paper: Optional[bool] = None, *, reset: bool = False):
         return _shared_broker
 
 
-def is_strategy_paper(strategy_name: str, default: bool = True) -> bool:
+def is_strategy_paper(strategy_name: str, default: bool = True, root: Optional[str] = None) -> bool:
     """Return whether strategy is configured for paper trading from daily overrides, configs, or strategies.yaml."""
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    if root is None:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     # 1. Check today's daily overrides first
     try:
         from common.daily_overrides import get_overrides

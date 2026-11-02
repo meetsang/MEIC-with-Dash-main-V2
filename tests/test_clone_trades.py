@@ -869,6 +869,10 @@ class TestSubStrategiesDiscretionary(unittest.TestCase):
         self.engine.take_signal_manually(res_g["signal"]["id"], custom_qty=1, paper_mode=True)
         status2 = self.engine.get_status()
         self.assertEqual(status2["sub_strategies"]["Genie"]["open_trades_count"], 1)
+        self.assertIn("live_unrealized_pnl_usd", status2["stats"])
+        self.assertIn("paper_unrealized_pnl_usd", status2["stats"])
+        self.assertIn("today_live_realized_pnl_usd", status2["stats"])
+        self.assertIn("today_paper_realized_pnl_usd", status2["stats"])
 
 
 class TestOptionSymbols(unittest.TestCase):

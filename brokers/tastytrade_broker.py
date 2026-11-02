@@ -762,6 +762,24 @@ class TastyTradeBroker(BrokerBase):
                 message='new_risk_gate_blocked',
             )
 
+        # Preflight verification: Ensure requested contracts actually exist on broker before submitting any close legs
+        closing_legs = [l for l in legs if str(getattr(l, 'action', '')).upper() in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE')]
+        if closing_legs:
+            closable, reason = self.inspect_legs_closable(closing_legs, priority='HIGH')
+            if not closable:
+                log.error(
+                    'BROKER_PREFLIGHT_BLOCKED_MULTI_LEG_CLOSE legs=%s reason=%s',
+                    [f"{l.action} {l.symbol} qty={getattr(l, 'quantity', 1)}" for l in closing_legs],
+                    reason,
+                )
+                return OrderResult(
+                    False,
+                    None,
+                    'rejected_preflight',
+                    message=f'spread_not_closable_{reason}',
+                    transmitted=False,
+                )
+
         from tastytrade.order import (
             NewOrder,
             OrderAction,
@@ -1010,6 +1028,29 @@ class TastyTradeBroker(BrokerBase):
             OrderType as OT,
         )
 
+        if not is_futures_symbol(symbol):
+            held_qty = self.get_single_leg_position_qty(symbol, priority='HIGH')
+            reason = None
+            if held_qty == 0:
+                reason = 'position_flat'
+            elif held_qty > 0:
+                reason = f'position_mismatch_long (holding=+{held_qty}, need short={qty})'
+            elif abs(held_qty) < qty:
+                reason = f'insufficient_short_qty (holding={held_qty}, need short={qty})'
+
+            if reason is not None:
+                log.error(
+                    'BROKER_PREFLIGHT_BLOCKED_OCO_CLOSE symbol=%s qty=%s reason=%s',
+                    symbol, qty, reason,
+                )
+                return OrderResult(
+                    False,
+                    None,
+                    'rejected_preflight',
+                    message=f'position_not_closable_{reason}',
+                    transmitted=False,
+                )
+
         tt_sym = to_tastytrade(symbol)
         action_enum = OrderAction.BUY_TO_CLOSE
 
@@ -1090,6 +1131,39 @@ class TastyTradeBroker(BrokerBase):
 
         is_fut = is_futures_symbol(symbol)
         action_str = str(action).upper()
+
+        # Preflight verification: Block single-leg closing orders if position is flat or insufficient
+        if not is_fut and action_str in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE'):
+            held_qty = self.get_single_leg_position_qty(symbol, priority='HIGH')
+            reason = None
+            if action_str == 'BUY_TO_CLOSE':
+                if held_qty == 0:
+                    reason = 'position_flat'
+                elif held_qty > 0:
+                    reason = f'position_mismatch_long (holding=+{held_qty}, need short={qty})'
+                elif abs(held_qty) < qty:
+                    reason = f'insufficient_short_qty (holding={held_qty}, need short={qty})'
+            elif action_str == 'SELL_TO_CLOSE':
+                if held_qty == 0:
+                    reason = 'position_flat'
+                elif held_qty < 0:
+                    reason = f'position_mismatch_short (holding={held_qty}, need long={qty})'
+                elif held_qty < qty:
+                    reason = f'insufficient_long_qty (holding=+{held_qty}, need long={qty})'
+
+            if reason is not None:
+                log.error(
+                    'BROKER_PREFLIGHT_BLOCKED_SINGLE_LEG_CLOSE action=%s symbol=%s qty=%s reason=%s',
+                    action_str, symbol, qty, reason,
+                )
+                return OrderResult(
+                    False,
+                    None,
+                    'rejected_preflight',
+                    message=f'position_not_closable_{reason}',
+                    transmitted=False,
+                )
+
         if is_fut:
             action_enum = OrderAction.BUY if 'BUY' in action_str else OrderAction.SELL
         else:
@@ -1412,6 +1486,76 @@ class TastyTradeBroker(BrokerBase):
                 matches.append(_order_result_from_placed_order(order))
         return matches
 
+    def inspect_legs_closable(
+        self,
+        legs: List[ComboLeg],
+        *,
+        priority: str = 'HIGH',
+    ) -> Tuple[bool, str]:
+        """Verify whether all closing legs in `legs` actually exist on the brokerage to close.
+
+        For BUY_TO_CLOSE: requires short position (signed qty <= -leg.quantity).
+        For SELL_TO_CLOSE: requires long position (signed qty >= leg.quantity).
+        If ANY closing leg does not have sufficient position, returns (False, reason).
+        If ALL closing legs have 0 position, returns (False, 'position_flat').
+        """
+        closing_legs = [l for l in legs if str(getattr(l, 'action', '')).upper() in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE')]
+        if not closing_legs:
+            return True, 'no_closing_legs'
+
+        try:
+            positions = self._run(
+                self.account.get_positions(self.session),
+                priority=priority,
+                op='get_positions',
+            )
+        except Exception as exc:
+            log.warning('inspect_legs_closable unavailable: %s', exc)
+            return False, f'unknown ({exc})'
+
+        positions_by_sym: Dict[str, int] = {}
+        for pos in positions or []:
+            sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
+            if sym:
+                positions_by_sym[str(sym).strip()] = _signed_position_qty(pos)
+
+        def _get_held_qty(symbol: str) -> int:
+            tt_sym = to_tastytrade(symbol)
+            for s, q in positions_by_sym.items():
+                if symbols_equivalent(s, tt_sym) or symbols_equivalent(s, symbol):
+                    return q
+            return 0
+
+        flat_count = 0
+        for leg in closing_legs:
+            action = str(leg.action).upper()
+            qty_needed = int(getattr(leg, 'quantity', 1) or 1)
+            held = _get_held_qty(leg.symbol)
+
+            if held == 0:
+                flat_count += 1
+                continue
+
+            if action == 'BUY_TO_CLOSE':
+                if held > 0:
+                    return False, f'position_mismatch_long (leg {leg.symbol} action={action} holding=+{held} need_short={qty_needed})'
+                if abs(held) < qty_needed:
+                    return False, f'insufficient_short_qty (leg {leg.symbol} action={action} holding={held} need_short={qty_needed})'
+
+            elif action == 'SELL_TO_CLOSE':
+                if held < 0:
+                    return False, f'position_mismatch_short (leg {leg.symbol} action={action} holding={held} need_long={qty_needed})'
+                if held < qty_needed:
+                    return False, f'insufficient_long_qty (leg {leg.symbol} action={action} holding=+{held} need_long={qty_needed})'
+
+        if flat_count == len(closing_legs):
+            return False, 'position_flat'
+        if flat_count > 0:
+            missing = [leg.symbol for leg in closing_legs if _get_held_qty(leg.symbol) == 0]
+            return False, f'mismatch_partial_flat (legs {missing} have 0 position)'
+
+        return True, 'closable'
+
     def inspect_spread_position(
         self,
         short_symbol: str,
@@ -1420,45 +1564,25 @@ class TastyTradeBroker(BrokerBase):
         expected_qty: int,
     ) -> str:
         """F-9 — block spread close when account has no closable vertical."""
-        try:
-            positions = self._run(
-                self.account.get_positions(self.session),
-                priority='NORMAL',
-                op='get_positions',
-            )
-        except Exception as exc:
-            log.warning('inspect_spread_position unavailable: %s', exc)
-            return 'unknown'
-
-        short_tt = to_tastytrade(short_symbol)
-        long_tt = to_tastytrade(long_symbol)
-        short_qty = long_qty = 0
-        for pos in positions or []:
-            sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
-            sym_s = str(sym)
-            qty = _signed_position_qty(pos)
-            if symbols_equivalent(sym_s, short_tt):
-                short_qty = qty
-            elif symbols_equivalent(sym_s, long_tt):
-                long_qty = qty
-
-        if short_qty == 0 and long_qty == 0:
-            return 'flat'
-        # Short leg of credit spread is short (negative qty at TT for short options)
-        short_closable = abs(short_qty) >= expected_qty and short_qty < 0
-        long_closable = long_qty >= expected_qty and long_qty > 0
-        if short_closable and long_closable:
+        legs = [
+            ComboLeg(symbol=short_symbol, action='BUY_TO_CLOSE', quantity=expected_qty),
+            ComboLeg(symbol=long_symbol, action='SELL_TO_CLOSE', quantity=expected_qty),
+        ]
+        closable, reason = self.inspect_legs_closable(legs, priority='NORMAL')
+        if closable:
             return 'closable'
-        if short_qty == 0 and long_qty == 0:
+        if 'position_flat' in reason or 'flat' in reason:
             return 'flat'
+        if 'unknown' in reason:
+            return 'unknown'
         return 'mismatch'
 
-    def get_single_leg_position_qty(self, symbol: str) -> int:
+    def get_single_leg_position_qty(self, symbol: str, priority: str = 'HIGH') -> int:
         """Return net signed quantity held for symbol (short < 0, long > 0, 0 if flat)."""
         try:
             positions = self._run(
                 self.account.get_positions(self.session),
-                priority='NORMAL',
+                priority=priority,
                 op='get_positions',
             )
         except Exception as exc:
@@ -1468,7 +1592,7 @@ class TastyTradeBroker(BrokerBase):
         tt_sym = to_tastytrade(symbol)
         for pos in positions or []:
             sym = getattr(pos, 'symbol', None) or getattr(pos, 'underlying_symbol', '')
-            if symbols_equivalent(str(sym), tt_sym):
+            if symbols_equivalent(str(sym), tt_sym) or symbols_equivalent(str(sym), symbol):
                 return _signed_position_qty(pos)
         return 0
 
@@ -1489,14 +1613,26 @@ class TastyTradeBroker(BrokerBase):
         return None
 
     def fetch_spx_price_api(self) -> Optional[float]:
+        from common.market_hours import is_cash_session_open_ct
         from tastytrade.market_data import get_market_data
         from tastytrade.order import InstrumentType
+
+        cash_open = is_cash_session_open_ct()
+        if not cash_open:
+            cached_px = getattr(self, '_offhours_spx_price', None)
+            cached_ts = getattr(self, '_offhours_spx_ts', 0.0)
+            if cached_px is not None and (time.time() - cached_ts) < 900.0:
+                return cached_px
 
         try:
             md = _retry_on_transient(
                 lambda: self._run(get_market_data(self.session, 'SPX', InstrumentType.INDEX))
             )
-            return self._mid_from_market_data(md)
+            px = self._mid_from_market_data(md)
+            if px is not None and not cash_open:
+                self._offhours_spx_price = px
+                self._offhours_spx_ts = time.time()
+            return px
         except Exception as exc:
             log.warning('fetch_spx_price_api failed: %s', exc)
             return None
@@ -1550,10 +1686,14 @@ class TastyTradeBroker(BrokerBase):
         return self._prices.get(symbol)
 
     def get_spx_price(self) -> Optional[float]:
+        from common.market_hours import is_cash_session_open_ct
+
         price = self._prices.get_spx()
         if price is None:
+            if not is_cash_session_open_ct():
+                return None
             price = self._prices.wait_for('SPX', timeout=15.0)
-        if price is None:
+        if price is None and is_cash_session_open_ct():
             log.warning(
                 'SPX not available on MQTT — is streaming/publish_tastytrade.py running?'
             )

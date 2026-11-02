@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Optional
+
+from common.trades_layout import history_dir_for_strategy
 
 log = logging.getLogger(__name__)
 
@@ -123,3 +125,50 @@ def move_trade_to_history(active_path: str, history_dir: str) -> Optional[str]:
     except Exception as exc:
         log.error("Failed to move trade to history (%s): %s", active_path, exc)
         return None
+
+
+def settle_open_stock_trade(
+    trade_path: str,
+    root: str,
+    for_date: Optional[date] = None,
+) -> bool:
+    """Settle an open DRMA stock trade at EOD / session cleanup and move to history."""
+    try:
+        if not os.path.isfile(trade_path):
+            return False
+        with open(trade_path, 'r', encoding='utf-8') as f:
+            trade = json.load(f)
+
+        if not isinstance(trade, dict) or trade.get('status') == 'closed':
+            return False
+
+        structure = str(trade.get('structure_type') or trade.get('trade_type') or '').lower()
+        if 'stock' in structure or 'equity' in structure:
+            exit_price = float(trade.get('current_spot') or trade.get('underlying_entry_price') or trade.get('entry_price') or 1.0)
+        else:
+            exit_price = float(trade.get('current_mark') or trade.get('entry_price') or 1.0)
+
+        settle_stock_trade(trade, exit_price, exit_reason='EOD Cutoff (14:50 CST)')
+
+        today = for_date or date.today()
+        trade['exited_at'] = trade.get('closed_at') or f"{today.isoformat()}T14:50:00"
+
+        hist_dir = history_dir_for_strategy(trade.get('strategy', 'DRMA_HM_STOCKS'), root)
+        os.makedirs(hist_dir, exist_ok=True)
+        fname = os.path.basename(trade_path)
+        dest_path = os.path.join(hist_dir, fname)
+
+        with open(dest_path, 'w', encoding='utf-8') as f:
+            json.dump(trade, f, indent=2)
+
+        try:
+            os.remove(trade_path)
+        except OSError:
+            pass
+
+        log.info('Settled and archived DRMA stock trade %s (pnl=$%.2f)', fname, trade.get('realized_pnl_dollars', 0.0))
+        return True
+    except Exception as exc:
+        log.error('Failed to settle DRMA stock trade %s: %s', trade_path, exc)
+        return False
+

@@ -58,7 +58,7 @@ def _history_money_flags() -> dict:
 
 def _strategy_paper_flag(name: str) -> bool:
     from common.broker_factory import is_strategy_paper
-    return is_strategy_paper(name, default=True)
+    return is_strategy_paper(name, default=True, root=ROOT)
 
 from common import tt_config
 from common.broker_factory import get_mqtt_topic_prefix
@@ -253,7 +253,7 @@ def _phase_display(
         cm = str(close_mechanism).lower()
         if cm == 'profit_target_oco':
             return 'Closed (PT 15¢)'
-        if cm in ('profit_target', 'profit_target_hit'):
+        if cm in ('profit_target', 'profit_target_hit', 'profit_target_resting'):
             return 'Closed (PT)'
         if cm == 'exchange_stop':
             return 'Closed (Stop)'
@@ -2628,8 +2628,27 @@ def api_drma_hm_today():
     except Exception:
         pass
 
-    # Find active trade
-    # Find all active trades
+    history = []
+    hist_trade_ids = set()
+    if os.path.isdir(hist_dir):
+        for path in sorted(glob.glob(os.path.join(hist_dir, f'drma_hm_{today}_*.json')), reverse=True):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    row = json.load(f)
+                attach_dollar_pnl_display(row)
+                if not row.get('date'):
+                    entered_at = row.get('entered_at') or ''
+                    row['date'] = entered_at[:10] if len(entered_at) >= 10 else today
+                history.append(row)
+                if row.get('trade_id'):
+                    hist_trade_ids.add(row['trade_id'])
+            except (OSError, json.JSONDecodeError):
+                continue
+
+    # Sort history descending by entry time (newest on top)
+    history.sort(key=lambda x: str(x.get('entered_at') or x.get('date') or ''), reverse=True)
+
+    # Find active trades (skip and prune any that are already in history or marked closed)
     trades = []
     trade = None
     live_es_price = fetch_es_current_price(levels=session.get('levels') or {}, spx_spot=(strat_status.get('close') if strat_status else None))
@@ -2642,8 +2661,17 @@ def api_drma_hm_today():
             try:
                 with open(path, encoding='utf-8') as f:
                     t = json.load(f)
+                tid = t.get('trade_id')
+                st = t.get('status')
+                # If already in history or marked closed, clean up stale active file
+                if (tid and tid in hist_trade_ids) or st == 'closed':
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    continue
                 trades.append(t)
-                if t.get('status') in ('open', 'closing'):
+                if st in ('open', 'closing'):
                     open_trades_with_paths.append((t, path))
                     is_fut = (t.get('structure_type') == 'futures' or t.get('trade_type') == 'DIRECTIONAL_FUTURES')
                     if is_fut:
@@ -2685,24 +2713,20 @@ def api_drma_hm_today():
         for t in trades:
             attach_dollar_pnl_display(t)
 
+        # Sort active trades descending by entry time
+        trades.sort(key=lambda x: str(x.get('entered_at') or x.get('date') or ''), reverse=True)
         trade = trades[0] if trades else None
 
-    history = []
-    if os.path.isdir(hist_dir):
-        for path in sorted(glob.glob(os.path.join(hist_dir, f'drma_hm_{today}_*.json')), reverse=True):
-            try:
-                with open(path, encoding='utf-8') as f:
-                    row = json.load(f)
-                attach_dollar_pnl_display(row)
-                if not row.get('date'):
-                    entered_at = row.get('entered_at') or ''
-                    row['date'] = entered_at[:10] if len(entered_at) >= 10 else today
-                history.append(row)
-            except (OSError, json.JSONDecodeError):
-                continue
+    live_realized_pnl = sum(float(h.get('realized_pnl_dollars') or 0.0) for h in history if h.get('paper') is False)
+    paper_realized_pnl = sum(float(h.get('realized_pnl_dollars') or 0.0) for h in history if h.get('paper') is not False)
 
-    realized_pnl = sum(float(h.get('realized_pnl_dollars') or 0.0) for h in history)
-    open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in trades if t.get('status') in ('open', 'closing'))
+    live_open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in trades if t.get('status') in ('open', 'closing') and t.get('paper') is False)
+    paper_open_pnl = sum(float(t.get('unrealized_pnl_dollars') or 0.0) for t in trades if t.get('status') in ('open', 'closing') and t.get('paper') is not False)
+
+    live_total_pnl = round(live_realized_pnl + live_open_pnl, 2)
+    paper_total_pnl = round(paper_realized_pnl + paper_open_pnl, 2)
+    realized_pnl = round(live_realized_pnl + paper_realized_pnl, 2)
+    open_pnl = round(live_open_pnl + paper_open_pnl, 2)
     total_pnl = round(realized_pnl + open_pnl, 2)
 
     # Resolve indicators & levels
@@ -2737,7 +2761,7 @@ def api_drma_hm_today():
     if not levels or levels.get('pdh') is None:
         try:
             from strategies.drma_hm.market_data_feed import fetch_yahoo_market_levels
-            raw_levels = fetch_yahoo_market_levels(today_date, cfg, ROOT)
+            raw_levels = fetch_yahoo_market_levels(today_date, cfg, ROOT, allow_yahoo=False)
             if raw_levels:
                 levels = {
                     'pdh': raw_levels.get('pdh'),
@@ -2755,9 +2779,10 @@ def api_drma_hm_today():
     if not indicators or indicators.get('close') is None:
         try:
             if current_phase == 'OVERNIGHT_TRADING' and getattr(cfg, 'enable_overnight_futures', True):
-                from strategies.drma_hm.market_data_feed import fetch_yahoo_es_5m_bars
+                from strategies.drma_hm.market_data_feed import load_es_5m_bars
                 from strategies.drma_hm.indicators import compute_indicators
-                df_es = fetch_yahoo_es_5m_bars(today_date, include_overnight=True)
+                fut_sym = str(getattr(cfg, 'futures_symbol', 'ES') or 'ES').upper()
+                df_es = load_es_5m_bars(data_root, today_date, symbol=fut_sym, include_overnight=True, allow_backfill=False)
                 if not df_es.empty:
                     _, snaps = compute_indicators(
                         df_es,
@@ -2849,6 +2874,12 @@ def api_drma_hm_today():
         'realized_pnl': realized_pnl,
         'open_pnl': open_pnl,
         'total_pnl': total_pnl,
+        'live_realized_pnl': live_realized_pnl,
+        'live_open_pnl': live_open_pnl,
+        'live_total_pnl': live_total_pnl,
+        'paper_realized_pnl': paper_realized_pnl,
+        'paper_open_pnl': paper_open_pnl,
+        'paper_total_pnl': paper_total_pnl,
     })
 
 
@@ -2868,7 +2899,9 @@ def api_drma_stocks_today():
     os.makedirs(hist_dir, exist_ok=True)
 
     # Trigger evaluation/update of all stocks
-    strat = DRMAStocksStrategy(config=DRMAStocksConfig(name=trades_layout.STRATEGY_DRMA_STOCKS, root=ROOT))
+    from common.daily_overrides import effective_config
+    cfg = effective_config(DRMAStocksConfig(name=trades_layout.STRATEGY_DRMA_STOCKS, root=ROOT), 'DRMA_HM_STOCKS', ROOT)
+    strat = DRMAStocksStrategy(config=cfg)
     stock_summaries = strat.evaluate_all_stocks(ROOT)
 
     # Read active open trades

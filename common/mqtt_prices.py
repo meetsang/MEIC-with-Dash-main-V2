@@ -95,7 +95,10 @@ class MqttPriceCache:
         if now - self._last_stale_warn_at < STALE_WARN_SEC:
             return
         self._last_stale_warn_at = now
-        log.warning(
+        from common.market_hours import is_cash_session_open_ct
+
+        log_fn = log.warning if is_cash_session_open_ct() else log.debug
+        log_fn(
             'MQTT price cache stale %.0fs (threshold %.0fs)',
             age,
             self._stale_threshold_sec,

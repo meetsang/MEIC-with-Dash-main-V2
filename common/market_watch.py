@@ -5,6 +5,11 @@ import os
 from datetime import time
 from typing import FrozenSet, Optional, Tuple
 
+FUTURES_WATCH_SYMBOLS: Tuple[str, ...] = (
+    'ES',
+    'MES',
+)
+
 # --- Watch universe (single source of truth) ---
 WATCH_SYMBOLS: Tuple[str, ...] = (
     'SPX',
@@ -14,6 +19,8 @@ WATCH_SYMBOLS: Tuple[str, ...] = (
     'IWM',
     'TLT',
     'GLD',
+    'ES',
+    'MES',
 )
 
 SPX_SYMBOL = 'SPX'
@@ -58,9 +65,10 @@ DXLINK_TO_MQTT: dict[str, str] = {
     '/MES:XCME': 'MES',
 }
 
-# Trade channel for OHLCV (all watch symbols except SPX index).
+# Trade channel for OHLCV (all watch symbols except SPX index and futures,
+# whose front-month DXLink contract symbols are resolved dynamically).
 TRADE_WATCH_SYMBOLS: Tuple[str, ...] = tuple(
-    s for s in WATCH_SYMBOLS if s not in SPX_NO_VOLUME
+    s for s in WATCH_SYMBOLS if s not in SPX_NO_VOLUME and s not in FUTURES_WATCH_SYMBOLS
 )
 
 # --- Sidecar SPX ladder defaults (ON unless env disables) ---

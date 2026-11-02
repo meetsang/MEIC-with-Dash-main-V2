@@ -122,6 +122,14 @@ def test_watch_symbol_from_mqtt_topic():
     assert watch_symbol_from_mqtt_topic('QQQ') == 'QQQ'
     assert watch_symbol_from_mqtt_topic('TLT') == 'TLT'
     assert watch_symbol_from_mqtt_topic('GLD') == 'GLD'
+    assert watch_symbol_from_mqtt_topic('ES') == 'ES'
+    assert watch_symbol_from_mqtt_topic('/ES') == 'ES'
+    assert watch_symbol_from_mqtt_topic('/ESZ26:XCME') == 'ES'
+    assert watch_symbol_from_mqtt_topic('ES__TSIZE') == 'ES'
+    assert watch_symbol_from_mqtt_topic('MES') == 'MES'
+    assert watch_symbol_from_mqtt_topic('/MES') == 'MES'
+    assert watch_symbol_from_mqtt_topic('/MESZ26:XCME') == 'MES'
+    assert watch_symbol_from_mqtt_topic('MES__TSIZE') == 'MES'
     assert watch_symbol_from_mqtt_topic('.SPXW260708P7400') is None
     assert watch_symbol_from_mqtt_topic('QQQ__TSIZE') == 'QQQ'
 
@@ -136,6 +144,8 @@ def test_qqq_ohlc_header_has_volume():
     from market_data.indicators import ohlc_header
 
     assert 'volume' in ohlc_header('QQQ')
+    assert 'volume' in ohlc_header('ES')
+    assert 'volume' in ohlc_header('MES')
 
 
 def test_ohlcv_volume_sums_trade_sizes():
@@ -157,5 +167,3 @@ def test_ohlcv_volume_sums_trade_sizes():
             rows = list(csv.DictReader(f))
         assert len(rows) == 1
         assert rows[0]['volume'] == '150'
-
-

@@ -26,35 +26,30 @@ def session_state_path(strategy_name: str, root: str, for_date: Optional[date] =
 
 def load_session_state(strategy_name: str, root: str) -> Dict[str, Any]:
     path = session_state_path(strategy_name, root)
+    persisted = {}
+    try:
+        from common.strategy_overrides import get_persistent_overrides_for_strategy
+        persisted.update(get_persistent_overrides_for_strategy(strategy_name, root))
+    except Exception:
+        pass
+    try:
+        from common.strategy_modes import get_persistent_modes_for_strategy
+        persisted.update(get_persistent_modes_for_strategy(strategy_name, root))
+    except Exception:
+        pass
+
     if not os.path.isfile(path):
-        persisted = {}
-        try:
-            from common.strategy_modes import get_persistent_modes_for_strategy
-            persisted = get_persistent_modes_for_strategy(strategy_name, root)
-        except Exception:
-            pass
         return {'entered': False, 'skip_reason': None, 'overrides': dict(persisted)}
     try:
         with open(path, encoding='utf-8') as f:
             state = json.load(f)
     except (OSError, json.JSONDecodeError):
-        persisted = {}
-        try:
-            from common.strategy_modes import get_persistent_modes_for_strategy
-            persisted = get_persistent_modes_for_strategy(strategy_name, root)
-        except Exception:
-            pass
         return {'entered': False, 'skip_reason': None, 'overrides': dict(persisted)}
     if 'overrides' not in state:
         state['overrides'] = {}
-    try:
-        from common.strategy_modes import get_persistent_modes_for_strategy
-        persisted = get_persistent_modes_for_strategy(strategy_name, root)
-        for k, v in persisted.items():
-            if k not in state['overrides']:
-                state['overrides'][k] = v
-    except Exception:
-        pass
+    for k, v in persisted.items():
+        if k not in state['overrides']:
+            state['overrides'][k] = v
     return state
 
 
@@ -111,6 +106,13 @@ def set_overrides(strategy_name: str, root: str, updates: Dict[str, Any], cfg_cl
     state['overrides'] = overrides
     save_session_state(strategy_name, root, state)
 
+    # Persist strategy parameter overrides across days and restarts
+    try:
+        from common.strategy_overrides import set_persistent_override_for_strategy
+        set_persistent_override_for_strategy(strategy_name, updates, root=root)
+    except Exception:
+        pass
+
     # Persist live/paper execution modes so they stick across sessions and restarts
     mode_updates = {k: v for k, v in updates.items() if k in ('paper', 'dir_paper', 'non_dir_paper', 'futures_paper', 'mode')}
     if mode_updates:
@@ -140,6 +142,12 @@ def delete_override(strategy_name: str, root: str, key: str) -> Dict[str, Any]:
     state['overrides'] = overrides
     save_session_state(strategy_name, root, state)
 
+    try:
+        from common.strategy_overrides import delete_persistent_override_for_strategy
+        delete_persistent_override_for_strategy(strategy_name, key, root=root)
+    except Exception:
+        pass
+
     if key in ('paper', 'dir_paper', 'non_dir_paper', 'futures_paper', 'mode'):
         try:
             from common.strategy_modes import delete_strategy_paper_mode
@@ -151,9 +159,16 @@ def delete_override(strategy_name: str, root: str, key: str) -> Dict[str, Any]:
 
 
 def effective_config(cfg: StrategyConfig, strategy_name: str, root: str) -> StrategyConfig:
-    """Return a copy of cfg with persistent modes and today's overrides applied."""
+    """Return a copy of cfg with persistent modes, persistent overrides, and today's overrides applied."""
     import copy
     merged = copy.copy(cfg)
+    try:
+        from common.strategy_overrides import get_persistent_overrides_for_strategy
+        persisted_ov = get_persistent_overrides_for_strategy(strategy_name, root=root)
+        if persisted_ov:
+            apply_config_overrides(merged, persisted_ov)
+    except Exception:
+        pass
     try:
         from common.strategy_modes import get_persistent_modes_for_strategy
         persisted = get_persistent_modes_for_strategy(strategy_name, root=root)
