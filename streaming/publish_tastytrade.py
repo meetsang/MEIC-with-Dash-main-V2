@@ -12,6 +12,7 @@ import common.win_ssl_env  # noqa: F401
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime as dt, timezone
 
@@ -19,6 +20,7 @@ import paho.mqtt.client as mqtt
 
 from common.broker_factory import get_mqtt_topic_prefix
 from common.market_watch import (
+    INDEX_TRADE_PRICE_SYMBOLS,
     SPX_LADDER_VOLUME_ENABLED,
     TRADE_SIZE_TOPIC_SUFFIX,
     VOLUME_TOPIC_SUFFIX,
@@ -52,6 +54,11 @@ from streaming.ladder_subscribe import (
 
 OPTION_SYMBOL_FILE = config.STREAM_SYMBOLS
 TOPIC_PREFIX = get_mqtt_topic_prefix() or 'TASTYTRADE/'
+_stream_stop_event = threading.Event()
+
+
+def stop_streamer() -> None:
+    _stream_stop_event.set()
 
 
 def _get_logger():
@@ -301,6 +308,11 @@ async def _stream_loop(session, slog):
 
     _publish_session()
 
+    try:
+        await session.refresh(force=True)
+    except Exception as exc:
+        slog.warning('Pre-streamer OAuth session refresh failed: %s', exc)
+
     fut_symbols = await _resolve_futures_symbols()
     quote_set.update(fut_symbols)
     trade_set.update(fut_symbols)
@@ -334,10 +346,10 @@ async def _stream_loop(session, slog):
                 raw_sym = trade.event_symbol
                 mqtt_sym = mqtt_topic_from_dxlink(raw_sym)
                 price = float(trade.price or 0)
-                if mqtt_sym == 'SPX':
+                if mqtt_sym in INDEX_TRADE_PRICE_SYMBOLS:
                     if price > 0:
                         _publish_genuine(
-                            'SPX',
+                            mqtt_sym,
                             price,
                             event_kind='dxlink_trade',
                             source_event_epoch=_trade_source_epoch(trade),
@@ -385,7 +397,7 @@ async def _stream_loop(session, slog):
         trade_task = asyncio.create_task(_handle_trades())
 
         tick = 0
-        while True:
+        while not (_stream_stop_event and _stream_stop_event.is_set()):
             # Session lifecycle is owned by run.py (or another launcher profile).
             # Do not self-stop at cash close — overnight/futures streamers may run longer.
 
@@ -435,10 +447,22 @@ async def _stream_loop(session, slog):
 
             await asyncio.sleep(1)
 
+        quote_task.cancel()
+        trade_task.cancel()
+        try:
+            await asyncio.gather(quote_task, trade_task, return_exceptions=True)
+        except Exception:
+            pass
 
-def main():
+
+def run_streamer_loop(stop_event: threading.Event | None = None) -> None:
+    global _stream_stop_event
+    if stop_event is not None:
+        _stream_stop_event = stop_event
+    else:
+        _stream_stop_event.clear()
     slog = _get_logger()
-    while True:
+    while not _stream_stop_event.is_set():
         try:
             # Streamer requires live market data session (TastyTrade DXLink), even in paper mode
             session = create_tastytrade_session(paper=False)
@@ -449,9 +473,15 @@ def main():
             slog.info('TastyTrade streamer shutdown requested')
             break
         except Exception as exc:
+            if _stream_stop_event.is_set():
+                break
             slog.exception('Streamer loop encountered error, reconnecting in 3s: %s', exc)
             time.sleep(3)
     slog.info('TastyTrade streamer stopped')
+
+
+def main():
+    run_streamer_loop()
 
 
 if __name__ == '__main__':

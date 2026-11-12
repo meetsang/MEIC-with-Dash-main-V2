@@ -74,9 +74,66 @@ def _capped_ladder_symbols(trade_legs: Set[str]) -> Tuple[Set[str], bool]:
     return out, cap_hit
 
 
+def _active_trade_quote_symbols() -> Set[str]:
+    """Scan all active strategy directories for open/working trades and extract option symbols dynamically.
+
+    Guarantees 0DTE, 1DTE, or multi-DTE trades are always automatically streamed by DXLink
+    even across launcher restarts or if optsymbols.json was not yet written.
+    """
+    out: Set[str] = set()
+    try:
+        from common import trades_layout
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        for act_dir in trades_layout.all_active_dirs(root):
+            if not os.path.isdir(act_dir):
+                continue
+            for fname in os.listdir(act_dir):
+                if not fname.endswith('.json') or fname.startswith('.'):
+                    continue
+                fpath = os.path.join(act_dir, fname)
+                try:
+                    with open(fpath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    st = str(data.get('status', 'open')).lower()
+                    if st not in ('open', 'closing', 'pending', 'working', 'pending_fill'):
+                        continue
+
+                    syms_to_add = []
+                    s_sym = (data.get('short_leg') or {}).get('symbol')
+                    l_sym = (data.get('long_leg') or {}).get('symbol')
+                    if s_sym:
+                        syms_to_add.append(s_sym)
+                    if l_sym:
+                        syms_to_add.append(l_sym)
+                    if data.get('body_symbol'):
+                        syms_to_add.append(data['body_symbol'])
+                    for st_item in data.get('structures') or []:
+                        for leg in st_item.get('legs') or []:
+                            if leg.get('symbol'):
+                                syms_to_add.append(leg['symbol'])
+                    spec = data.get('spec') or {}
+                    if spec.get('stream_symbol'):
+                        syms_to_add.append(spec['stream_symbol'])
+                    elif spec.get('tasty_symbol'):
+                        syms_to_add.append(spec['tasty_symbol'])
+
+                    for s in syms_to_add:
+                        text = str(s).strip()
+                        if not text:
+                            continue
+                        dx = to_tastytrade(text) if not text.startswith('.') else text
+                        if dx:
+                            out.add(dx)
+                except Exception:
+                    pass
+    except Exception as exc:
+        log.debug('Error scanning active trade quote symbols: %s', exc)
+    return out
+
+
 def build_quote_subscribe_set() -> Tuple[Set[str], dict]:
-    """Union WATCH ∪ trade legs ∪ capped ladder (deduped). Trade legs always included."""
-    trade_legs = _read_optsymbols()
+    """Union WATCH ∪ trade legs ∪ active trade legs ∪ capped ladder (deduped). Trade legs always included."""
+    trade_legs = _read_optsymbols() | _active_trade_quote_symbols()
     watch = _watch_quote_symbols()
     ladder, cap_hit = _capped_ladder_symbols(trade_legs)
     quote_set = set(watch) | set(trade_legs) | set(ladder)

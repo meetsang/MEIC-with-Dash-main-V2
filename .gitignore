@@ -57,3 +57,8 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+trades/*.sqlite
+trades/db.sqlite
+common/nyse_calendar_cache.json
+

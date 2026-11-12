@@ -198,8 +198,8 @@ class SkylineStrategy(BaseStrategy):
             time.sleep(min(30, max(1, (target - now).total_seconds())))
 
     def _check_trading_day(self) -> tuple[bool, str]:
-        import run as launcher
-        return launcher.check_trading_day()
+        from common.config import check_trading_day
+        return check_trading_day()
 
     def _prior_close(self, root: str) -> Optional[float]:
         from common import config as common_config

@@ -19,7 +19,9 @@ from dashboard.runtime_display import (
     quote_source_label,
 )
 from dashboard.trade_times import trade_entry_time_iso, trade_exit_time_iso
-from blocks.stop.stop_math import stop_multiplier_for_state
+from blocks.stop.stop_math import stop_loss_pct_for_state, stop_multiplier_for_state
+from blocks.session.manual_place import is_debit_side_or_structure, normalize_pct_ratio
+from manual_spread.butterfly import STRUCTURE_TYPES as BF_STRUCTURE_TYPES
 from common.symbols import parse_canonical
 from common.option_ticks import round_spx_option_price
 
@@ -49,11 +51,14 @@ def _resolve_active_stop(trade: dict) -> dict:
     return active
 
 
-def _leg_fill_label(credit, short_p, long_p) -> str:
+def _leg_fill_label(credit, short_p, long_p, *, is_debit: bool = False) -> str:
     if short_p is None or long_p is None:
         return f'{credit:.2f}' if credit is not None else ''
     sp = float(short_p)
     lp = float(long_p)
+    if is_debit:
+        db = float(credit) if credit is not None else round(lp - sp, 2)
+        return f'{db:.2f} ({lp:.2f}-{sp:.2f})'
     cr = float(credit) if credit is not None else round(sp - lp, 2)
     return f'{cr:.2f} ({sp:.2f}-{lp:.2f})'
 
@@ -166,7 +171,24 @@ def build_manual_trades(
         canonical = parse_canonical(short_sym) if short_sym else None
         expiry = canonical[0] if canonical else (entry.get('expiry') or trade.get('expiry') or '')
         structure_type = trade.get('structure_type') or entry.get('structure_type') or ''
-        limit_credit = float(entry.get('limit_credit') or entry.get('net_credit') or 0)
+        side = entry.get('side') or trade.get('side') or ''
+        is_debit = (
+            str(trade.get('spread_type') or entry.get('spread_type') or '').lower() == 'debit'
+            or is_debit_side_or_structure(side, structure_type)
+        )
+        if is_debit:
+            limit_credit = float(
+                entry.get('limit_debit')
+                or entry.get('net_debit')
+                or entry.get('debit')
+                or entry.get('limit_credit')
+                or entry.get('net_credit')
+                or 0
+            )
+            net = float(entry.get('net_debit') or entry.get('debit') or entry.get('net_credit') or limit_credit)
+        else:
+            limit_credit = float(entry.get('limit_credit') or entry.get('net_credit') or 0)
+            net = float(entry.get('net_credit') or limit_credit)
         quantity = int(trade.get('quantity') or 1)
         filled = int(trade.get('filled_quantity') or 0)
         short_fill = float(short_leg.get('fill_price') or 0)
@@ -190,8 +212,11 @@ def build_manual_trades(
             and watch.get('short_mqtt')
             and watch.get('long_mqtt')
         ):
-            cur_short = round(cur_long + float(watch['spread_mid']), 4)
-        cur_spread = round(cur_short - cur_long, 2)
+            if is_debit:
+                cur_long = round(cur_short + float(watch['spread_mid']), 4)
+            else:
+                cur_short = round(cur_long + float(watch['spread_mid']), 4)
+        cur_spread = round(cur_long - cur_short, 2) if is_debit else round(cur_short - cur_long, 2)
 
         close_mechanism = trade.get('close_mechanism')
         row_state = (
@@ -205,7 +230,6 @@ def build_manual_trades(
             )
         )
 
-        net = float(entry.get('net_credit') or limit_credit)
         live_pnl = 0.0
         pnl_class = 'text-muted'
         pnl_frozen = False
@@ -228,14 +252,17 @@ def build_manual_trades(
         elif filled > 0:
             entry_label = decorate_entry_label(
                 trade,
-                _leg_fill_label(net, short_fill, long_fill),
+                _leg_fill_label(net, short_fill, long_fill, is_debit=is_debit),
             )
 
         exit_label = ''
         if exit_short is not None:
             le = float(long_close) if long_close is not None else float(cur_long)
             asterisk = '*' if long_close is None and status == 'closing' else ''
-            exit_label = f'{exit_credit:.2f} ({float(exit_short):.2f}-{le:.2f}{asterisk})'
+            if is_debit:
+                exit_label = f'{exit_credit:.2f} ({le:.2f}-{float(exit_short):.2f}{asterisk})'
+            else:
+                exit_label = f'{exit_credit:.2f} ({float(exit_short):.2f}-{le:.2f}{asterisk})'
         elif exit_credit is not None:
             exit_label = f'{exit_credit:.2f}'
 
@@ -246,9 +273,10 @@ def build_manual_trades(
         active_stop = _resolve_active_stop(trade)
         stop_order_id = active_stop.get('order_id') or ''
         stop_mult = stop_multiplier_for_state(trade)
+        sl_pct = stop_loss_pct_for_state(trade)
         stop_px = active_stop.get('stop_price') or active_stop.get('stop_trigger_debit')
-        if stop_px is None and net and stop_mult:
-            stop_px = round_spx_option_price(net * stop_mult)
+        if stop_px is None and net and stop_mult is not None:
+            stop_px = round_spx_option_price(max(0.0, net * stop_mult))
         is_split = bool(trade.get('is_scale_out_split'))
         parent_lot = str(trade.get('parent_lot') or '')
         is_oco_stop = active_stop.get('type') in ('SPREAD_OCO', 'OCO') or is_split
@@ -259,7 +287,6 @@ def build_manual_trades(
             trade_status=status,
         )
         lot = trade.get('lot', '')
-        side = entry.get('side', '')
         slot_key = f'{lot}_{side}' if lot and side else ''
         pt_pct = trade.get('profit_target_pct')
         if pt_pct is None and isinstance(trade.get('exit_config'), dict):
@@ -267,15 +294,40 @@ def build_manual_trades(
         if pt_pct is None and isinstance(trade.get('plan'), dict):
             pt_pct = trade.get('plan', {}).get('profit_target_pct')
         if pt_pct is None:
-            pt_pct = 0.50
+            pt_pct = 1.00 if is_debit else 0.50
         else:
             pt_pct = float(pt_pct)
+
+        if is_debit:
+            row_stop_label = stop_label_fn(active_stop) if active_stop else (
+                f'SL {float(stop_px):.2f} ({round(sl_pct * 100, 2):g}%)'
+                if stop_px is not None
+                else f'SL {round(sl_pct * 100, 2):g}%'
+            )
+            row_phase = (
+                f'Debit ({round(sl_pct * 100, 2):g}% SL)'
+                if status == 'open'
+                else ''
+            )
+        else:
+            row_stop_label = stop_label_fn(active_stop)
+            row_phase = (
+                'OCO (PT/SL)'
+                if is_oco_stop and status == 'open'
+                else (
+                    phase_display_fn(phases, stop_multiplier_for_state(trade))
+                    if status == 'open'
+                    else ''
+                )
+            )
 
         rows.append({
             'lot': lot,
             'side': side,
             'slot_key': slot_key,
+            'spread_type': 'debit' if is_debit else 'credit',
             'stop_multiplier': stop_mult,
+            'stop_loss_pct': sl_pct,
             'profit_target_pct': pt_pct,
             'short_strike': short_leg.get('strike', ''),
             'long_strike': long_leg.get('strike', ''),
@@ -302,16 +354,8 @@ def build_manual_trades(
                 round(exit_credit, 2) if exit_credit is not None and pnl_frozen
                 else cur_spread
             ),
-            'phase': (
-                'OCO (PT/SL)'
-                if is_oco_stop and status == 'open'
-                else (
-                    phase_display_fn(phases, stop_multiplier_for_state(trade))
-                    if status == 'open'
-                    else ''
-                )
-            ),
-            'stop_label': stop_label_fn(active_stop),
+            'phase': row_phase,
+            'stop_label': row_stop_label,
             'stop_order_id': stop_order_id,
             'stop_price': float(stop_px) if stop_px is not None else None,
             'is_scale_out_split': is_split,
@@ -372,11 +416,18 @@ def build_manual_trades(
                     pt_val = getattr(srow, 'profit_target_pct', 0.50)
                     if pt_val is None:
                         pt_val = 0.50
+                    srow_is_debit = is_debit_side_or_structure(srow.side, getattr(srow, 'structure_type', ''))
+                    srow_state_Stub = {
+                        'spread_type': 'debit' if srow_is_debit else 'credit',
+                        'stop_multiplier': srow.stop_multiplier,
+                    }
                     rows.append({
                         'lot': srow.lot,
                         'side': srow.side,
                         'slot_key': srow.slot_key,
+                        'spread_type': 'debit' if srow_is_debit else 'credit',
                         'stop_multiplier': srow.stop_multiplier or 0,
+                        'stop_loss_pct': stop_loss_pct_for_state(srow_state_Stub),
                         'profit_target_pct': float(pt_val),
                         'short_strike': str(srow.short_strike),
                         'long_strike': str(srow.long_strike),
@@ -628,7 +679,7 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
             from blocks.session.manual_helpers import dispatch_manual_place
 
             structure_type = (data.get('structure_type') or '').strip().lower()
-            if structure_type:
+            if structure_type in BF_STRUCTURE_TYPES:
                 body_strike = int(data['body_strike'])
                 wing_half = int(data.get('wing_half', ms_config.DEFAULT_BF_WING_HALF))
                 limit_price = float(data.get('limit_price') or data['limit_credit'])
@@ -657,9 +708,13 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
                 return jsonify(result), code
 
             side = data.get('side', 'P')
+            if structure_type in ('debit_p', 'pds'):
+                side = 'PDS'
+            elif structure_type in ('debit_c', 'cds'):
+                side = 'CDS'
             short_strike = int(data['short_strike'])
             long_strike = int(data['long_strike'])
-            limit_credit = float(data['limit_credit'])
+            limit_credit = float(data.get('limit_credit') or data.get('limit_debit') or data.get('limit_price'))
             quantity = int(data.get('quantity', ms_config.DEFAULT_QUANTITY))
             expiry = data.get('expiry', '')
 
@@ -672,9 +727,10 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
                 limit_credit=limit_credit,
                 quantity=quantity,
                 expiry=expiry,
+                structure_type=structure_type,
                 wait_for_launcher_sec=2.0,
                 **{k: data.get(k) for k in (
-                    'stop_multiplier', 'profit_target_pct', 'on_unfilled', 'fill_wait_sec',
+                    'stop_loss_pct', 'stop_multiplier', 'profit_target_pct', 'on_unfilled', 'fill_wait_sec',
                     'chase_floor', 'chase_max_attempts', 'max_attempts',
                 ) if k in data},
             )
@@ -805,30 +861,44 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
 
         # Resolve strikes & side
         side = (data.get('side') or entry.get('side') or 'P').upper()
+        is_debit = (
+            str(trade.get('spread_type') or entry.get('spread_type') or '').lower() == 'debit'
+            or is_debit_side_or_structure(side, structure_type)
+        )
+        if is_debit and side in ('P', 'C'):
+            side = 'PDS' if side == 'P' else 'CDS'
         quantity = int(data.get('quantity') or trade.get('quantity') or ms_config.DEFAULT_QUANTITY)
-        stop_mult = float(data.get('stop_multiplier') or stop_multiplier_for_state(trade) or 2.0)
+        stop_mult = float(data.get('stop_multiplier') if data.get('stop_multiplier') is not None else (stop_multiplier_for_state(trade) or (0.5 if is_debit else 2.0)))
 
-        # Resolve credit: user override, or fallback to original
+        # Resolve credit/debit: user override, or fallback to original
         if data.get('limit_credit') is not None:
             limit_credit = float(data['limit_credit'])
         else:
-            limit_credit = float(entry.get('limit_credit') or entry.get('net_credit') or 0.55)
+            limit_credit = float(
+                entry.get('limit_debit')
+                or entry.get('net_debit')
+                or entry.get('limit_credit')
+                or entry.get('net_credit')
+                or 0.55
+            )
 
         pt_pct = data.get('profit_target_pct')
         if pt_pct is None:
-            pt_pct = trade.get('profit_target_pct') or (trade.get('exit_config') or {}).get('profit_target_pct') or 0.50
+            pt_pct = trade.get('profit_target_pct') or (trade.get('exit_config') or {}).get('profit_target_pct') or (1.00 if is_debit else 0.50)
         plan_fields = {
             'stop_multiplier': stop_mult,
-            'profit_target_pct': float(pt_pct),
+            'profit_target_pct': normalize_pct_ratio(pt_pct, default=1.00 if is_debit else 0.50),
             'on_unfilled': data.get('on_unfilled') or trade.get('on_unfilled') or 'none',
-            'fill_wait_sec': int(data.get('fill_wait_sec') or trade.get('plan', {}).get('fill_wait_sec') or 5),
-            'max_attempts': int(data.get('max_attempts') or trade.get('plan', {}).get('max_attempts') or 1),
+            'fill_wait_sec': int(data.get('fill_wait_sec') or (trade.get('plan') or {}).get('fill_wait_sec') or 5),
+            'max_attempts': int(data.get('max_attempts') or (trade.get('plan') or {}).get('max_attempts') or 1),
         }
+        if data.get('stop_loss_pct') is not None:
+            plan_fields['stop_loss_pct'] = data.get('stop_loss_pct')
 
         try:
             from blocks.session.manual_helpers import dispatch_manual_place
 
-            if structure_type:
+            if structure_type in BF_STRUCTURE_TYPES:
                 body_strike = int(data.get('body_strike') or trade.get('body_strike') or short_leg.get('strike') or 0)
                 wing_half = int(data.get('wing_half') or trade.get('wing_half') or ms_config.DEFAULT_BF_WING_HALF)
                 from manual_spread.butterfly import side_for_structure_type
@@ -862,6 +932,7 @@ def register_manual_spread_routes(app, *, live_prices, index_topic, trades_dir, 
                     limit_credit=limit_credit,
                     quantity=quantity,
                     expiry=expiry,
+                    structure_type=structure_type,
                     wait_for_launcher_sec=2.0,
                     **plan_fields,
                 )

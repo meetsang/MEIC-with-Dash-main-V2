@@ -9,11 +9,14 @@ import time
 from datetime import date
 from typing import Any, Dict, Optional
 
-from common.broker_factory import get_shared_broker_for_strategy
+from common.broker_factory import get_broker_reset_generation, get_shared_broker_for_strategy
+from common.config import check_trading_day
 from common.daily_overrides import effective_config, is_disabled_for_today
 from common.portfolio_guard import PortfolioGuard, PortfolioGuardConfig, is_strategy_halted
 from common.trades_layout import active_dir_for_strategy
 from strategies.base import BaseStrategy
+
+_REVIVE_BACKOFF_STEPS = (5.0, 15.0, 60.0, 300.0)
 
 
 class StandaloneStrategyRunner:
@@ -29,6 +32,9 @@ class StandaloneStrategyRunner:
         self._last_entry_attempt: Optional[str] = None
         self._running = False
         self._completed = False
+        self._broker_gen: int = get_broker_reset_generation()
+        self._revive_count: int = 0
+        self._next_revive_mono: float = 0.0
 
     @property
     def config(self):
@@ -212,7 +218,8 @@ class StandaloneStrategyRunner:
     def _resolve_broker(self) -> None:
         curr_broker = self.strategy.broker
         desired_paper = bool(self.config.paper)
-        if curr_broker is not None:
+        curr_gen = get_broker_reset_generation()
+        if curr_broker is not None and self._broker_gen == curr_gen:
             is_curr_paper = getattr(curr_broker, '_is_journal', False) or getattr(curr_broker, '_is_paper', False)
             if is_curr_paper == desired_paper:
                 return
@@ -222,6 +229,7 @@ class StandaloneStrategyRunner:
             reset=True,
         )
         self.strategy.broker = broker
+        self._broker_gen = curr_gen
         self._assert_paper_safety()
 
     def _trading_allowed(self) -> tuple[bool, str]:
@@ -230,8 +238,7 @@ class StandaloneStrategyRunner:
         if is_disabled_for_today(self.strategy.config, self.config.name, self.root):
             return False, 'disabled_for_today'
         try:
-            import run as launcher
-            should_trade, reason = launcher.check_trading_day()
+            should_trade, reason = check_trading_day()
             return should_trade, reason
         except Exception as exc:
             self.log.warning('Trading-day check failed: %s', exc)
@@ -311,6 +318,7 @@ class StandaloneStrategyRunner:
             self._last_entry_attempt = time.strftime('%Y-%m-%dT%H:%M:%S')
             self.strategy.run()
             self._completed = True
+            self._revive_count = 0
         except Exception as exc:
             self._last_error = str(exc)
             self.log.exception('Standalone strategy %s failed', self.config.name)
@@ -329,20 +337,34 @@ class StandaloneStrategyRunner:
             return
 
         state = self._load_session_state()
+        skip_reason = state.get('skip_reason')
+        if skip_reason == 'new_risk_gate_blocked' and not self._has_open_trades():
+            self._completed = True
+            return
         if self.config.name not in ('DRMA_HM_SPX', 'DRMA_HM_STOCKS'):
             if state.get('entered') and not self._has_open_trades():
                 self._completed = True
                 return
-            if state.get('skip_reason'):
+            if skip_reason:
                 self._completed = True
                 return
 
+        now_mono = time.monotonic()
+        if now_mono < self._next_revive_mono:
+            return
+
         allowed, _ = self._trading_allowed()
         if allowed:
+            step_idx = min(self._revive_count, len(_REVIVE_BACKOFF_STEPS) - 1)
+            backoff_sec = _REVIVE_BACKOFF_STEPS[step_idx]
+            self._revive_count += 1
+            self._next_revive_mono = now_mono + backoff_sec
             self.log.warning(
-                'Standalone strategy %s thread died unexpectedly (last_error=%s) — reviving...',
+                'Standalone strategy %s thread died unexpectedly (last_error=%s, attempt=%d, next_backoff=%.0fs) — reviving...',
                 self.config.name,
                 self._last_error,
+                self._revive_count,
+                backoff_sec,
             )
             self.start()
 

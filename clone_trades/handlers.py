@@ -9,6 +9,7 @@ from typing import Any, Dict
 from flask import Blueprint, Flask, jsonify, request
 
 from clone_trades.engine import CloneTradeEngine, get_engine
+from clone_trades.models import LadderTier
 from clone_trades.monitor import get_monitor
 
 log = logging.getLogger("clone_trades.handlers")
@@ -83,13 +84,29 @@ def register_clone_trades_routes(app: Flask, engine: CloneTradeEngine = None, st
     def clone_sub_strategy_config(name: str):
         if request.method == "GET":
             cfg = eng.config_mgr.get_sub_strategy_config(name)
-            return jsonify({"ok": True, "sub_strategy": name, "config": cfg.to_dict()})
+            cfg_dict = cfg.to_dict()
+            if name.lower() in ("pc", "genie"):
+                cfg_dict["name"] = name
+            return jsonify({"ok": True, "sub_strategy": name, "config": cfg_dict})
 
         data = request.get_json(force=True, silent=True) or {}
         updated = eng.config_mgr.update_sub_strategy(name, data)
+        if name.lower() in ("pc", "genie") and isinstance(updated, dict):
+            updated["name"] = name
         if "paper_mode" in data and hasattr(eng, "_resolve_broker"):
             eng._resolve_broker()
-        return jsonify({"ok": True, "sub_strategy": name, "config": updated})
+        updated_trades = []
+        if ("ladder_tiers" in data or "initial_stop_loss_pct" in data) and hasattr(eng, "update_open_trades_ladder"):
+            raw_tiers = updated.get("ladder_tiers", []) if isinstance(updated, dict) else []
+            tiers = [LadderTier.from_dict(t) for t in raw_tiers]
+            if tiers:
+                updated_trades = eng.update_open_trades_ladder(tiers, sub_strategy=name)
+        return jsonify({
+            "ok": True,
+            "sub_strategy": name,
+            "config": updated,
+            "updated_active_trades_count": len(updated_trades),
+        })
 
     @app.route("/api/clone_trades/config", methods=["POST"])
     def clone_config_post():
@@ -141,9 +158,13 @@ def register_clone_trades_routes(app: Flask, engine: CloneTradeEngine = None, st
 
     @app.route("/api/clone_trades/trade/<trade_id>/close", methods=["POST"])
     def clone_trade_close(trade_id: str):
-        res = eng.close_trade_manual(trade_id)
-        code = 200 if res.get("ok") else 400
-        return jsonify(res), code
+        try:
+            res = eng.close_trade_manual(trade_id)
+            code = 200 if res.get("ok") else 400
+            return jsonify(res), code
+        except Exception as exc:
+            log.exception("Error in clone_trade_close for %s: %s", trade_id, exc)
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     @app.route("/api/clone_trades/trade/<trade_id>", methods=["GET"])
     def clone_trade_get(trade_id: str):
@@ -164,3 +185,14 @@ def register_clone_trades_routes(app: Flask, engine: CloneTradeEngine = None, st
         scope = request.args.get("scope", "all")
         eng.clear_history(scope=scope)
         return jsonify({"ok": True, "message": f"History cleared (scope: {scope})"})
+
+    @app.route("/api/clone_trades/alt_signals", methods=["DELETE", "POST"])
+    def clone_delete_alt_signals():
+        date_param = request.args.get("date") or (request.get_json(silent=True) or {}).get("date")
+        count = eng.delete_today_alt_signals(target_date=date_param)
+        return jsonify({"ok": True, "deleted_count": count})
+
+    @app.route("/api/clone_trades/reload", methods=["POST"])
+    def clone_reload_signals():
+        res = eng.reload_all() if hasattr(eng, "reload_all") else {"signals_count": eng.reload_signals()}
+        return jsonify({"ok": True, **res})

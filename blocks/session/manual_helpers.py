@@ -6,7 +6,7 @@ import threading
 from typing import Any, Dict, Optional, Tuple
 
 from blocks.session.csv_update import apply_entry_result, try_claim_manual_row
-from blocks.session.manual_place import plan_fields_from_request
+from blocks.session.manual_place import DEBIT_SIDES, DEBIT_STRUCTURES, plan_fields_from_request
 from blocks.session.plan import SessionPlan, SessionRow, ensure_manual_session
 from common.market_hours import is_after_market_close_ct, _parse_expiry_yymmdd
 from manual_spread import config as ms_config
@@ -153,21 +153,33 @@ def append_manual_session_row(
     **plan_fields,
 ) -> Tuple[SessionPlan, SessionRow]:
     """Append a manual Take Trade row (state=entering) to today's MANUAL_SPREAD CSV."""
-    from manual_spread.butterfly import side_for_structure_type
+    from manual_spread.butterfly import STRUCTURE_TYPES as BF_STRUCTURE_TYPES, side_for_structure_type
 
-    normalized = plan_fields_from_request(plan_fields)
+    st_lower = (structure_type or '').strip().lower()
+    if st_lower in DEBIT_STRUCTURES or (side or '').strip().upper() in DEBIT_SIDES:
+        side = (side or ('PDS' if 'p' in st_lower else 'CDS')).strip().upper()
+        structure_for_bf = ''
+    elif st_lower in BF_STRUCTURE_TYPES:
+        side = side_for_structure_type(structure_type)
+        structure_for_bf = st_lower
+    else:
+        side = (side or ('C' if 'c' in st_lower else 'P')).strip().upper()
+        structure_for_bf = ''
+
+    normalized = plan_fields_from_request({
+        **plan_fields,
+        'side': side,
+        'structure_type': structure_type,
+    })
     path = ensure_manual_session(root)
     plan = SessionPlan.load(path, strategy=ms_config.STRATEGY)
     lot = next_lot()
     width = normalized['width']
-    if structure_type:
-        side = side_for_structure_type(structure_type)
+    if structure_for_bf:
         short_strike = int(short_strike)
         long_strike = int(wing_half or long_strike or ms_config.DEFAULT_BF_WING_HALF)
-        width = f'bf:{structure_type.lower()}'
+        width = f'bf:{structure_for_bf}'
         normalized['stop_multiplier'] = 0
-    else:
-        side = side.upper()
     slot_key = f'{lot}_{side}'
     expiry_str = expiry
     if expiry_str:

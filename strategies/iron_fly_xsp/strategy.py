@@ -248,18 +248,21 @@ class IronFlyXspStrategy(BaseStrategy):
         log.info('IronFlyXspStrategy initialized for %s (mode=%s)', self._today_str, self.config.mode)
 
     def run(self) -> None:
+        from common.market_hours import market_close_time_ct
         from meic0dte.app.utilities import central_now
 
         self.start()
         interval = max(1.0, self.config.tick_ms / 1000.0)
         try:
             while not self._cut_stop.is_set():
-                now_t = central_now().time()
+                now_dt = central_now()
+                now_t = now_dt.time()
+                close_t = market_close_time_ct(now_dt.date())
                 if now_t < dtime(8, 30, 0):
                     self._cut_stop.wait(10.0)
                     continue
-                if now_t >= dtime(15, 0, 0):
-                    log.info('Market closed (15:00 CT). Stopping IronFlyXspStrategy for today.')
+                if now_t >= close_t:
+                    log.info('Market closed (%s CT). Stopping IronFlyXspStrategy for today.', close_t.strftime('%H:%M'))
                     break
                 try:
                     self.on_tick()
@@ -336,15 +339,17 @@ class IronFlyXspStrategy(BaseStrategy):
 
     def _spot_cut_loop(self) -> None:
         """2-second background cadence: checks live spot against beyond break-even boundaries."""
+        from common.market_hours import market_close_time_ct
         from meic0dte.app.utilities import central_now
 
         interval = max(0.5, self.config.cut_check_ms / 1000.0)
         while not self._cut_stop.is_set():
-            now_t = central_now().time()
+            now_dt = central_now()
+            now_t = now_dt.time()
             if now_t < dtime(8, 30, 0):
                 self._cut_stop.wait(5.0)
                 continue
-            if now_t >= dtime(15, 0, 0):
+            if now_t >= market_close_time_ct(now_dt.date()):
                 break
             try:
                 self._check_spot_cuts()

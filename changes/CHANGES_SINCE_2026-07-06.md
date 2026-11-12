@@ -8,6 +8,33 @@ Older history (V2 rewrite, pre-Jul-6 design) stays in the other `changes/` docs 
 
 ---
 
+## 2026-11-07 — GCP Cloud Readiness, Security Hardening, Half-Day Schedule, VIX1D & 24/6 Operational Architecture
+
+**Status:** implemented locally, verified & unit-tested  
+**Tests:** `uv run pytest tests/test_cloud_readiness.py tests/test_market_data.py tests/test_drma_hm.py tests/test_drma_stocks.py tests/test_spx_ladder.py tests/test_run_one_day.py -q` → 120 passed  
+**Doc:** [design/2026-11-07_GCP_CLOUD_READINESS_AND_OPERATIONS.md](design/2026-11-07_GCP_CLOUD_READINESS_AND_OPERATIONS.md)
+
+### What changed / Key Audit Findings & Local Implementation
+- **Daily 8:20 AM CST SMS & Slack Readiness Check (`common/notifications.py`, `common/tt_auth.py`, `run.py`):**
+  - Added `verify_tastytrade_oauth()` and `bootstrap_account()` pre-validation `await session.refresh()` so expired 15-minute access tokens are refreshed before `/sessions/validate` (eliminating the startup `HTTP 401 Unauthorized`).
+  - Added `common/notifications.py` (`run_morning_readiness_check` & `send_operator_alert`) supporting zero-cost SMTP Email-to-SMS carrier gateways (`ALERT_SMS_TO`, `SMTP_USER`, `SMTP_APP_PASSWORD`), Twilio SMS REST API, and Slack webhooks.
+  - Wired `run.py` at `08:20 AM CST` (and Sunday `4:30 PM CST`) to refresh OAuth, recycle `streaming/publish_tastytrade.py` for a fresh 24-hour DXLink quote token, and send the operator SMS/Slack readiness summary.
+- **NYSE Half-Day (Early Close) Detection & Strategy Propagation (`common/config.py`, `common/market_hours.py`, strategies):**
+  - Added `_get_nyse_early_closes(year)` using `pandas_market_calendars` (`nyse.early_closes(sched)`), plus `is_early_close_day_ct()`, `market_close_time_ct()` (`12:00 CT` on half-days, `15:00 CT` normal), and `effective_session_time_ct()` (shifts afternoon cutoffs `>= 11:30 CT` earlier by 3 hours on early-close days).
+  - Propagated early-close awareness across `DRMA_HM_SPX` (`14:50` $\to$ `11:50 CT` flatten, `12:00 CT` close), `DRMA_HM_STOCKS`, `MEIC` (`runtime_session.py`, `expiry_settlement.py`, `blocks/stop/phases.py` Phase 3 proximity `14:51` $\to$ `11:51 CT`, `run.py` EOD cleanup `12:30 CT`), `INVERSE_MEIC_SPX`, `MEAN_REVERSION_SPX`, `IRON_FLY_SPX`, and `IRON_FLY_XSP`.
+- **24/6 Weekend Schedule (Fri 3:30 PM Shutdown, Sat/Sun 8:20 AM Cleanup, Sun 4:30 PM Futures Launch):**
+  - Updated `run.py` and `DRMAHMStrategy.get_session_phase()` so Friday EOD (`15:30 CST` / `12:30 CST` half-day) stops all trading and streaming for the weekend; Saturday and Sunday mornings (`08:20 AM CST`) run `run_session_cleanup('morning')` while keeping MEIC shut; and Sunday `4:30 PM CST` (`16:30 CT`) wakes up and launches `streamer`, `market_data`, and `DRMA_HM_SPX` for the `5:00 PM CST` CME Globex open.
+- **`VIX1D` & `VIX` DXLink Streaming Fix and Log Pruning (`common/market_watch.py`, `streaming/publish_tastytrade.py`, `common/session_cleanup.py`):**
+  - Added `'VIX1D'` to `BASE_WATCH_SYMBOLS` and `INDEX_TRADE_PRICE_SYMBOLS = frozenset({'SPX', 'VIX', 'VIX1D', 'VXN'})`. Fixed DXLink symbol mapping (unprefixed `'VIX'`, `'VIX1D'`, `'VXN'`) and updated `_handle_trades()` in `publish_tastytrade.py` to publish every DXLink `Trade` tick for cash indices.
+  - Added `prune_old_session_logs()` in `common/session_cleanup.py` to prune `logs/*.log` older than `LOG_RETENTION_DAYS=14` during morning cleanup while **preserving all `data/` (`SPX`, `ES`, `MES`, `VIX`, `VIX1D`) CSVs**.
+- **Low-Memory e2-micro (1 GB RAM) Optimization Levers (`common/config.py`, `common/in_process_services.py`, `run.py`, `deploy/setup_e2_micro.sh`):**
+  - **Lazy-Loaded Calendar & FOMC Cache:** Removed top-level `import pandas_market_calendars` and `import pandas` from `common/config.py` in favor of `common/nyse_calendar_cache.json`. `import common.config` now executes in milliseconds without loading `pandas` into memory (`'pandas' in sys.modules == False`), saving ~55 MB RAM per process.
+  - **In-Process Services Engine:** Created `common/in_process_services.py` with `InProcessServiceHandle`. When running with `--in-process`, `--low-memory`, or `IN_PROCESS_SERVICES=true`, `market_data`, `stop_monitor`, `streamer`, and `clone_trades` relay run on in-process daemon threads inside `run.py`, sharing a single Python interpreter and `SharedBroker`, cutting total bot memory from ~660 MB down to **~260–300 MB**.
+  - **Lean Option Ladder:** Made `SPX_LADDER_MAX_ACTIVE_SYMBOLS` configurable via env var and auto-disable 500-strike ladder when `LOW_MEMORY_MODE=true`, saving ~60–80 MB of WebSocket churn.
+  - **Automated e2-micro VM Setup Script:** Created `deploy/setup_e2_micro.sh` configuring a 2 GB SSD swapfile, swappiness/vfs_cache_pressure tuning, loopback Mosquitto, and low-memory systemd services (`meic.service` & `meic-dashboard.service`).
+
+---
+
 ## 2026-10-26 — DRMA Closing Order Verification, Mid-Chase Engine & Persistent Closing Management
 
 **Status:** implemented, verified & unit-tested  

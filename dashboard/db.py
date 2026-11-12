@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS trades (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     date_opened      TEXT NOT NULL,
     time_opened      TEXT,
+    time_closed      TEXT,
     strategy         TEXT NOT NULL DEFAULT 'MEIC_IC',
     lot              TEXT NOT NULL,
     side             TEXT NOT NULL,          -- 'P' or 'C'
@@ -174,8 +175,10 @@ def _migrate_db(conn):
         )
     if 'paper' not in cols:
         conn.execute('ALTER TABLE trades ADD COLUMN paper INTEGER NOT NULL DEFAULT 0')
+    if 'time_closed' not in cols:
+        conn.execute('ALTER TABLE trades ADD COLUMN time_closed TEXT')
 
-def upsert_trade(trade: dict):
+def upsert_trade(trade: dict, *, export_csv: bool = True):
     """Insert or update a trade record. Called whenever order_params.json changes."""
     from common.expiry_settlement import effective_filled_quantity
 
@@ -199,16 +202,17 @@ def upsert_trade(trade: dict):
 
     sql = """
         INSERT INTO trades
-            (date_opened, time_opened, strategy, lot, side, short_symbol, long_symbol,
+            (date_opened, time_opened, time_closed, strategy, lot, side, short_symbol, long_symbol,
              quantity, open_credit, short_open_price, long_open_price,
              short_close_price, long_close_price, close_debit, pnl, status,
              open_order_id, short_close_order_id, created_at, paper)
         VALUES
-            (:date_opened,:time_opened,:strategy,:lot,:side,:short_symbol,:long_symbol,
+            (:date_opened,:time_opened,:time_closed,:strategy,:lot,:side,:short_symbol,:long_symbol,
              :quantity,:open_credit,:short_open_price,:long_open_price,
              :short_close_price,:long_close_price,:close_debit,:pnl,:status,
              :open_order_id,:short_close_order_id,:created_at,:paper)
         ON CONFLICT(date_opened, lot, side) DO UPDATE SET
+            time_closed          = coalesce(excluded.time_closed, trades.time_closed),
             strategy             = excluded.strategy,
             quantity             = excluded.quantity,
             open_credit          = excluded.open_credit,
@@ -227,6 +231,7 @@ def upsert_trade(trade: dict):
         conn.execute(sql, {
             'date_opened':          trade.get('date_opened', central_today_str()),
             'time_opened':          trade.get('time_opened', ''),
+            'time_closed':          trade.get('time_closed') or trade.get('exit_time') or '',
             'strategy':             trade.get('strategy') or infer_strategy(
                 trade.get('lot', ''),
                 trade.get('entry_strategy'),
@@ -249,9 +254,9 @@ def upsert_trade(trade: dict):
             'created_at':           trade.get('created_at', central_now_iso()),
             'paper':                paper_val,
         })
-        _refresh_daily_summary(conn, trade.get('date_opened', central_today_str()))
+        _refresh_daily_summary(conn, trade.get('date_opened', central_today_str()), export_csv=export_csv)
 
-def _refresh_daily_summary(conn, date):
+def _refresh_daily_summary(conn, date, *, export_csv: bool = True):
     conn.execute("""
         INSERT INTO daily_summary (date, total_pnl, num_trades, num_wins, num_losses)
         SELECT
@@ -274,12 +279,13 @@ def _refresh_daily_summary(conn, date):
         "UPDATE daily_summary SET updated_at = ? WHERE date = ?",
         (central_now_iso(), date),
     )
-    try:
-        from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        export_strategy_daily_pnl_csv(root)
-    except Exception:
-        pass
+    if export_csv:
+        try:
+            from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            export_strategy_daily_pnl_csv(root)
+        except Exception:
+            pass
 
 def get_trades(date=None, strategy=None, limit=200, *, ticker=None, include_paper=False, paper_only=False):
     sql = "SELECT * FROM trades"
@@ -552,6 +558,8 @@ def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> li
                 'drma_hm_wins': 0,
                 'drma_dir_wins': 0,
                 'drma_nondir_wins': 0,
+                'drma_fut_wins': 0,
+                'drma_fut_wins': 0,
                 'drma_stocks_pnl': 0.0,
                 'drma_stocks_trades': 0,
                 'drma_stocks_wins': 0,
@@ -613,7 +621,7 @@ def get_daily_breakdown(days=31, *, include_paper=False, paper_only=False) -> li
             elif lot.startswith('fut_'):
                 bucket['drma_fut_pnl'] = round(bucket['drma_fut_pnl'] + pnl, 2)
                 bucket['drma_fut_trades'] += 1
-                bucket['drma_fut_wins'] += wins
+                bucket['drma_fut_wins'] = bucket.get('drma_fut_wins', 0) + wins
         elif strat == STRATEGY_DRMA_STOCKS:
             bucket['drma_stocks_pnl'] = round(bucket.get('drma_stocks_pnl', 0.0) + pnl, 2)
             bucket['drma_stocks_trades'] = bucket.get('drma_stocks_trades', 0) + 1
@@ -688,7 +696,13 @@ def refresh_all_daily_summaries() -> None:
             "SELECT DISTINCT date_opened FROM trades ORDER BY date_opened"
         )]
         for d in dates:
-            _refresh_daily_summary(conn, d)
+            _refresh_daily_summary(conn, d, export_csv=False)
+    try:
+        from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        export_strategy_daily_pnl_csv(root)
+    except Exception:
+        pass
 
 # Initialise on import
 init_db()

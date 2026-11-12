@@ -79,8 +79,12 @@ class MonitorRunner:
         if self.alert_listener:
             self.alert_listener.start()
 
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        if threading.current_thread() is threading.main_thread():
+            try:
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+            except (ValueError, AttributeError):
+                pass
 
         log.info('MonitorRunner watching %s', ', '.join(state_mod.all_active_dirs()))
         supervisor = threading.Thread(target=self._supervise, daemon=True)

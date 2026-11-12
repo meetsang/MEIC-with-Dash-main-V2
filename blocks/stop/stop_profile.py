@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from blocks.stop.phases import PhaseBase
@@ -13,7 +13,7 @@ class StopProfile:
     """Named stop behavior bundle supplied by a strategy."""
 
     name: str
-    spread_type: str  # 'credit' | 'debit' (debit deferred)
+    spread_type: str  # 'credit' | 'debit'
     phases: List['PhaseBase']
     long_close_delay_sec: int = 30
     profit_target_short: Optional[float] = None
@@ -42,8 +42,13 @@ def resolve_stop_profile(state: Dict[str, Any]) -> StopProfile:
     from blocks.stop.profiles.meic import MEIC_CREDIT_SPREAD_PROFILE, meic_stop_profile
 
     key = state.get('stop_profile')
+    strategy = (state.get('entry') or {}).get('strategy') or state.get('strategy')
+    if strategy == 'MANUAL_SPREAD' and state.get('spread_type') == 'debit':
+        if not key or key in ('manual_credit_spread', 'manual_debit_spread'):
+            from blocks.stop.profiles.manual import manual_debit_stop_profile
+            return manual_debit_stop_profile()
+
     if not key:
-        strategy = state.get('entry', {}).get('strategy') or state.get('strategy')
         if strategy == 'MANUAL_SPREAD':
             from strategies.manual_spread.strategy import manual_stop_profile
             return manual_stop_profile()

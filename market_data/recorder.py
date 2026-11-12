@@ -6,6 +6,7 @@ import os
 import queue
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from typing import Tuple
@@ -138,8 +139,12 @@ class MarketDataRecorder:
         if not self._reader.wait_for_any(timeout=180):
             log.warning('No MQTT prices yet — continuing (is streamer running?)')
 
-        signal.signal(signal.SIGINT, self._handle_signal)
-        signal.signal(signal.SIGTERM, self._handle_signal)
+        if threading.current_thread() is threading.main_thread():
+            try:
+                signal.signal(signal.SIGINT, self._handle_signal)
+                signal.signal(signal.SIGTERM, self._handle_signal)
+            except (ValueError, AttributeError):
+                pass
 
         try:
             while not self._stop:

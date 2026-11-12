@@ -487,3 +487,88 @@ def test_drma_stocks_settle_open_stock_trade(temp_root):
     assert saved['status'] == 'closed'
     assert 'EOD Cutoff' in saved['exit_reason']
     assert saved['realized_pnl_dollars'] == 100.0
+
+def test_drma_stocks_local_5m_bars_and_daily_levels(temp_root):
+    """DRMA stocks loads 5m bars and daily levels from local TastyTrade recorded CSV files without Yahoo."""
+    from strategies.drma_stocks.market_data import fetch_stock_5m_bars, fetch_stock_daily_levels
+    import pandas as pd
+
+    data_dir_prev = os.path.join(temp_root, 'data', '2026-10-29')
+    data_dir_today = os.path.join(temp_root, 'data', '2026-10-30')
+    os.makedirs(data_dir_prev, exist_ok=True)
+    os.makedirs(data_dir_today, exist_ok=True)
+
+    # Previous day CSV
+    df_prev = pd.DataFrame([
+        {'datetime': '2026-10-29 08:35:00', 'open': 140.0, 'high': 143.0, 'low': 139.5, 'close': 142.0},
+        {'datetime': '2026-10-29 14:55:00', 'open': 142.0, 'high': 144.5, 'low': 141.5, 'close': 144.0},
+    ])
+    df_prev.to_csv(os.path.join(data_dir_prev, 'NVDA_5m.csv'), index=False)
+
+    # Today CSV
+    df_today = pd.DataFrame([
+        {'datetime': '2026-10-30 08:35:00', 'open': 144.5, 'high': 146.0, 'low': 144.0, 'close': 145.5},
+        {'datetime': '2026-10-30 08:40:00', 'open': 145.5, 'high': 147.0, 'low': 145.0, 'close': 146.5},
+    ])
+    df_today.to_csv(os.path.join(data_dir_today, 'NVDA_5m.csv'), index=False)
+
+    # Test daily levels from local previous day CSV
+    levels = fetch_stock_daily_levels('NVDA', date(2026, 10, 30), root=temp_root)
+    assert levels['pdh'] == 144.5
+    assert levels['pdl'] == 139.5
+    assert levels['pdc'] == 144.0
+
+    # Test 5m bars loaded from local CSV
+    df_bars = fetch_stock_5m_bars('NVDA', date(2026, 10, 30), root=temp_root)
+    assert not df_bars.empty
+    assert len(df_bars) == 4
+    today_bars = df_bars[df_bars['is_today'] == True]
+    prev_bars = df_bars[df_bars['is_today'] == False]
+    assert len(today_bars) == 2
+    assert len(prev_bars) == 2
+    assert float(today_bars.iloc[-1]['close']) == 146.5
+
+
+def test_drma_stocks_watch_universe_inclusion():
+    """DRMA stock symbols must be included in WATCH_SYMBOLS and map canonical MQTT topics."""
+    from common.market_watch import WATCH_SYMBOLS, get_drma_stock_watch_symbols
+    from market_data.watch_symbols import watch_symbol_from_mqtt_topic
+
+    drma_syms = get_drma_stock_watch_symbols()
+    for s in ('NVDA', 'MU', 'AMZN', 'SPCX', 'MSTR'):
+        assert s in drma_syms
+        assert s in WATCH_SYMBOLS
+        assert watch_symbol_from_mqtt_topic(f'TASTYTRADE/{s}') == s
+        assert watch_symbol_from_mqtt_topic(f'TASTYTRADE/{s}__TSIZE') == s
+
+
+def test_manual_spread_exempt_from_pre_tranche_probe(temp_root):
+    """Manual spread entries must not be blocked by missing pre_tranche records when REST is healthy."""
+    from common.trading_gate import initialize_for_session_date, evaluate_new_risk_gate, record_probe_result
+    from common.rest_probe import RestProbeResult
+    import time
+
+    os.environ['MEIC_TRADING_GATE_PATH'] = os.path.join(temp_root, 'trading_gate.json')
+    initialize_for_session_date('2026-11-06')
+
+    # Record healthy probe
+    now = time.time()
+    probe_res = RestProbeResult(
+        ok=True,
+        status='healthy',
+        attempted_at_epoch=now - 5,
+        completed_at_epoch=now,
+        latency_ms=120,
+        http_status=200,
+        detail='',
+        source='startup',
+    )
+    record_probe_result(probe_res)
+
+    # For manual slot key 'ms-714_P', evaluate gate: must NOT block with 'rest_probe_missing'
+    decision = evaluate_new_risk_gate(
+        require_fresh_probe=True,
+        strategy='MANUAL_SPREAD',
+        tranche_id='ms-714_P',
+    )
+    assert decision.blocked is False

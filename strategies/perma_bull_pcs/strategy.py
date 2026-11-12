@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +22,7 @@ class PermaBullPCSConfig(StrategyConfig):
     confirmed: bool = False
     stop_profile: str = PERMA_BULL_PCS_PROFILE
     entry_time_et: str = '08:45'  # US/Central — same clock as MEIC session windows
+    entry_window_minutes: int = 15  # Entry window closes 15 min after entry_time_et (default cutoff 09:00 CT)
     spread_width: int = 5
     target_credit: float = 1.0
     quantity: int = 1
@@ -68,8 +69,9 @@ class PermaBullPCSStrategy(BaseStrategy):
                 except Exception as exc:
                     self.logger.warning('Failed reading Perma Bull session state: %s', exc)
 
-            self._wait_for_entry_window(root)
-            if not self._running:
+            if not self._wait_for_entry_window(root):
+                if self._running and not self._is_disabled_today(root):
+                    self._write_skip(root, 'entry_window_expired')
                 return
 
             if self._is_disabled_today(root):
@@ -80,6 +82,15 @@ class PermaBullPCSStrategy(BaseStrategy):
             if not allowed:
                 self._write_skip(root, reason)
                 return
+
+            try:
+                from common.daily_overrides import effective_config
+                eff = effective_config(self.config, self.config.name, root)
+                for k, v in eff.__dict__.items():
+                    if hasattr(self.config, k):
+                        setattr(self.config, k, v)
+            except Exception as exc:
+                self.logger.warning('Failed applying daily overrides: %s', exc)
 
             from blocks.entry.credit_spread import CreditSpreadEntry
 
@@ -157,16 +168,29 @@ class PermaBullPCSStrategy(BaseStrategy):
             self._running = False
             self._status['running'] = False
 
-    def _wait_for_entry_window(self, root: str) -> None:
+    def _wait_for_entry_window(self, root: str) -> bool:
         hour, minute = map(int, self.config.entry_time_et.split(':'))
         target = util.central_now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        window_minutes = getattr(self.config, 'entry_window_minutes', 15) or 15
+        cutoff = target + timedelta(minutes=window_minutes)
+
         while self._running:
             if self._is_disabled_today(root):
-                return
+                return False
             now = util.central_now()
+            if now > cutoff:
+                self.logger.warning(
+                    'PERMA_BULL_ENTRY_WINDOW_EXPIRED now=%s target=%s cutoff=%s (entry window=%d min expired)',
+                    now.strftime('%H:%M:%S'),
+                    target.strftime('%H:%M:%S'),
+                    cutoff.strftime('%H:%M:%S'),
+                    window_minutes,
+                )
+                return False
             if now >= target:
-                return
+                return True
             time.sleep(min(30, max(1, (target - now).total_seconds())))
+        return False
 
     def _is_disabled_today(self, root: str) -> bool:
         from common.daily_overrides import is_disabled_for_today
@@ -174,9 +198,9 @@ class PermaBullPCSStrategy(BaseStrategy):
         return is_disabled_for_today(self.config, self.config.name, root)
 
     def _check_trading_day(self) -> tuple[bool, str]:
-        import run as launcher
+        from common.config import check_trading_day
 
-        return launcher.check_trading_day()
+        return check_trading_day()
 
     def _active_dir(self, root: str) -> str:
         from common.trades_layout import active_dir_for_strategy

@@ -28,6 +28,12 @@ def chase_credit_step(credit: float, step: float | None = None) -> float:
     return round(credit - delta, 2)
 
 
+def chase_debit_step(debit: float, step: float | None = None) -> float:
+    """Raise spread debit limit by one chase step ($0.05 default)."""
+    delta = step if step is not None else meic_config.OPEN_PRICE_ADJ
+    return round(debit + delta, 2)
+
+
 def should_chase_on_unfilled(filled_quantity: int, on_unfilled: str) -> bool:
     """Chase only when zero fill and mode is not none."""
     if filled_quantity > 0:

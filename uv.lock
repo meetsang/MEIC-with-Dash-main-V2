@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -591,6 +591,7 @@ dependencies = [
     { name = "paho-mqtt" },
     { name = "pandas" },
     { name = "pandas-market-calendars" },
+    { name = "psutil" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rauth" },
@@ -608,6 +609,7 @@ requires-dist = [
     { name = "paho-mqtt" },
     { name = "pandas" },
     { name = "pandas-market-calendars" },
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "python-dotenv" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rauth" },

@@ -18,4 +18,5 @@ dependencies = [
     "beautifulsoup4",
     "tastytrade>=12.4.0",
     "pyyaml>=6.0",
+    "psutil>=5.9.0",
 ]

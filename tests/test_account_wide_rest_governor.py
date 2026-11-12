@@ -167,7 +167,10 @@ class TestProbeTimeoutAndMinInterval(unittest.TestCase):
         os.environ.pop('REST_PROBE_HARD_DEADLINE_SEC', None)
         os.environ.pop('REST_PROBE_MIN_INTERVAL_SEC', None)
         os.environ.pop('REST_PROBE_ON_SESSION_START', None)
-        self._tmp.cleanup()
+        try:
+            self._tmp.cleanup()
+        except OSError:
+            pass
 
     def test_hard_deadline_records_timed_out(self):
         hang = threading.Event()
@@ -289,9 +292,15 @@ class TestManualProbe(unittest.TestCase):
         os.environ['MEIC_BROKER_COOLDOWN_PATH'] = os.path.join(self._tmp.name, 'cooldown.json')
         os.environ['NEW_RISK_GATE_ENABLED'] = 'true'
         os.environ['REST_PROBE_ON_SESSION_START'] = 'false'
+        os.environ['REST_KEEPALIVE_ENABLED'] = 'false'
+        from common.broker_cooldown import clear_cooldown
+        clear_cooldown()
         initialize_for_session_date('2026-07-24')
 
     def tearDown(self):
+        os.environ.pop('REST_KEEPALIVE_ENABLED', None)
+        from common.broker_cooldown import clear_cooldown
+        clear_cooldown()
         self._tmp.cleanup()
 
     def test_manual_probe_scheduled_once_and_gate_uses_slot_key(self):

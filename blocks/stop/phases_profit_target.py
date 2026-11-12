@@ -16,16 +16,24 @@ class PhaseProfitTarget(PhaseBase):
 
     def should_activate(self, monitor) -> bool:
         state = monitor.state
-        if state.get('is_scale_out_split') or (state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+        if state.get('manual_management') or state.get('is_scale_out_split') or (state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT', 'OCO'):
+            return False
+        if state.get('close_only_mode') or state.get('spread_close_order_id'):
             return False
         exit_cfg = state.get('exit_config') or {}
         target_pct = exit_cfg.get('profit_target_pct')
         if target_pct is None:
             target_pct = state.get('profit_target_pct')
-        return (
-            state.get('status') == 'open'
-            and target_pct is not None
-        )
+        if target_pct is None:
+            return False
+        try:
+            pct_f = float(target_pct)
+        except (TypeError, ValueError):
+            return False
+        spread_type = state.get('spread_type') or getattr(getattr(monitor, 'stop_profile', None), 'spread_type', 'credit')
+        if spread_type == 'debit':
+            return state.get('status') == 'open' and pct_f > 0.0
+        return state.get('status') == 'open' and pct_f > 0.0
 
     def _evaluate_active(self, monitor) -> str:
         return PhaseAction.EXIT_REQUIRED if self._target_hit(monitor) else PhaseAction.NONE
@@ -60,23 +68,44 @@ class PhaseProfitTarget(PhaseBase):
         if short_mid is None or long_mid is None:
             return False
 
-        spread_type = getattr(monitor.stop_profile, 'spread_type', 'credit')
+        spread_type = state.get('spread_type') or getattr(getattr(monitor, 'stop_profile', None), 'spread_type', 'credit')
         mark = spread_mark_price(short_mid, long_mid, spread_type=spread_type)
 
         entry = state.get('entry') or {}
-        entry_price = float(
-            entry.get('net_credit')
-            or entry.get('credit')
-            or entry.get('debit')
-            or short_leg.get('fill_price')
-            or 0
-        )
+        if spread_type == 'debit':
+            entry_price = float(
+                entry.get('net_debit')
+                or entry.get('debit')
+                or entry.get('limit_debit')
+                or entry.get('net_credit')
+                or entry.get('limit_credit')
+                or 0
+            )
+            if entry_price <= 0:
+                l_px = float(long_leg.get('fill_price') or 0)
+                s_px = float(short_leg.get('fill_price') or 0)
+                if l_px > 0 and s_px > 0:
+                    entry_price = round(l_px - s_px, 2)
+        else:
+            entry_price = float(
+                entry.get('net_credit')
+                or entry.get('credit')
+                or entry.get('limit_credit')
+                or entry.get('debit')
+                or short_leg.get('fill_price')
+                or 0
+            )
         return profit_target_hit(
             mark, entry_price, float(target_pct), spread_type=spread_type,
         )
 
     def execute(self, monitor) -> None:
-        monitor.replace_with_limit_close(reason='profit_target_hit')
+        state = monitor.state
+        spread_type = state.get('spread_type') or getattr(getattr(monitor, 'stop_profile', None), 'spread_type', 'credit')
+        if spread_type == 'debit':
+            monitor.replace_with_spread_close(reason='profit_target_hit')
+        else:
+            monitor.replace_with_limit_close(reason='profit_target_hit')
 
 
 class PhaseSpreadDebitProfitTarget(PhaseBase):
@@ -87,7 +116,7 @@ class PhaseSpreadDebitProfitTarget(PhaseBase):
 
     def should_activate(self, monitor) -> bool:
         state = monitor.state
-        if state.get('is_scale_out_split') or (state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+        if state.get('manual_management') or state.get('is_scale_out_split') or (state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT', 'OCO'):
             return False
         exit_cfg = state.get('exit_config') or {}
         target_debit = exit_cfg.get('profit_target_debit')

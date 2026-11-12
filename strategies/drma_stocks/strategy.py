@@ -11,6 +11,8 @@ from datetime import date, datetime, time as dt_time
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from common.config import check_trading_day
+from common.market_hours import effective_session_time_str_ct, market_close_time_ct
 from common.session_cleanup import central_today
 from common.trades_layout import active_dir_for_strategy, history_dir_for_strategy
 from strategies.base import BaseStrategy
@@ -65,22 +67,22 @@ class DRMAStocksStrategy(BaseStrategy):
     def get_status(self) -> Dict[str, Any]:
         return dict(self._status)
 
-    def _resolve_eod_exit_time(self, root: Optional[str] = None) -> str:
-        """Resolve EOD flatten cutoff, dynamically aligning with DRMA_HM_SPX if configured."""
+    def _resolve_eod_exit_time(self, root: Optional[str] = None, for_date: Optional[date] = None) -> str:
+        """Resolve EOD flatten cutoff, dynamically aligning with DRMA_HM_SPX and NYSE half-days."""
+        raw = getattr(self.config, 'eod_exit_time_cst', '14:50') or '14:50'
         if root:
             try:
                 from common.daily_overrides import get_overrides
-                # First check if DRMA_HM_STOCKS has an override
                 stocks_ov = get_overrides(self.config.name, root)
                 if stocks_ov and stocks_ov.get('eod_exit_time_cst'):
-                    return str(stocks_ov['eod_exit_time_cst'])
-                # Then check if DRMA_HM_SPX has an override to align with it
-                hm_ov = get_overrides('DRMA_HM_SPX', root)
-                if hm_ov and hm_ov.get('eod_exit_time_cst'):
-                    return str(hm_ov['eod_exit_time_cst'])
+                    raw = str(stocks_ov['eod_exit_time_cst'])
+                else:
+                    hm_ov = get_overrides('DRMA_HM_SPX', root)
+                    if hm_ov and hm_ov.get('eod_exit_time_cst'):
+                        raw = str(hm_ov['eod_exit_time_cst'])
             except Exception:
                 pass
-        return getattr(self.config, 'eod_exit_time_cst', '14:50') or '14:50'
+        return effective_session_time_str_ct(raw, for_date or central_today(), default=dt_time(14, 50))
 
     def run(self) -> None:
         self._running = True
@@ -96,12 +98,11 @@ class DRMAStocksStrategy(BaseStrategy):
                 today = central_today()
                 now_ct = datetime.now(_CT)
                 now_t = now_ct.time()
-                market_close = dt_time(15, 0)
+                market_close = market_close_time_ct(today)
 
                 # Check if trading day
                 try:
-                    import run as launcher
-                    should_trade, reason = launcher.check_trading_day()
+                    should_trade, reason = check_trading_day()
                     if not should_trade:
                         self.logger.info("Not a trading day (%s) ? exiting %s run loop", reason, self.config.name)
                         break
@@ -227,7 +228,7 @@ class DRMAStocksStrategy(BaseStrategy):
         hist_dir: str,
     ) -> Dict[str, Any]:
         """Process market data, indicators, and trade lifecycle for a single stock."""
-        levels = fetch_stock_daily_levels(ticker, today)
+        levels = fetch_stock_daily_levels(ticker, today, root=root)
         df_bars = fetch_stock_5m_bars(ticker, today, root)
 
         latest_snap = None
@@ -333,8 +334,8 @@ class DRMAStocksStrategy(BaseStrategy):
         if eval_time < reg_start:
             return
 
-        # 3. Do not enter new positions after EOD cutoff (14:50 CST)
-        eod_cutoff = getattr(self.config, 'eod_exit_time_cst', '14:50')
+        # 3. Do not enter new positions after EOD cutoff (14:50 CST normal, 11:50 CST on half-days)
+        eod_cutoff = self._resolve_eod_exit_time(getattr(self.config, 'root', None), for_date=today)
         now_ct_str = datetime.now(_CT).strftime('%H:%M')
         if now_ct_str >= eod_cutoff or eval_time >= eod_cutoff:
             return

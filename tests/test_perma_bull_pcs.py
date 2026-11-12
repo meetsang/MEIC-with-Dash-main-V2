@@ -49,7 +49,7 @@ class TestPermaBullPCS(unittest.TestCase):
         self.assertGreater(slept[0], 0)
 
     def test_skips_when_paused_before_entry(self):
-        with patch.object(self.strategy, '_wait_for_entry_window'), \
+        with patch.object(self.strategy, '_wait_for_entry_window', return_value=True), \
              patch('common.daily_overrides.is_disabled_for_today', return_value=True):
             self.strategy.run()
         session_path = os.path.join(
@@ -61,6 +61,23 @@ class TestPermaBullPCS(unittest.TestCase):
             state = json.load(f)
         self.assertFalse(state.get('entered'))
         self.assertEqual(state.get('skip_reason'), 'disabled_for_today')
+
+    def test_skips_when_entry_window_expired(self):
+        test_dt = datetime(2026, 11, 6, 11, 8, 0)
+        with patch('strategies.perma_bull_pcs.strategy.util.central_now', return_value=test_dt), \
+             patch('strategies.perma_bull_pcs.strategy.util.central_date', return_value=test_dt.date()), \
+             patch.object(self.strategy, '_is_disabled_today', return_value=False):
+            self.strategy.run()
+
+        session_path = os.path.join(
+            self.tmp, 'trades', 'active', 'PERMA_BULL_PCS', f'session_{test_dt.date().isoformat()}.json',
+        )
+        self.assertTrue(os.path.isfile(session_path))
+        import json
+        with open(session_path, encoding='utf-8') as f:
+            state = json.load(f)
+        self.assertFalse(state.get('entered'))
+        self.assertEqual(state.get('skip_reason'), 'entry_window_expired')
 
     def test_places_pcs_and_writes_handshake(self):
         today = date.today()

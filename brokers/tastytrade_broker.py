@@ -511,7 +511,8 @@ class TastyTradeBroker(BrokerBase):
                 from common.tt_auth import create_tastytrade_session
                 self.session = create_tastytrade_session()
                 self._run(self.session.validate())
-                log.info('Session re-created and validated successfully')
+                self.account = self._run(self._bootstrap_account())
+                log.info('Session and account re-created and validated successfully')
             except Exception as exc2:
                 log.error('Session re-creation failed: %s', exc2)
 
@@ -1018,6 +1019,7 @@ class TastyTradeBroker(BrokerBase):
         profit_price: float,
         stop_price: float,
         limit_price: float,
+        action: str = 'BUY_TO_CLOSE',
     ) -> OrderResult:
         from tastytrade.order import (
             ComplexOrderType,
@@ -1031,17 +1033,25 @@ class TastyTradeBroker(BrokerBase):
         if not is_futures_symbol(symbol):
             held_qty = self.get_single_leg_position_qty(symbol, priority='HIGH')
             reason = None
-            if held_qty == 0:
-                reason = 'position_flat'
-            elif held_qty > 0:
-                reason = f'position_mismatch_long (holding=+{held_qty}, need short={qty})'
-            elif abs(held_qty) < qty:
-                reason = f'insufficient_short_qty (holding={held_qty}, need short={qty})'
+            if action == 'SELL_TO_CLOSE':
+                if held_qty == 0:
+                    reason = 'position_flat'
+                elif held_qty < 0:
+                    reason = f'position_mismatch_short (holding={held_qty}, need long={qty})'
+                elif held_qty < qty:
+                    reason = f'insufficient_long_qty (holding={held_qty}, need long={qty})'
+            else:
+                if held_qty == 0:
+                    reason = 'position_flat'
+                elif held_qty > 0:
+                    reason = f'position_mismatch_long (holding=+{held_qty}, need short={qty})'
+                elif abs(held_qty) < qty:
+                    reason = f'insufficient_short_qty (holding={held_qty}, need short={qty})'
 
             if reason is not None:
                 log.error(
-                    'BROKER_PREFLIGHT_BLOCKED_OCO_CLOSE symbol=%s qty=%s reason=%s',
-                    symbol, qty, reason,
+                    'BROKER_PREFLIGHT_BLOCKED_OCO_CLOSE symbol=%s qty=%s reason=%s action=%s',
+                    symbol, qty, reason, action,
                 )
                 return OrderResult(
                     False,
@@ -1052,7 +1062,7 @@ class TastyTradeBroker(BrokerBase):
                 )
 
         tt_sym = to_tastytrade(symbol)
-        action_enum = OrderAction.BUY_TO_CLOSE
+        action_enum = OrderAction.SELL_TO_CLOSE if action == 'SELL_TO_CLOSE' else OrderAction.BUY_TO_CLOSE
 
         async def _place():
             opt = await self._get_option(tt_sym)
@@ -1062,14 +1072,14 @@ class TastyTradeBroker(BrokerBase):
                 time_in_force=OrderTimeInForce.DAY,
                 order_type=OT.LIMIT,
                 legs=[leg],
-                price=_signed_order_price('BUY_TO_CLOSE', profit_price),
+                price=_signed_order_price(action, profit_price),
             )
             stop_order = NewOrder(
                 time_in_force=OrderTimeInForce.DAY,
                 order_type=OT.STOP_LIMIT,
                 legs=[leg],
                 stop_trigger=_round_option_price(abs(stop_price)),
-                price=_signed_order_price('BUY_TO_CLOSE', limit_price),
+                price=_signed_order_price(action, limit_price),
             )
             complex_order = NewComplexOrder(
                 type=ComplexOrderType.OCO,
@@ -1132,8 +1142,21 @@ class TastyTradeBroker(BrokerBase):
         is_fut = is_futures_symbol(symbol)
         action_str = str(action).upper()
 
-        # Preflight verification: Block single-leg closing orders if position is flat or insufficient
-        if not is_fut and action_str in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE'):
+        # Preflight verification: Block single-leg closing orders if position is flat or insufficient, and strictly prohibit naked option sales
+        if not is_fut and action_str in ('BUY_TO_CLOSE', 'SELL_TO_CLOSE', 'SELL', 'SELL_TO_OPEN'):
+            if action_str == 'SELL_TO_OPEN':
+                log.critical(
+                    'BROKER_PREFLIGHT_BLOCKED_NAKED_OPTION_SALE symbol=%s qty=%s: Single-leg SELL_TO_OPEN equity option prohibited!',
+                    symbol, qty,
+                )
+                return OrderResult(
+                    False,
+                    None,
+                    'rejected_preflight',
+                    message='naked_equity_option_sale_prohibited',
+                    transmitted=False,
+                )
+
             held_qty = self.get_single_leg_position_qty(symbol, priority='HIGH')
             reason = None
             if action_str == 'BUY_TO_CLOSE':
@@ -1143,7 +1166,7 @@ class TastyTradeBroker(BrokerBase):
                     reason = f'position_mismatch_long (holding=+{held_qty}, need short={qty})'
                 elif abs(held_qty) < qty:
                     reason = f'insufficient_short_qty (holding={held_qty}, need short={qty})'
-            elif action_str == 'SELL_TO_CLOSE':
+            elif action_str in ('SELL_TO_CLOSE', 'SELL'):
                 if held_qty == 0:
                     reason = 'position_flat'
                 elif held_qty < 0:
@@ -1167,7 +1190,14 @@ class TastyTradeBroker(BrokerBase):
         if is_fut:
             action_enum = OrderAction.BUY if 'BUY' in action_str else OrderAction.SELL
         else:
-            action_enum = getattr(OrderAction, action)
+            if action_str in ('SELL', 'SELL_TO_CLOSE'):
+                action_enum = OrderAction.SELL_TO_CLOSE
+            elif action_str == 'BUY_TO_CLOSE':
+                action_enum = OrderAction.BUY_TO_CLOSE
+            elif action_str in ('BUY', 'BUY_TO_OPEN'):
+                action_enum = OrderAction.BUY_TO_OPEN
+            else:
+                action_enum = getattr(OrderAction, action_str)
 
         tt_sym = to_tastytrade(symbol) if not is_fut else symbol
 
@@ -1244,10 +1274,27 @@ class TastyTradeBroker(BrokerBase):
         self.cancel_order(order_id)
         return self.place_limit_order('BUY_TO_CLOSE', symbol, qty, price)
 
-    def cancel_order(self, order_id: str) -> OrderResult:
+    def cancel_order(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
+        """Cancel order and guarantee confirmation of status from the brokerage before returning."""
         if str(order_id).startswith('journal-'):
             from common.broker_factory import get_shared_broker
-            return get_shared_broker(paper=True).cancel_order(order_id)
+            return get_shared_broker(paper=True).cancel_order(order_id, timeout=timeout)
+
+        # Fast precheck: if order is already terminal (filled or cancelled), return immediately
+        try:
+            cur_st = self.get_order_status(str(order_id), priority='HIGH', op='cancel_precheck')
+            if cur_st and cur_st.success:
+                cur_low = str(cur_st.status).lower()
+                if cur_low == 'filled':
+                    log.info("Cancel precheck: order %s is already filled at broker", order_id)
+                    return cur_st
+                if cur_low in ('cancelled', 'canceled', 'expired', 'rejected'):
+                    log.info("Cancel precheck: order %s is already %s at broker", order_id, cur_low)
+                    cur_st.status = 'cancelled'
+                    return cur_st
+        except Exception as e:
+            log.debug("Cancel precheck error for %s: %s", order_id, e)
+
         async def _delete():
             try:
                 await self.account.delete_order(self.session, int(order_id))
@@ -1257,6 +1304,7 @@ class TastyTradeBroker(BrokerBase):
                 except Exception:
                     raise exc
 
+        delete_exc: Optional[Exception] = None
         try:
             _retry_on_transient(
                 lambda: self._run(
@@ -1265,15 +1313,76 @@ class TastyTradeBroker(BrokerBase):
                     op='cancel_order',
                 )
             )
-            self._live_orders_cache = None
-            return OrderResult(True, order_id, 'cancelled', message='Cancelled')
         except Exception as exc:
+            delete_exc = exc
             msg = str(exc)
-            if 'filled' in msg.lower():
-                return OrderResult(True, order_id, 'filled', message=msg)
             if '401' in msg or 'unauthorized' in msg.lower():
                 self.validate_session()
-            return OrderResult(False, order_id, 'rejected', message=msg)
+
+        self._live_orders_cache = None
+
+        # Confirm terminal status from brokerage (make sure status from brokerage before proceeding)
+        deadline = time.time() + max(1.0, float(timeout))
+        poll_interval = 0.25
+        last_result: Optional[OrderResult] = None
+
+        while time.time() < deadline:
+            try:
+                st_res = self.get_order_status(str(order_id), priority='HIGH', op='cancel_confirm')
+                if st_res:
+                    last_result = st_res
+                    low = str(getattr(st_res, 'status', '')).lower()
+                    if low in ('cancelled', 'canceled', 'expired', 'rejected'):
+                        log.info("Order %s confirmed %s at broker", order_id, low)
+                        st_res.status = 'cancelled'
+                        return st_res
+                    if low == 'filled':
+                        log.warning(
+                            "Order %s was FILLED at broker despite cancel attempt (fill_price=%s, fill_qty=%s)",
+                            order_id, getattr(st_res, 'filled_price', None), getattr(st_res, 'filled_quantity', None)
+                        )
+                        return st_res
+            except Exception as exc:
+                log.debug("Error checking cancel confirmation for %s: %s", order_id, exc)
+
+            time.sleep(poll_interval)
+
+        # Fallback / final direct check
+        try:
+            final_res = self.get_order_status_direct(str(order_id), priority='HIGH', op='cancel_confirm_final')
+            if final_res:
+                final_low = str(getattr(final_res, 'status', '')).lower()
+                if final_low in ('cancelled', 'canceled', 'expired', 'rejected'):
+                    final_res.status = 'cancelled'
+                    return final_res
+                if final_low == 'filled':
+                    return final_res
+                last_result = final_res
+        except Exception as exc:
+            log.debug("Final direct cancel check error for %s: %s", order_id, exc)
+
+        if last_result and str(getattr(last_result, 'status', '')).lower() == 'filled':
+            return last_result
+
+        if delete_exc:
+            msg = str(delete_exc)
+            if 'filled' in msg.lower():
+                return OrderResult(True, str(order_id), 'filled', message=msg)
+            return OrderResult(False, str(order_id), 'rejected', message=msg)
+
+        cur_status = getattr(last_result, 'status', 'working') if last_result else 'working'
+        log.warning("Cancel unconfirmed for order %s after %.1fs timeout (broker status: %s)", order_id, timeout, cur_status)
+        return OrderResult(
+            False,
+            str(order_id),
+            str(cur_status),
+            message=f"Cancel not confirmed within {timeout:.1f}s (status={cur_status})",
+            raw=getattr(last_result, 'raw', None) if last_result else None,
+        )
+
+    def cancel_order_and_confirm(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
+        """Explicit wrapper to cancel an order and guarantee status confirmation from the brokerage."""
+        return self.cancel_order(order_id, timeout=timeout)
 
     def get_order_status(
         self,

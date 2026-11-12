@@ -1,7 +1,8 @@
-"""Session cleanup — morning (8:20) archives active trades; EOD syncs history only.
+"""Session cleanup — morning (8:20) archives active trades & prunes old logs; EOD syncs history only.
 
 Archiving runs at morning only so same-day trades stay in the dashboard for
 evening review. See changes/fixes/PREMARKET_CLEANUP.md.
+Market tick data under data/ (SPX, ES, MES, VIX, VIX1D, etc.) is NEVER pruned.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,6 +34,47 @@ def _central_today() -> date:
     from meic0dte.app.utilities import central_now
 
     return central_now().date()
+
+
+def prune_old_session_logs(
+    root: Optional[str] = None,
+    keep_days: Optional[int] = None,
+    logger: Optional[logging.Logger] = None,
+) -> int:
+    """
+    Delete old `logs/*.log` files older than `keep_days` (default 14 days, or
+    `LOG_RETENTION_DAYS` env var).
+    IMPORTANT: Market tick CSVs in `data/` (SPX, ES, MES, VIX, VIX1D, etc.) and
+    trade JSONs in `trades/` are NEVER touched by this function.
+    """
+    lg = logger or log
+    root = root or _project_root()
+    if keep_days is None:
+        try:
+            keep_days = int(os.environ.get('LOG_RETENTION_DAYS', '14').strip())
+        except ValueError:
+            keep_days = 14
+    if keep_days <= 0:
+        return 0
+
+    logs_dir = os.path.join(root, 'logs')
+    if not os.path.isdir(logs_dir):
+        return 0
+
+    cutoff_ts = time.time() - (keep_days * 86400.0)
+    removed = 0
+    for path in glob.glob(os.path.join(logs_dir, '*.log')):
+        try:
+            if os.path.getmtime(path) < cutoff_ts:
+                os.remove(path)
+                removed += 1
+        except OSError as exc:
+            # File may be open by current process on Windows; skip quietly
+            lg.debug('Could not prune log file %s: %s', os.path.basename(path), exc)
+
+    if removed:
+        lg.info('Pruned %d old session log file(s) (>%d days) from logs/ (data/ preserved)', removed, keep_days)
+    return removed
 
 
 def trade_expiry_date(state: Dict[str, Any], filename: str = '') -> Optional[date]:
@@ -156,7 +199,6 @@ def reset_optsymbols(root: Optional[str] = None) -> None:
         log.warning('Failed to reset %s: %s', path, exc)
 
 
-
 def clear_pause_tranches(root: Optional[str] = None) -> None:
     """No-op — MEIC pause state lives in session CSV (retired pause_tranches.json)."""
     log.debug('clear_pause_tranches skipped (session CSV owns pause state)')
@@ -232,8 +274,8 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     """
     Run full cleanup pass.
 
-    mode: 'morning' (8:20 CT) archives prior-expiry active JSON; 'eod' (3:30 CT)
-    syncs history only — no active/ archive (evening dashboard review).
+    mode: 'morning' (8:20 CT) archives prior-expiry active JSON and prunes old logs/*.log;
+    'eod' (3:30 CT, or 12:30 CT on NYSE half-days) syncs history only — no active/ archive.
     """
     lg = logger or log
     if mode not in ('morning', 'eod'):
@@ -252,6 +294,7 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     reset_optsymbols(root)
     clear_killswitch(root)
     cmds = clear_command_files(root)
+    logs_pruned = prune_old_session_logs(root, logger=lg) if mode == 'morning' else 0
 
     try:
         from blocks.session.bootstrap import bootstrap_meic_session_if_missing
@@ -294,6 +337,30 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
     else:
         lg.info('Skipping active/ archive at %s — trades stay visible until morning cleanup', mode)
 
+    # Re-register option symbols for any remaining active/open trades (e.g. on mid-day run.py restart)
+    try:
+        from common.streamer_symbols import register_option_symbols
+        for act_dir in (meic_active, manual_active):
+            if not os.path.isdir(act_dir):
+                continue
+            for fn in os.listdir(act_dir):
+                if not fn.endswith('.json') or fn.startswith('.'):
+                    continue
+                fp = os.path.join(act_dir, fn)
+                try:
+                    with open(fp, 'r', encoding='utf-8') as tf:
+                        tdata = json.load(tf)
+                    if (tdata.get('status') or '').lower() in ('open', 'pending'):
+                        s_sym = (tdata.get('short_leg') or {}).get('symbol', '')
+                        l_sym = (tdata.get('long_leg') or {}).get('symbol', '')
+                        syms = [s for s in (s_sym, l_sym) if s]
+                        if syms:
+                            register_option_symbols(syms, lot=fn)
+                except Exception:
+                    pass
+    except Exception as exc:
+        lg.warning('Failed to re-register kept active trade symbols: %s', exc)
+
     summary = {
         'mode': mode,
         'date': today.isoformat(),
@@ -308,13 +375,14 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
         'total_settled': meic_settled + manual_settled + other_settled,
         'total_archived': ma + ua + other_archived,
         'commands_removed': cmds,
+        'logs_pruned': logs_pruned,
         'warnings': mw + uw + other_warnings,
     }
     lg.info(
         'Cleanup done (%s): MEIC settled=%d frozen=%d archived=%d kept=%d | '
-        'Manual settled=%d frozen=%d archived=%d kept=%d | All strategies archived=%d | commands=%d',
+        'Manual settled=%d frozen=%d archived=%d kept=%d | All strategies archived=%d | commands=%d | logs_pruned=%d',
         mode, meic_settled, meic_frozen, ma, mk, manual_settled, manual_frozen, ua, uk,
-        ma + ua + other_archived, cmds,
+        ma + ua + other_archived, cmds, logs_pruned,
     )
     for w in summary['warnings']:
         lg.warning('Cleanup: %s', w)
@@ -334,7 +402,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
             summary['history_sync_error'] = str(exc)
 
         try:
-            import glob
             from strategies.skyline.settlement import settle_open_trade
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, root)
@@ -350,7 +417,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
             summary['skyline_settlement_error'] = str(exc)
 
         try:
-            import glob
             from strategies.drma_hm.settlement import settle_open_trade as settle_drma_hm
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_HM, root)
@@ -366,7 +432,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
             summary['drma_hm_settlement_error'] = str(exc)
 
         try:
-            import glob
             from strategies.mean_reversion.settlement import settle_open_trade as settle_mr
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_MEAN_REVERSION, root)
@@ -382,7 +447,6 @@ def run_session_cleanup(mode: str, logger: Optional[logging.Logger] = None) -> D
             summary['mean_reversion_settlement_error'] = str(exc)
 
         try:
-            import glob
             from strategies.drma_stocks.settlement import settle_open_stock_trade
 
             active = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, root)

@@ -39,25 +39,25 @@ def spread_intrinsic_at_expiry(
     long_strike: float,
     spx_close: float,
 ) -> float:
-    """Per-share spread debit at expiry (what it costs to close)."""
-    side = (side or 'P').upper()
+    """Per-share spread intrinsic value at expiry (debit to close credit spread, or credit received for debit spread)."""
+    opt_side = 'P' if (side or 'P').upper().startswith('P') else 'C'
     spx = float(spx_close)
     short_k = float(short_strike)
     long_k = float(long_strike)
-    if side == 'P':
+    if opt_side == 'P':
         short_intr = max(0.0, short_k - spx)
         long_intr = max(0.0, long_k - spx)
     else:
         short_intr = max(0.0, spx - short_k)
         long_intr = max(0.0, spx - long_k)
-    return round(max(0.0, short_intr - long_intr), 2)
+    return round(abs(short_intr - long_intr), 2)
 
 
 def short_leg_itm(side: str, short_strike: float, spx_close: float) -> bool:
-    side = (side or 'P').upper()
+    opt_side = 'P' if (side or 'P').upper().startswith('P') else 'C'
     spx = float(spx_close)
     short_k = float(short_strike)
-    if side == 'P':
+    if opt_side == 'P':
         return spx < short_k
     return spx > short_k
 
@@ -79,7 +79,7 @@ def _expiry_from_trade(trade: Dict[str, Any]) -> Optional[date]:
 
 
 def settlement_cutoff_reached(for_date: date, now: Optional[datetime] = None) -> bool:
-    """True after 3:00 PM Central on expiry day, or any time on a later calendar day."""
+    """True after regular market close Central on expiry day (12:00 on half-days, else 15:00), or any later day."""
     if now is None:
         from meic0dte.app.utilities import central_now
         now = central_now()
@@ -88,7 +88,8 @@ def settlement_cutoff_reached(for_date: date, now: Optional[datetime] = None) ->
         return True
     if today < for_date:
         return False
-    return now.time() >= time(15, 0)
+    from common.market_hours import market_close_time_ct
+    return now.time() >= market_close_time_ct(for_date)
 
 
 def _spx_csv_candidates(root: str) -> list[str]:
@@ -549,11 +550,11 @@ def settled_close_prices(
     spx_close: float,
 ) -> Tuple[float, float]:
     """Synthetic leg marks at expiry when spread expires or is ITM."""
-    side = (side or 'P').upper()
+    opt_side = 'P' if (side or 'P').upper().startswith('P') else 'C'
     spx = float(spx_close)
     short_k = float(short_strike)
     long_k = float(long_strike)
-    if side == 'P':
+    if opt_side == 'P':
         short_close = round(max(0.0, short_k - spx), 2)
         long_close = round(max(0.0, long_k - spx), 2)
     else:
@@ -593,10 +594,11 @@ def compute_otm_decay_pnl(trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     spread_type = (trade.get('spread_type') or 'credit').lower()
-    net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
     if spread_type == 'debit':
+        net_open = float(entry.get('net_debit') or entry.get('limit_debit') or entry.get('debit') or entry.get('net_credit') or entry.get('limit_credit') or 0)
         pnl = round(-net_open * 100 * filled_qty, 2)
     else:
+        net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
         pnl = round(net_open * 100 * filled_qty, 2)
 
     return {
@@ -630,16 +632,20 @@ def compute_settled_pnl(
         return None
 
     spread_type = (trade.get('spread_type') or 'credit').lower()
-    net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
+    if spread_type == 'debit':
+        net_open = float(entry.get('net_debit') or entry.get('limit_debit') or entry.get('debit') or entry.get('net_credit') or entry.get('limit_credit') or 0)
+    else:
+        net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
 
     status = (trade.get('status') or '').lower()
     sc = trade.get('short_close_price')
     lc = trade.get('long_close_price')
     if has_real_close_fills(trade):
-        close_debit = round(float(sc) - float(lc), 2)
         if spread_type == 'debit':
+            close_debit = round(float(lc) - float(sc), 2)
             pnl = round((close_debit - net_open) * 100 * filled_qty, 2)
         else:
+            close_debit = round(float(sc) - float(lc), 2)
             pnl = round((net_open - close_debit) * 100 * filled_qty, 2)
         return {
             'close_debit': close_debit,
@@ -728,7 +734,11 @@ def trade_to_history_row(
     if settled is None:
         return None
 
-    net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
+    spread_type = (trade.get('spread_type') or 'credit').lower()
+    if spread_type == 'debit':
+        net_open = float(entry.get('net_debit') or entry.get('limit_debit') or entry.get('debit') or entry.get('net_credit') or entry.get('limit_credit') or 0)
+    else:
+        net_open = float(entry.get('net_credit') or entry.get('limit_credit') or 0)
     quantity = effective_filled_quantity(trade)
     if quantity <= 0:
         return None
@@ -748,9 +758,14 @@ def trade_to_history_row(
     elif (lot or '').strip().lower().startswith('perma'):
         strategy = trades_layout.STRATEGY_PERMA_BULL
 
+    from dashboard.trade_times import trade_exit_time_iso
+    exit_ts = trade_exit_time_iso(trade)
+
     return {
         'date_opened': date_opened,
         'time_opened': ts,
+        'time_closed': exit_ts,
+        'exit_time': exit_ts,
         'strategy': strategy,
         'lot': lot,
         'side': side,

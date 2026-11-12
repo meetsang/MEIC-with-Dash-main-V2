@@ -188,11 +188,57 @@ class ProbeCoordinator:
             while not self._stop.is_set():
                 try:
                     self._schedule_due_tranche_probes()
+                    self._schedule_session_keepalive_probe()
                 except Exception:
                     self.log.exception('probe coordinator tick failed')
                 self._stop.wait(self.tick_interval_sec)
         except Exception:
             self.log.exception('probe coordinator crashed')
+
+    def _schedule_session_keepalive_probe(self) -> None:
+        """Periodically verify broker REST health throughout trading hours (08:30-15:00 CT)."""
+        if os.environ.get('REST_KEEPALIVE_ENABLED', 'true').lower() in ('0', 'false', 'no'):
+            return
+        now = self._now()
+        session_open = dt_time(8, 30)
+        session_close = dt_time(15, 0)
+        t = now.time()
+        if not (session_open <= t <= session_close):
+            return
+
+        from common.trading_gate import read_state
+        state = read_state()
+        last_epoch = float(state.get('last_successful_probe_epoch') or 0)
+        now_epoch = time.time()
+        keepalive_sec = float(os.environ.get('REST_KEEPALIVE_INTERVAL_SEC', '300'))
+        if last_epoch > 0 and (now_epoch - last_epoch) < keepalive_sec:
+            return
+
+        last_probe = state.get('last_probe') or {}
+        if last_probe.get('status_phase') in ('scheduled', 'running'):
+            return
+
+        bucket = int(now_epoch // keepalive_sec)
+        key = (self.session_date_ct, 'session', f'keepalive_{bucket}')
+        with self._lock:
+            if key in self._started:
+                return
+            self._started.add(key)
+
+        from common.trading_gate import mark_probe_scheduled
+        mark_probe_scheduled(
+            source='keepalive',
+            session_date_ct=self.session_date_ct,
+            strategy='',
+            tranche_id='',
+        )
+        threading.Thread(
+            target=self._execute_probe,
+            kwargs={'key': key, 'source': 'keepalive', 'strategy': '', 'tranche_id': ''},
+            name=f'rest-probe-keepalive-{bucket}',
+            daemon=True,
+        ).start()
+        self.log.info('Scheduled session keepalive REST probe (bucket=%d)', bucket)
 
     def _ensure_broker(self):
         if self._broker is not None:

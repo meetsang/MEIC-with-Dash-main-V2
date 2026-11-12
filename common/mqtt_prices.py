@@ -108,10 +108,15 @@ class MqttPriceCache:
         with self._start_lock:
             if self._client is not None:
                 return
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+            client_id = f'mqtt_price_cache_{os.getpid()}_{int(time.time() * 1000) % 100000}'
+            try:
+                client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+            except Exception:
+                client = mqtt.Client(client_id=client_id)
             client.on_connect = self._on_connect
             client.on_disconnect = self._on_disconnect
             client.on_message = self._on_message
+            client.reconnect_delay_set(min_delay=1, max_delay=30)
             try:
                 client.connect(stream_config.MQTT_BROKER_ADDR, 1883, 60)
                 client.loop_start()
@@ -133,8 +138,11 @@ class MqttPriceCache:
             self._client = None
             self._connected = False
         if client:
-            client.loop_stop()
-            client.disconnect()
+            try:
+                client.loop_stop()
+                client.disconnect()
+            except Exception:
+                pass
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         if reason_code != 0:
@@ -153,38 +161,6 @@ class MqttPriceCache:
         self._connected = False
         self._last_error = f'disconnect rc={reason_code}'
         log.warning('MQTT price cache disconnected: %s', self._last_error)
-        self._schedule_reconnect()
-
-    def _schedule_reconnect(self) -> None:
-        if self._client is None:
-            return
-        with self._start_lock:
-            if self._reconnect_timer is not None:
-                return
-            delay = min(
-                RECONNECT_MAX_SEC,
-                RECONNECT_BASE_SEC * (2 ** min(self._reconnect_attempts, 6)),
-            )
-            self._reconnect_attempts += 1
-            attempt = self._reconnect_attempts
-            timer = threading.Timer(delay, self._do_reconnect, args=(attempt,))
-            timer.daemon = True
-            self._reconnect_timer = timer
-            timer.start()
-
-    def _do_reconnect(self, attempt: int) -> None:
-        with self._start_lock:
-            self._reconnect_timer = None
-            client = self._client
-        if client is None:
-            return
-        try:
-            log.info('MQTT price cache reconnecting (attempt %d)', attempt)
-            client.reconnect()
-        except Exception as exc:
-            self._last_error = str(exc)
-            log.warning('MQTT price cache reconnect failed: %s', exc)
-            self._schedule_reconnect()
 
     def add_tick_listener(self, listener: TickListener) -> None:
         """Register callback(symbol, price, epoch_sec) on each MQTT mid update."""

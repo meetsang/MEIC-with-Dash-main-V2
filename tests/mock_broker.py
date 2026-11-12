@@ -171,10 +171,13 @@ class MockBroker(BrokerBase):
   def replace_order(self, order_id, new_spec) -> OrderResult:
     return self.place_limit_order('BUY_TO_CLOSE', new_spec.get('symbol', ''), 1, 1.0)
 
-  def cancel_order(self, order_id) -> OrderResult:
+  def cancel_order(self, order_id, *, timeout: float = 5.0) -> OrderResult:
     if order_id in self.orders:
       self.orders[order_id] = OrderResult(True, order_id, 'cancelled')
     return OrderResult(True, order_id, 'cancelled')
+
+  def cancel_order_and_confirm(self, order_id, *, timeout: float = 5.0) -> OrderResult:
+    return self.cancel_order(order_id, timeout=timeout)
 
   def get_order_status(self, order_id, *, priority: str = 'NORMAL', op: str = 'get_order') -> OrderResult:
     if order_id not in self.orders:

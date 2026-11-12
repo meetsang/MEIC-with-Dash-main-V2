@@ -332,8 +332,17 @@ def _slot_state_from_trade(
         return 'closed'
     if status == 'closing':
         return 'closing'
-    if status in ('open', 'pending_fill'):
+    if status == 'open':
         return 'open'
+    if status == 'pending_fill':
+        open_ord = (trade or {}).get('open_order') or {}
+        ord_status = str(open_ord.get('status') or '').lower()
+        filled_qty = int((trade or {}).get('filled_quantity') or 0)
+        if ord_status in ('cancelled', 'canceled', 'rejected') and filled_qty == 0:
+            return 'unfilled'
+        return 'entering'
+    if status in ('cancelled', 'canceled', 'rejected'):
+        return 'unfilled'
     return status
 
 
@@ -444,10 +453,31 @@ def _trade_pnl(
                     lc = float(c['long_close_price'])
                 except (ValueError, TypeError):
                     pass
+        if sc is None and isinstance(trade, dict):
+            for ev in reversed(trade.get('stop_history') or []):
+                if ev.get('action') == 'replaced_limit' and ev.get('price'):
+                    try:
+                        sc = float(ev['price'])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+    is_debit = bool(
+        isinstance(trade, dict)
+        and (
+            str(trade.get('spread_type') or (trade.get('entry') or {}).get('spread_type') or '').lower() == 'debit'
+            or str(trade.get('side') or (trade.get('entry') or {}).get('side') or '').upper() in ('PDS', 'CDS')
+            or str(trade.get('structure_type') or (trade.get('entry') or {}).get('structure_type') or '').lower() in ('debit_p', 'debit_c', 'pds', 'cds')
+        )
+    )
 
     if status == 'closed' and sc is not None and lc is not None:
-        exit_credit = round(sc - lc, 2)
-        pnl = round((net_credit - exit_credit) * 100 * active_qty + scaled_pnl, 2)
+        if is_debit:
+            exit_credit = round(lc - sc, 2)
+            pnl = round((exit_credit - net_credit) * 100 * active_qty + scaled_pnl, 2)
+        else:
+            exit_credit = round(sc - lc, 2)
+            pnl = round((net_credit - exit_credit) * 100 * active_qty + scaled_pnl, 2)
         return pnl, exit_credit, sc, True
 
     if status == 'closed' and trade and isinstance(trade, dict):
@@ -460,7 +490,10 @@ def _trade_pnl(
         elif trade.get('close_debit') is not None:
             ec = float(trade['close_debit'])
         if ec is not None:
-            pnl = round((net_credit - ec) * 100 * active_qty + scaled_pnl, 2)
+            if is_debit:
+                pnl = round((ec - net_credit) * 100 * active_qty + scaled_pnl, 2)
+            else:
+                pnl = round((net_credit - ec) * 100 * active_qty + scaled_pnl, 2)
             return pnl, ec, sc, True
 
     if trade is not None and spx_close is not None:
@@ -473,14 +506,22 @@ def _trade_pnl(
 
     if sc is not None:
         long_for_exit = lc if lc is not None else (cur_long if cur_long is not None else (long_fill or 0.0))
-        exit_credit = round(sc - long_for_exit, 2)
-        pnl = round((net_credit - exit_credit) * 100 * active_qty + scaled_pnl, 2)
+        if is_debit:
+            exit_credit = round(long_for_exit - sc, 2)
+            pnl = round((exit_credit - net_credit) * 100 * active_qty + scaled_pnl, 2)
+        else:
+            exit_credit = round(sc - long_for_exit, 2)
+            pnl = round((net_credit - exit_credit) * 100 * active_qty + scaled_pnl, 2)
         return pnl, exit_credit, sc, True
 
     cur_s = cur_short if cur_short is not None else (short_fill or 0.0)
     cur_l = cur_long if cur_long is not None else (long_fill or 0.0)
-    cur_spread = round(cur_s - cur_l, 2)
-    pnl = round((net_credit - cur_spread) * 100 * active_qty + scaled_pnl, 2)
+    if is_debit:
+        cur_spread = round(cur_l - cur_s, 2)
+        pnl = round((cur_spread - net_credit) * 100 * active_qty + scaled_pnl, 2)
+    else:
+        cur_spread = round(cur_s - cur_l, 2)
+        pnl = round((net_credit - cur_spread) * 100 * active_qty + scaled_pnl, 2)
     return pnl, None, None, False
 
 
@@ -651,7 +692,8 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
     short_sym = short_leg.get('symbol', '')
     long_sym = long_leg.get('symbol', '')
     net_credit = float(entry.get('net_credit', 0) or 0)
-    quantity = int(trade.get('filled_quantity', 1) or 1)
+    has_pos = _trade_has_position(trade)
+    quantity = int(trade.get('filled_quantity') or trade.get('quantity') or 1) if has_pos else int(trade.get('filled_quantity', 0) or 0)
     short_fill = float(short_leg.get('fill_price') or 0)
     long_fill = float(long_leg.get('fill_price') or 0)
     short_close, long_close = display_close_prices(trade)
@@ -684,11 +726,14 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
             from common.expiry_settlement import get_spx_settlement_close, ensure_spx_settlement_close
             trade_spx = get_spx_settlement_close(exp, root=ROOT) or ensure_spx_settlement_close(exp, root=ROOT)
 
-    live_pnl, exit_credit, exit_short, pnl_frozen = _trade_pnl(
-        net_credit, quantity, short_fill, long_fill,
-        short_close, long_close, cur_short, cur_long, status,
-        trade=trade, spx_close=trade_spx,
-    )
+    if has_pos:
+        live_pnl, exit_credit, exit_short, pnl_frozen = _trade_pnl(
+            net_credit, quantity, short_fill, long_fill,
+            short_close, long_close, cur_short, cur_long, status,
+            trade=trade, spx_close=trade_spx,
+        )
+    else:
+        live_pnl, exit_credit, exit_short, pnl_frozen = None, None, None, True
 
     phase_label = _phase_display(
         phases,
@@ -744,7 +789,7 @@ def _apply_trade_overlay(slot, trade, lot, side, spx_settle=None):
         ),
         'live_pnl': live_pnl,
         'pnl_frozen': pnl_frozen,
-        'pnl_class': 'text-success' if live_pnl >= 0 else 'text-danger',
+        'pnl_class': ('text-success' if live_pnl >= 0 else 'text-danger') if live_pnl is not None else '',
         'phase': phase_label,
         'phase_tooltip': phase_tooltip,
         'stop_history': trade.get('stop_history', []),
@@ -902,14 +947,29 @@ def _perma_bull_history_rows(limit: int = 30) -> list:
         entry = trade.get('entry') or {}
         short_leg = trade.get('short_leg') or {}
         long_leg = trade.get('long_leg') or {}
+        close_info = trade.get('close') or {}
         pnl = _handshake_trade_live_pnl(trade)
+        close_debit = trade.get('brokerage_spread_exit_debit')
+        if close_debit is None:
+            sc = close_info.get('short_close_price') or trade.get('short_close_price')
+            lc = close_info.get('long_close_price') or trade.get('long_close_price')
+            if sc is not None and lc is not None:
+                close_debit = round(float(sc) - float(lc), 2)
+            elif sc is not None:
+                close_debit = float(sc)
         rows.append({
             'date': str(entry.get('timestamp') or '')[:10],
+            'entry_time': trade_entry_time_iso(trade),
+            'exit_time': trade_exit_time_iso(trade),
             'status': trade.get('status'),
+            'quantity': int(trade.get('quantity') or trade.get('filled_quantity') or 1),
             'short_strike': short_leg.get('strike'),
             'long_strike': long_leg.get('strike'),
             'net_credit': entry.get('net_credit'),
+            'close_debit': close_debit,
+            'close_reason': close_info.get('reason') or trade.get('close_mechanism'),
             'realized_pnl_dollars': pnl,
+            'paper': bool(trade.get('paper')),
         })
         if len(rows) >= limit:
             break
@@ -962,9 +1022,54 @@ def _iron_fly_xsp_today_pnl() -> float:
     return 0.0
 
 
+def _collect_drma_hm_session_trade_files(directory: str, today_str: str) -> list[str]:
+    """Collect DRMA_HM trade JSON files for today's trading session, including overnight futures trades."""
+    if not os.path.isdir(directory):
+        return []
+    import glob
+    import datetime
+    from common.session_cleanup import central_today
+
+    today_dt = central_today()
+    search_dates = [today_str] + [(today_dt - datetime.timedelta(days=d)).isoformat() for d in (1, 2, 3)]
+
+    matched_paths = []
+    seen_ids = set()
+
+    for p_date in search_dates:
+        for path in sorted(glob.glob(os.path.join(directory, f'drma_hm_{p_date}_*.json')), reverse=True):
+            fname = os.path.basename(path)
+            if fname.startswith('session_'):
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    t = json.load(f)
+            except Exception:
+                continue
+
+            tid = t.get('trade_id') or fname
+            if tid in seen_ids:
+                continue
+
+            entered_at = str(t.get('entered_at') or '')
+            is_today = (p_date == today_str) or (t.get('date') == today_str)
+            is_overnight = (
+                p_date != today_str and
+                (t.get('session_phase') == 'overnight' or
+                 t.get('structure_type') == 'futures' or
+                 t.get('trade_type') in ('DIRECTIONAL_FUTURES', 'FUTURES')) and
+                (entered_at >= f'{p_date}T17:00:00')
+            )
+
+            if is_today or is_overnight:
+                seen_ids.add(tid)
+                matched_paths.append(path)
+
+    return matched_paths
+
+
 def _drma_hm_today_pnl() -> float:
     """Today's DRMA_HM paper/live P/L (realized + open)."""
-    import glob
     from common.session_cleanup import central_today
     from strategies.drma_hm.settlement import attach_dollar_pnl_display
 
@@ -974,9 +1079,7 @@ def _drma_hm_today_pnl() -> float:
 
     total = 0.0
     for d in (active, hist_dir):
-        if not os.path.isdir(d):
-            continue
-        for path in glob.glob(os.path.join(d, f'drma_hm_{today}_*.json')):
+        for path in _collect_drma_hm_session_trade_files(d, today):
             try:
                 with open(path, encoding='utf-8') as f:
                     trade = json.load(f)
@@ -1361,6 +1464,8 @@ def build_summary():
                                 'long_open_price': long_leg.get('fill_price', 0),
                                 'short_close_price': trade.get('short_close_price'),
                                 'long_close_price': trade.get('long_close_price'),
+                                'strategy': trades_layout.STRATEGY_MEIC,
+                                'paper': 1 if (trade.get('paper') if trade.get('paper') is not None else _strategy_paper_flag(trades_layout.STRATEGY_MEIC)) else 0,
                             })
                             _synced_trades.add(_sync_key)
                         except Exception:
@@ -1368,6 +1473,9 @@ def build_summary():
                 else:
                     open_count += 1
                     day_pnl += live_pnl
+            else:
+                slot['live_pnl'] = None
+                slot['pnl_class'] = ''
 
         grid.append(slot)
 
@@ -1510,6 +1618,28 @@ def _on_socket_connect():
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
+@app.before_request
+def _enforce_dashboard_auth():
+    token = os.environ.get('DASHBOARD_AUTH_TOKEN', '').strip()
+    if not token:
+        return None
+    remote = (request.remote_addr or '').strip()
+    if remote in ('127.0.0.1', '::1', 'localhost'):
+        return None
+    provided = (
+        request.headers.get('X-Auth-Token', '').strip()
+        or request.args.get('token', '').strip()
+        or (request.authorization.password if request.authorization else '')
+    )
+    if provided == token:
+        return None
+    return Response(
+        'Unauthorized — set X-Auth-Token or Basic Auth password',
+        401,
+        {'WWW-Authenticate': 'Basic realm="MEIC Dashboard"'},
+    )
+
+
 @app.route('/')
 def index():
     return render_template('index.html', data=build_summary())
@@ -1518,21 +1648,694 @@ def index():
 def api_summary():
     return jsonify(build_summary())
 
+def _enrich_sub_strategy(t):
+    strat = t.get('strategy_key', '')
+    side = str(t.get('side', '')).upper()
+    struct = str(t.get('structure', ''))
+    lot = str(t.get('lot', '')).lower()
+    sub = t.get('sub_strategy')
+    sub_label = t.get('sub_strategy_label')
+
+    if not sub:
+        if strat in ('MANUAL_SPREAD', 'MEIC_IC'):
+            if 'debit' in struct.lower():
+                sub = 'CDS' if side == 'C' else 'PDS'
+                sub_label = 'Call Debit Spread' if side == 'C' else 'Put Debit Spread'
+            else:
+                sub = 'CCS' if side == 'C' else 'PCS'
+                sub_label = 'Call Credit Spread' if side == 'C' else 'Put Credit Spread'
+        elif strat == 'DRMA_HM_SPX':
+            if 'dir_' in lot:
+                sub = 'Directional Spread'
+                sub_label = 'Directional Spread'
+            elif 'fut_' in lot:
+                sub = 'Futures Spread'
+                sub_label = 'Directional Futures'
+            else:
+                sub = 'Credit Spread'
+                sub_label = 'Non-Directional Spread'
+        elif strat == 'DRMA_HM_STOCKS':
+            if '_cds_' in lot or '_pds_' in lot:
+                sub = 'Directional Spread'
+                sub_label = 'Directional Spread'
+            elif '_pcs_' in lot or '_ccs_' in lot:
+                sub = 'Credit Spread'
+                sub_label = 'Non-Directional Spread'
+            elif '_equity_' in lot or '_stock_' in lot:
+                sub = 'Direct Stock'
+                sub_label = 'Direct Stock'
+            else:
+                sub = 'Stock Structure'
+                sub_label = 'Stock Structure'
+        elif strat == 'PERMA_BULL_PCS':
+            sub = 'PCS'
+            sub_label = 'Put Credit Spread'
+        elif 'IRON_FLY' in strat:
+            sub = 'Iron Fly'
+            sub_label = 'Iron Fly'
+        elif strat == 'SKYLINE_SPX':
+            sub = 'Butterfly'
+            sub_label = 'Skyline Butterfly'
+        elif strat == 'CLONE_TRADES':
+            raw_sub = t.get('sub_strategy') or t.get('called_by') or 'TG'
+            try:
+                from clone_trades.models import classify_sub_strategy
+                sub = classify_sub_strategy(str(raw_sub))
+                if sub == 'Others':
+                    sub = 'TG'
+            except Exception:
+                sub = 'TG'
+            sub_label = sub
+        else:
+            sub = strat
+            sub_label = t.get('strategy_label', strat)
+
+    t['sub_strategy'] = sub
+    t['sub_strategy_label'] = sub_label or sub
+    return t
+
+def build_all_live_trades():
+    from common.session_cleanup import central_today
+    from db import get_trades
+    open_trades = []
+    closed_trades = []
+    today = central_today().isoformat()
+
+    # ── OPEN TRADES ──────────────────────────────────────────────────────────
+    # 1. MEIC & Manual Spread from summary
+    try:
+        summary = build_summary()
+        # MEIC Open
+        meic_paper = _strategy_paper_flag(trades_layout.STRATEGY_MEIC)
+        for s in summary.get('grid', []):
+            st = str(s.get('state', '')).lower()
+            if str(s.get('status', '')).lower() == 'closed':
+                continue
+            if st in ('open', 'closing', 'breached') and (s.get('trade_path') or s.get('filename') or s.get('short_strike')):
+                fn = s.get('filename') or s.get('_filename') or ''
+                entry_credit = float(s.get('entry_credit') or 0.0)
+                live_spread = float(s.get('live_spread') or 0.0)
+                pnl = float(s.get('live_pnl') or 0.0)
+                pnl_pct = round(((entry_credit - live_spread) / entry_credit) * 100, 1) if entry_credit > 0 else None
+                open_trades.append({
+                    'id': f"meic_{s.get('slot_key')}",
+                    'strategy_key': 'MEIC_IC',
+                    'strategy_label': 'MEIC Iron Condor',
+                    'tab_id': 'meic',
+                    'paper': meic_paper,
+                    'symbol': 'SPX',
+                    'lot': s.get('lot'),
+                    'side': s.get('side'),
+                    'structure': f"{'Call' if s.get('side') == 'C' else 'Put'} Spread ({s.get('lot', '')})",
+                    'strikes': f"{s.get('short_strike', '–')}/{s.get('long_strike', '–')}",
+                    'quantity': int(s.get('filled') or s.get('quantity') or 1),
+                    'entry_price': entry_credit,
+                    'current_price': live_spread,
+                    'unrealized_pnl': pnl,
+                    'unrealized_pnl_pct': pnl_pct,
+                    'status': st.upper(),
+                    'stop_loss': s.get('stop_multiplier') and f"{s.get('stop_multiplier')}x stop",
+                    'profit_target': None,
+                    'time_opened': s.get('entry_time'),
+                    'filename': fn,
+                    'slot_key': s.get('slot_key'),
+                    'actions': ['close', 'scale_out']
+                })
+
+        # Manual Spread Open
+        manual_paper = _strategy_paper_flag(trades_layout.STRATEGY_MANUAL)
+        for s in summary.get('manual_trades', []):
+            st = str(s.get('state', '')).lower()
+            if str(s.get('status', '')).lower() == 'closed':
+                continue
+            if st in ('open', 'closing', 'breached', 'working', 'pending'):
+                fn = s.get('_filename') or s.get('filename') or ''
+                is_working = st in ('working', 'pending')
+                entry_credit = float(s.get('entry_credit') or 0.0)
+                live_spread = float(s.get('live_spread') or 0.0)
+                pnl = float(s.get('live_pnl') or 0.0)
+                pnl_pct = round(((entry_credit - live_spread) / entry_credit) * 100, 1) if entry_credit > 0 else None
+                open_trades.append({
+                    'id': f"manual_{fn}",
+                    'strategy_key': 'MANUAL_SPREAD',
+                    'strategy_label': 'Manual Spread',
+                    'tab_id': 'manual',
+                    'paper': manual_paper,
+                    'symbol': 'SPX',
+                    'lot': s.get('lot'),
+                    'side': s.get('side'),
+                    'structure': f"{'Call' if s.get('side') == 'C' else 'Put'} Spread ({s.get('lot', '')})",
+                    'strikes': f"{s.get('short_strike', '–')}/{s.get('long_strike', '–')}",
+                    'quantity': int(s.get('filled') or s.get('quantity') or 1),
+                    'entry_price': entry_credit,
+                    'current_price': live_spread,
+                    'unrealized_pnl': pnl,
+                    'unrealized_pnl_pct': pnl_pct,
+                    'status': st.upper(),
+                    'stop_loss': s.get('stop_price') or (s.get('stop_multiplier') and f"{s.get('stop_multiplier')}x stop"),
+                    'profit_target': s.get('profit_target'),
+                    'time_opened': s.get('entry_time'),
+                    'filename': fn,
+                    'slot_key': s.get('lot'),
+                    'actions': ['cancel'] if is_working else ['close', 'scale_out']
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading MEIC / Manual open: %s", exc)
+
+    # 2. Clone Trades (Discretionary) Open
+    try:
+        from clone_trades.engine import get_engine
+        eng = get_engine()
+        cl_stat = eng.get_status()
+        for t in cl_stat.get('active_trades', []):
+            st = str(t.get('status', 'OPEN')).upper()
+            spec = t.get('spec', {})
+            und = spec.get('underlying', 'OPT')
+            ot = spec.get('option_type', 'CALL')
+            k = spec.get('strike', '')
+            exp = spec.get('expiration', '')
+            is_p = t.get('paper_mode') if t.get('paper_mode') is not None else ((t.get('sub_strategy') or 'PC') != 'PC')
+            is_working = st == 'WORKING'
+            entry_px = float(t.get('entry_price') or t.get('webhook_price') or 0.0)
+            curr_px = float(t.get('current_price') or entry_px)
+            pnl = float(t.get('unrealized_pnl_usd', 0.0))
+            pnl_pct = round(((curr_px - entry_px) / entry_px) * 100, 1) if entry_px > 0 else None
+            open_trades.append({
+                'id': t.get('id'),
+                'strategy_key': 'CLONE_TRADES',
+                'strategy_label': 'Discretionary',
+                'sub_strategy': t.get('sub_strategy') or t.get('called_by') or 'TG',
+                'tab_id': 'clone_trades',
+                'paper': is_p,
+                'symbol': und,
+                'side': ot,
+                'structure': f"{ot} ${k} ({exp})",
+                'strikes': str(k),
+                'quantity': int(t.get('remaining_quantity') or t.get('initial_quantity') or 1),
+                'entry_price': entry_px,
+                'current_price': curr_px,
+                'highest_price': t.get('highest_price'),
+                'lowest_price': t.get('lowest_price'),
+                'unrealized_pnl': pnl,
+                'unrealized_pnl_pct': pnl_pct,
+                'status': st,
+                'stop_loss': t.get('active_stop_price') and f"${t.get('active_stop_price'):.2f} ({t.get('active_stop_pct', -50)}%)",
+                'profit_target': t.get('active_pt_price') and f"${t.get('active_pt_price'):.2f}",
+                'time_opened': t.get('created_at_cst') or t.get('created_at'),
+                'trade_id': t.get('id'),
+                'actions': ['cancel'] if is_working else ['close', 'view_ladder', 'edit_ladder']
+            })
+    except Exception as exc:
+        log.warning("Live trades: error loading clone open: %s", exc)
+
+    # 3. Perma Bull PCS Open
+    try:
+        pb_trade = _perma_bull_trade_for_date(today)
+        if pb_trade:
+            pb_st = str(pb_trade.get('status', '')).lower()
+            pb_cm = str(pb_trade.get('close_mechanism', '')).lower()
+            pb_paper = bool(pb_trade.get('paper')) if pb_trade.get('paper') is not None else _strategy_paper_flag(trades_layout.STRATEGY_PERMA_BULL)
+            is_closed = (pb_st == 'closed') or (pb_cm in ('profit_target_hit', 'profit_target', 'exchange_stop', 'manual_close')) or (pb_st == 'closing' and pb_trade.get('manual_management'))
+            if not is_closed and pb_st in ('open', 'closing', 'working', 'pending'):
+                sk = (pb_trade.get('short_leg') or {}).get('strike', '–')
+                lk = (pb_trade.get('long_leg') or {}).get('strike', '–')
+                astop = pb_trade.get('active_stop') or {}
+                credit = float((pb_trade.get('entry') or {}).get('net_credit') or 0.0)
+                pnl = _perma_bull_today_pnl()
+                open_trades.append({
+                    'id': f"perma_{pb_trade.get('lot') or 'today'}",
+                    'strategy_key': 'PERMA_BULL_PCS',
+                    'strategy_label': 'Perma Bull PCS',
+                    'tab_id': 'perma-bull',
+                    'paper': pb_paper,
+                    'symbol': 'SPX',
+                    'lot': pb_trade.get('lot') or f"perma-{today}",
+                    'side': 'P',
+                    'structure': '5-wide Put Credit Spread',
+                    'strikes': f"{sk}/{lk}",
+                    'quantity': int(pb_trade.get('quantity') or pb_trade.get('filled_quantity') or 1),
+                    'entry_price': credit,
+                    'current_price': None,
+                    'unrealized_pnl': float(pnl),
+                    'unrealized_pnl_pct': None,
+                    'status': pb_st.upper(),
+                    'stop_loss': astop.get('stop_price') and f"${astop.get('stop_price')}",
+                    'profit_target': astop.get('profit_price') and f"${astop.get('profit_price')}",
+                    'time_opened': (pb_trade.get('entry') or {}).get('timestamp'),
+                    'filename': os.path.basename(pb_trade.get('_filepath', '')),
+                    'actions': ['close', 'manage_manually']
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading Perma Bull open: %s", exc)
+
+    # 4. Skyline SPX Open
+    try:
+        sky_act = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_SKYLINE, ROOT)
+        sky_paper = _strategy_paper_flag(trades_layout.STRATEGY_SKYLINE)
+        for f in glob.glob(os.path.join(sky_act, "skyline_*.json")):
+            with open(f, 'r', encoding='utf-8') as jf:
+                d = json.load(jf)
+            if str(d.get('status', '')).lower() == 'open':
+                open_trades.append({
+                    'id': f"skyline_{os.path.basename(f)}",
+                    'strategy_key': 'SKYLINE_SPX',
+                    'strategy_label': 'Skyline SPX',
+                    'tab_id': 'skyline',
+                    'paper': sky_paper,
+                    'symbol': 'SPX',
+                    'side': 'BF',
+                    'structure': 'Butterfly Spread(s)',
+                    'strikes': '–',
+                    'quantity': int(d.get('quantity', 1)),
+                    'entry_price': float(d.get('net_debit_total') or 0.0),
+                    'current_price': None,
+                    'unrealized_pnl': float(d.get('unrealized_pnl_total') or 0.0),
+                    'unrealized_pnl_pct': None,
+                    'status': 'OPEN',
+                    'stop_loss': None,
+                    'profit_target': None,
+                    'time_opened': d.get('entry_time_et'),
+                    'filename': os.path.basename(f),
+                    'actions': ['close_all']
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading Skyline open: %s", exc)
+
+    # 5. DRMA Stocks Open
+    try:
+        stk_act = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_STOCKS, ROOT)
+        for f in glob.glob(os.path.join(stk_act, "*.json")):
+            b = os.path.basename(f)
+            if b.startswith("session_") or b.startswith("watchlist_"):
+                continue
+            with open(f, 'r', encoding='utf-8') as jf:
+                d = json.load(jf)
+            if str(d.get('status', '')).lower() == 'open':
+                ticker = d.get('ticker') or 'STOCK'
+                is_eq = d.get('trade_type') == 'DIRECT_STOCK' or 'equity' in b
+                ep = float(d.get('entry_price') or 0.0)
+                cp = float(d.get('current_price') or ep)
+                pnl = float(d.get('pnl') or d.get('unrealized_pnl') or 0.0)
+                pnl_pct = round(((cp - ep) / ep) * 100, 1) if ep > 0 else None
+                open_trades.append({
+                    'id': d.get('trade_id') or b,
+                    'strategy_key': 'DRMA_HM_STOCKS',
+                    'strategy_label': f'DRMA Stocks ({ticker})',
+                    'tab_id': 'drma_stocks',
+                    'paper': True,
+                    'symbol': ticker,
+                    'side': d.get('side', 'LONG'),
+                    'structure': 'Direct Equity' if is_eq else (d.get('sub_strategy') or 'Spread'),
+                    'strikes': f"{d.get('short_strike', '–')}/{d.get('long_strike', '–')}" if not is_eq else f"{d.get('shares', 1)} sh",
+                    'quantity': int(d.get('quantity') or d.get('shares') or 1),
+                    'entry_price': ep,
+                    'current_price': cp,
+                    'unrealized_pnl': pnl,
+                    'unrealized_pnl_pct': pnl_pct,
+                    'status': 'OPEN',
+                    'stop_loss': None,
+                    'profit_target': None,
+                    'time_opened': d.get('entry_time'),
+                    'trade_id': d.get('trade_id') or b.replace('.json', ''),
+                    'actions': ['close']
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading DRMA stocks open: %s", exc)
+
+    # 6. DRMA HM SPX Open
+    try:
+        hm_act = trades_layout.active_dir_for_strategy(trades_layout.STRATEGY_DRMA_HM, ROOT)
+        hm_paper = _strategy_paper_flag(trades_layout.STRATEGY_DRMA_HM)
+        for f in glob.glob(os.path.join(hm_act, "drma_hm_*.json")):
+            with open(f, 'r', encoding='utf-8') as jf:
+                d = json.load(jf)
+            if str(d.get('status', '')).lower() == 'open':
+                open_trades.append({
+                    'id': d.get('trade_id') or os.path.basename(f),
+                    'strategy_key': 'DRMA_HM_SPX',
+                    'strategy_label': 'DRMA H-M Pro',
+                    'tab_id': 'drma_hm',
+                    'paper': hm_paper,
+                    'symbol': 'SPX',
+                    'side': d.get('side', '–'),
+                    'structure': d.get('structure_type') or d.get('sub_strategy') or 'DRMA Structure',
+                    'strikes': f"{d.get('short_strike', '–')}/{d.get('long_strike', '–')}",
+                    'quantity': int(d.get('quantity', 1)),
+                    'entry_price': float(d.get('entry_price') or d.get('credit') or 0.0),
+                    'current_price': None,
+                    'unrealized_pnl': float(d.get('pnl') or 0.0),
+                    'unrealized_pnl_pct': None,
+                    'status': 'OPEN',
+                    'stop_loss': None,
+                    'profit_target': None,
+                    'time_opened': d.get('timestamp') or d.get('entry_time'),
+                    'trade_id': d.get('trade_id'),
+                    'actions': ['close_all']
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading DRMA HM open: %s", exc)
+
+    # 7. Iron Fly SPX / XSP Open
+    for s_name, t_tab in [(trades_layout.STRATEGY_IRON_FLY, 'iron_fly'), (trades_layout.STRATEGY_IRON_FLY_XSP, 'iron_fly_xsp')]:
+        try:
+            fly_act = trades_layout.active_dir_for_strategy(s_name, ROOT)
+            fly_paper = _strategy_paper_flag(s_name)
+            sym = 'XSP' if 'XSP' in s_name else 'SPX'
+            for f in glob.glob(os.path.join(fly_act, "iron_fly_*.json")):
+                with open(f, 'r', encoding='utf-8') as jf:
+                    d = json.load(jf)
+                if str(d.get('status', '')).lower() == 'open':
+                    open_trades.append({
+                        'id': f"fly_{os.path.basename(f)}",
+                        'strategy_key': s_name,
+                        'strategy_label': 'Iron Fly XSP' if 'XSP' in s_name else 'Iron Fly SPX',
+                        'tab_id': t_tab,
+                        'paper': fly_paper,
+                        'symbol': sym,
+                        'side': 'IF',
+                        'structure': f'Iron Fly {sym}',
+                        'strikes': '–',
+                        'quantity': int(d.get('quantity', 1)),
+                        'entry_price': float(d.get('credit_received') or d.get('open_credit') or 0.0),
+                        'current_price': None,
+                        'unrealized_pnl': float(d.get('unrealized_pnl') or d.get('pnl') or 0.0),
+                        'unrealized_pnl_pct': None,
+                        'status': 'OPEN',
+                        'stop_loss': None,
+                        'profit_target': None,
+                        'time_opened': d.get('entry_time') or d.get('placed_time'),
+                        'actions': ['close_all']
+                    })
+        except Exception as exc:
+            log.warning("Live trades: error loading Iron Fly open: %s", exc)
+
+    # ── CLOSED TRADES (TODAY) ────────────────────────────────────────────────
+    STRATEGY_META = {
+        'MEIC_IC': ('MEIC Iron Condor', 'meic'),
+        'MANUAL_SPREAD': ('Manual Spread', 'manual'),
+        'CLONE_TRADES': ('Discretionary', 'clone_trades'),
+        'PERMA_BULL_PCS': ('Perma Bull PCS', 'perma-bull'),
+        'SKYLINE_SPX': ('Skyline SPX', 'skyline'),
+        'DRMA_HM_STOCKS': ('DRMA Stocks', 'drma_stocks'),
+        'DRMA_HM_SPX': ('DRMA H-M Pro', 'drma_hm'),
+        'IRON_FLY_SPX': ('Iron Fly SPX', 'iron_fly'),
+        'IRON_FLY_XSP': ('Iron Fly XSP', 'iron_fly_xsp'),
+        'MEAN_REVERSION_SPX': ('Mean Reversion SPX', 'mean_reversion'),
+        'INVERSE_MEIC': ('Inverse MEIC', 'inverse_meic'),
+    }
+
+    seen_closed_keys = set()
+    try:
+        from dashboard.db import get_conn
+        with get_conn() as conn:
+            sql = """
+                SELECT * FROM trades
+                WHERE status = 'CLOSED'
+                  AND (time_closed LIKE ? OR date_opened = ?)
+                ORDER BY COALESCE(time_closed, date_opened) DESC
+            """
+            db_trades = [dict(r) for r in conn.execute(sql, (f"{today}%", today)).fetchall()]
+        for t in db_trades:
+            strat = t.get('strategy', '')
+            lot = t.get('lot', '')
+            dedup_key = f"{strat}_{lot}"
+            seen_closed_keys.add(dedup_key)
+
+            label, tab_id = STRATEGY_META.get(strat, (strat, strat.lower()))
+            side = t.get('side', '')
+            sym = 'SPX'
+            if strat == 'CLONE_TRADES':
+                sym = t.get('short_symbol', '').split()[0] if t.get('short_symbol') else 'OPT'
+            elif 'STOCKS' in strat:
+                sym = t.get('short_symbol') or lot or 'STOCK'
+
+            struct_desc = f"{'Call' if side == 'C' else ('Put' if side == 'P' else strat)} Spread ({lot})"
+            if strat == 'CLONE_TRADES':
+                struct_desc = t.get('short_symbol') or f"Clone Trade ({lot})"
+
+            entry_px = float(t.get('open_credit') or t.get('short_open_price') or 0.0)
+            exit_px = float(t.get('close_debit') or t.get('short_close_price') or 0.0)
+            pnl = float(t.get('pnl') or 0.0)
+            is_meic_paper = (strat == 'MEIC_IC' and _strategy_paper_flag(trades_layout.STRATEGY_MEIC))
+            is_trade_paper = bool(t.get('paper')) or is_meic_paper
+
+            closed_trades.append({
+                'id': f"closed_db_{t.get('id')}",
+                'strategy_key': strat,
+                'strategy_label': label,
+                'tab_id': tab_id,
+                'paper': is_trade_paper,
+                'symbol': sym,
+                'lot': lot,
+                'side': side,
+                'structure': struct_desc,
+                'strikes': f"{t.get('short_symbol', '')} {t.get('long_symbol', '')}".strip() or '–',
+                'quantity': int(t.get('quantity') or 1),
+                'entry_price': entry_px,
+                'exit_price': exit_px,
+                'realized_pnl': pnl,
+                'status': 'CLOSED',
+                'time_opened': t.get('time_opened'),
+                'time_closed': t.get('time_closed') or t.get('created_at'),
+            })
+    except Exception as exc:
+        log.warning("Live trades: error loading DB closed trades: %s", exc)
+
+    # 2. Closed Manual Spreads from summary (all 10 closed, PT, breached)
+    try:
+        manual_paper = _strategy_paper_flag(trades_layout.STRATEGY_MANUAL)
+        for s in summary.get('manual_trades', []):
+            st = str(s.get('status', '')).lower()
+            state = str(s.get('state', '')).lower()
+            if st == 'closed' or state in ('closed', 'profit_target', 'breached'):
+                lot = s.get('lot', '')
+                side = s.get('side', '')
+                dedup_key = f"MANUAL_SPREAD_{lot}"
+                if dedup_key in seen_closed_keys:
+                    continue
+                seen_closed_keys.add(dedup_key)
+
+                entry_credit = float(s.get('entry_credit') or s.get('limit_credit') or 0.0)
+                exit_px = 0.0
+                exit_label = s.get('exit_label', '')
+                if exit_label:
+                    try:
+                        exit_px = float(exit_label.split()[0].replace('$', ''))
+                    except Exception:
+                        pass
+                pnl = float(s.get('live_pnl') or 0.0)
+                strikes = f"{s.get('short_strike', '–')}/{s.get('long_strike', '–')}"
+
+                closed_trades.append({
+                    'id': f"closed_manual_{lot}_{side}",
+                    'strategy_key': 'MANUAL_SPREAD',
+                    'strategy_label': 'Manual Spread',
+                    'tab_id': 'manual',
+                    'paper': manual_paper,
+                    'symbol': 'SPX',
+                    'lot': lot,
+                    'side': side,
+                    'structure': f"{'Call' if side == 'C' else 'Put'} Spread ({lot})",
+                    'strikes': strikes,
+                    'quantity': int(s.get('filled') or s.get('quantity') or 1),
+                    'entry_price': entry_credit,
+                    'exit_price': exit_px,
+                    'realized_pnl': pnl,
+                    'status': 'CLOSED',
+                    'time_opened': s.get('entry_time'),
+                    'time_closed': s.get('exit_time'),
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading manual closed from summary: %s", exc)
+
+    # 3. Closed Perma Bull PCS
+    try:
+        pb_trade = _perma_bull_trade_for_date(today)
+        if pb_trade:
+            pb_st = str(pb_trade.get('status', '')).lower()
+            pb_cm = str(pb_trade.get('close_mechanism', '')).lower()
+            pb_paper = bool(pb_trade.get('paper')) if pb_trade.get('paper') is not None else _strategy_paper_flag(trades_layout.STRATEGY_PERMA_BULL)
+            lot = str(pb_trade.get('lot') or f"perma-{today}")
+            side = 'P'
+            dedup_key = f"PERMA_BULL_PCS_{lot}"
+            is_closed = (pb_st == 'closed') or (pb_cm in ('profit_target_hit', 'profit_target', 'exchange_stop', 'manual_close')) or (pb_st == 'closing' and pb_trade.get('manual_management'))
+            if is_closed and dedup_key not in seen_closed_keys:
+                seen_closed_keys.add(dedup_key)
+                sk = (pb_trade.get('short_leg') or {}).get('strike', '–')
+                lk = (pb_trade.get('long_leg') or {}).get('strike', '–')
+                credit = float((pb_trade.get('entry') or {}).get('net_credit') or 0.0)
+                pnl = _perma_bull_today_pnl()
+                exit_px = 0.0
+                close_info = pb_trade.get('close') or {}
+                if close_info.get('close_price') is not None:
+                    exit_px = float(close_info['close_price'])
+                elif (pb_trade.get('exit_config') or {}).get('profit_target_debit') is not None:
+                    exit_px = float(pb_trade['exit_config']['profit_target_debit'])
+
+                closed_trades.append({
+                    'id': f"closed_perma_{lot}",
+                    'strategy_key': 'PERMA_BULL_PCS',
+                    'strategy_label': 'Perma Bull PCS',
+                    'tab_id': 'perma-bull',
+                    'paper': pb_paper,
+                    'symbol': 'SPX',
+                    'lot': lot,
+                    'side': side,
+                    'structure': '5-wide Put Credit Spread',
+                    'strikes': f"{sk}/{lk}",
+                    'quantity': int(pb_trade.get('quantity') or pb_trade.get('filled_quantity') or 1),
+                    'entry_price': credit,
+                    'exit_price': exit_px,
+                    'realized_pnl': float(pnl),
+                    'status': 'CLOSED',
+                    'time_opened': (pb_trade.get('entry') or {}).get('timestamp'),
+                    'time_closed': (pb_trade.get('close') or {}).get('timestamp') or pb_trade.get('recovery', {}).get('last_heartbeat'),
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading Perma Bull closed: %s", exc)
+
+    # 4. Closed DRMA HM SPX Live Trades from disk
+    try:
+        hist_dir = trades_layout.history_dir_for_strategy(trades_layout.STRATEGY_DRMA_HM, ROOT)
+        for path in glob.glob(os.path.join(hist_dir, f"drma_hm_{today}_*.json")):
+            with open(path, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            if d.get('paper') is False and str(d.get('status', '')).lower() == 'closed':
+                trade_id = d.get('trade_id') or os.path.basename(path).replace('.json', '')
+                side = d.get('side', 'P')
+                dedup_key = f"DRMA_HM_SPX_{trade_id}"
+                if dedup_key in seen_closed_keys:
+                    continue
+                seen_closed_keys.add(dedup_key)
+                closed_trades.append({
+                    'id': f"closed_drma_{trade_id}",
+                    'strategy_key': 'DRMA_HM_SPX',
+                    'strategy_label': 'DRMA H-M Pro',
+                    'tab_id': 'drma_hm',
+                    'paper': False,
+                    'symbol': 'SPX',
+                    'lot': trade_id,
+                    'side': side,
+                    'structure': d.get('structure_type') or d.get('sub_strategy') or 'Credit Spread',
+                    'strikes': f"{d.get('short_strike', '–')}/{d.get('long_strike', '–')}",
+                    'quantity': int(d.get('quantity') or 1),
+                    'entry_price': float(d.get('entry_price') or d.get('net_credit') or 0.0),
+                    'exit_price': float(d.get('exit_price') or d.get('close_price') or 0.0),
+                    'realized_pnl': float(d.get('realized_pnl_dollars') or d.get('realized_pnl') or d.get('pnl') or 0.0),
+                    'status': 'CLOSED',
+                    'time_opened': d.get('entered_at'),
+                    'time_closed': d.get('exited_at') or d.get('closed_at'),
+                })
+    except Exception as exc:
+        log.warning("Live trades: error loading DRMA HM history disk: %s", exc)
+
+    try:
+        from clone_trades.engine import get_engine
+        cl_stat = get_engine().get_status()
+        for t in cl_stat.get('today_closed_trades', []):
+            trade_id = t.get('id', '')
+            dedup_key = f"CLONE_TRADES_{trade_id}"
+            if dedup_key in seen_closed_keys:
+                continue
+            seen_closed_keys.add(dedup_key)
+            spec = t.get('spec', {})
+            und = spec.get('underlying', 'OPT')
+            ot = spec.get('option_type', 'CALL')
+            k = spec.get('strike', '')
+            exp = spec.get('expiration', '')
+            is_p = t.get('paper_mode') if t.get('paper_mode') is not None else True
+            entry_px = float(t.get('entry_price') or t.get('webhook_price') or 0.0)
+            closed_trades.append({
+                'id': f"closed_clone_{trade_id}",
+                'strategy_key': 'CLONE_TRADES',
+                'strategy_label': 'Discretionary',
+                'sub_strategy': t.get('sub_strategy') or t.get('called_by') or 'TG',
+                'tab_id': 'clone_trades',
+                'paper': is_p,
+                'symbol': und,
+                'lot': trade_id,
+                'side': ot,
+                'structure': f"{ot} ${k} ({exp})",
+                'strikes': str(k),
+                'quantity': int(t.get('initial_quantity') or 1),
+                'entry_price': entry_px,
+                'exit_price': float(t.get('exit_price') or 0.0),
+                'realized_pnl': float(t.get('realized_pnl_usd', 0.0)),
+                'status': 'CLOSED',
+                'time_opened': t.get('created_at_cst') or t.get('created_at'),
+                'time_closed': t.get('closed_at_cst') or t.get('closed_at'),
+            })
+    except Exception as exc:
+        log.warning("Live trades: error loading clone closed: %s", exc)
+
+    # User instruction: Filter to ONLY trades that are live, not paper
+    open_trades = [_enrich_sub_strategy(t) for t in open_trades if not t.get('paper')]
+    closed_trades = [_enrich_sub_strategy(t) for t in closed_trades if not t.get('paper')]
+
+    total_unrealized = sum(t.get('unrealized_pnl') or 0.0 for t in open_trades)
+    total_realized = sum(t.get('realized_pnl') or 0.0 for t in closed_trades)
+    breached_count = sum(1 for t in open_trades if t.get('status') == 'BREACHED')
+    working_count = sum(1 for t in open_trades if t.get('status') in ('WORKING', 'PENDING'))
+
+    open_strategy_pnl = {}
+    open_strategy_counts = {}
+    for t in open_trades:
+        sk = t.get('strategy_key', 'UNKNOWN')
+        open_strategy_counts[sk] = open_strategy_counts.get(sk, 0) + 1
+        open_strategy_pnl[sk] = round(open_strategy_pnl.get(sk, 0.0) + (t.get('unrealized_pnl') or 0.0), 2)
+
+    closed_strategy_pnl = {}
+    closed_strategy_counts = {}
+    for t in closed_trades:
+        sk = t.get('strategy_key', 'UNKNOWN')
+        closed_strategy_counts[sk] = closed_strategy_counts.get(sk, 0) + 1
+        closed_strategy_pnl[sk] = round(closed_strategy_pnl.get(sk, 0.0) + (t.get('realized_pnl') or 0.0), 2)
+
+    return {
+        'trades': open_trades,
+        'open_trades': open_trades,
+        'closed_trades': closed_trades,
+        'stats': {
+            'total_trades': len(open_trades),
+            'open_count': len(open_trades),
+            'closed_count': len(closed_trades),
+            'live_count': len(open_trades),
+            'paper_count': 0,
+            'breached_count': breached_count,
+            'working_count': working_count,
+            'total_unrealized_pnl': round(total_unrealized, 2),
+            'total_realized_pnl': round(total_realized, 2),
+            'strategy_counts': open_strategy_counts,
+            'open_strategy_pnl': open_strategy_pnl,
+            'closed_strategy_pnl': closed_strategy_pnl,
+            'open_strategy_counts': open_strategy_counts,
+            'closed_strategy_counts': closed_strategy_counts,
+        },
+        'updated_at': _central_now_str()
+    }
+
+@app.route('/api/live_trades')
+def api_live_trades():
+    return jsonify(build_all_live_trades())
+
 @app.route('/api/log/<name>')
 def api_log(name):
     from dashboard.process_manager import get_service_status, SERVICES
+    safe_name = os.path.basename(name or '').replace('..', '')
+    if not safe_name:
+        return jsonify({'error': 'invalid log name'}), 400
     paths = {
         'launcher': _launcher_log_path(),
         'stream': _stream_log_path(),
         'streamer': _stream_log_path(),
         'stop_monitor': STOP_MONITOR_LOG,
     }
-    path = paths.get(name)
-    if not path and name in SERVICES:
-        svc_st = get_service_status(name)
+    path = paths.get(safe_name)
+    if not path and safe_name in SERVICES:
+        svc_st = get_service_status(safe_name)
         path = svc_st.get('log_path')
     if not path:
-        pattern = os.path.join(ROOT, 'logs', f'*{name}*.log')
+        pattern = os.path.join(ROOT, 'logs', f'*{safe_name}*.log')
         matches = sorted(glob.glob(pattern))
         if matches:
             path = matches[-1]
@@ -2057,9 +2860,10 @@ def api_session_manual_place():
         limit_credit=limit_credit,
         quantity=quantity,
         expiry=expiry,
+        structure_type=str(data.get('structure_type') or ''),
         wait_for_launcher_sec=2.0,
         **{k: data.get(k) for k in (
-            'stop_multiplier', 'on_unfilled', 'fill_wait_sec',
+            'stop_loss_pct', 'stop_multiplier', 'profit_target_pct', 'on_unfilled', 'fill_wait_sec',
             'chase_floor', 'chase_max_attempts', 'max_attempts',
         ) if k in data},
     )
@@ -2070,14 +2874,17 @@ def api_session_manual_place():
 def api_session_row_stop():
     """Q6: update session CSV stop + trade JSON + stop_update command file."""
     from blocks.entry.handoff import apply_stop_snapshot
+    from blocks.session.manual_place import is_debit_side_or_structure, normalize_pct_ratio
     from blocks.stop import state as state_mod
+    from blocks.stop.stop_math import sl_pct_from_stop_multiplier, stop_multiplier_from_sl_pct
 
     data = request.get_json(force=True) or {}
     strategy = data.get('strategy', trades_layout.STRATEGY_MEIC)
     slot_key = data.get('slot_key')
     stop_multiplier = data.get('stop_multiplier')
-    if not slot_key or stop_multiplier is None:
-        return jsonify({'error': 'slot_key and stop_multiplier required'}), 400
+    stop_loss_pct = data.get('stop_loss_pct')
+    if not slot_key or (stop_multiplier is None and stop_loss_pct is None):
+        return jsonify({'error': 'slot_key and stop_multiplier (or stop_loss_pct) required'}), 400
 
     plan = _meic_session_rows() if strategy == trades_layout.STRATEGY_MEIC else load_manual_session_today(ROOT)
     if plan is None:
@@ -2086,12 +2893,26 @@ def api_session_row_stop():
     if row is None:
         return jsonify({'error': f'unknown slot_key: {slot_key}'}), 404
 
+    is_debit = is_debit_side_or_structure(getattr(row, 'side', ''), getattr(row, 'structure_type', ''))
+    spread_type = 'debit' if is_debit else 'credit'
+    if stop_loss_pct is not None:
+        sl_ratio = normalize_pct_ratio(stop_loss_pct, default=0.50 if is_debit else 1.0)
+        stop_multiplier = stop_multiplier_from_sl_pct(sl_ratio, spread_type=spread_type)
+    else:
+        val = float(stop_multiplier)
+        if val > 10.0:
+            sl_ratio = normalize_pct_ratio(val, default=0.50 if is_debit else 1.0)
+            stop_multiplier = stop_multiplier_from_sl_pct(sl_ratio, spread_type=spread_type)
+        else:
+            stop_multiplier = val
+            sl_ratio = sl_pct_from_stop_multiplier(stop_multiplier, spread_type=spread_type)
+
     updates: Dict[str, Any] = {'stop_multiplier': float(stop_multiplier)}
     if 'profit_target_pct' in data and data['profit_target_pct'] is not None:
-        pt_val = float(data['profit_target_pct'])
-        if pt_val > 1.0:
-            pt_val = pt_val / 100.0
-        updates['profit_target_pct'] = pt_val
+        updates['profit_target_pct'] = normalize_pct_ratio(
+            data['profit_target_pct'],
+            default=1.00 if is_debit else 0.50,
+        )
 
     plan.update_row(slot_key, **updates)
     plan.save()
@@ -2110,6 +2931,7 @@ def api_session_row_stop():
     os.makedirs(cmd_dir, exist_ok=True)
     cmd_payload: Dict[str, Any] = {
         'stop_multiplier': float(stop_multiplier),
+        'stop_loss_pct': float(sl_ratio),
         'stop_mode': data.get('stop_mode', 'multiplier'),
         'ts': _central_now_str(),
         'source': 'dashboard',
@@ -2131,6 +2953,7 @@ def api_session_row_stop():
 def api_session_row_pt():
     """Update session CSV profit target % + trade JSON + stop_update command file."""
     from blocks.entry.handoff import apply_stop_snapshot
+    from blocks.session.manual_place import normalize_pct_ratio
     from blocks.stop import state as state_mod
 
     data = request.get_json(force=True) or {}
@@ -2147,9 +2970,7 @@ def api_session_row_pt():
     if row is None:
         return jsonify({'error': f'unknown slot_key: {slot_key}'}), 404
 
-    pt_val = float(profit_target_pct)
-    if pt_val > 1.0:
-        pt_val = pt_val / 100.0
+    pt_val = normalize_pct_ratio(profit_target_pct, default=0.50)
 
     plan.update_row(slot_key, profit_target_pct=pt_val)
     plan.save()
@@ -2483,6 +3304,15 @@ def api_perma_bull_today():
     trade = _perma_bull_trade_for_date(today)
     if trade:
         trade['live_pnl_dollars'] = _handshake_trade_live_pnl(trade, spx_settle=spx_settle)
+        trade['entry_time'] = trade_entry_time_iso(trade)
+        trade['exit_time'] = trade_exit_time_iso(trade)
+        trade['profit_target_debit'] = float(
+            (trade.get('exit_config') or {}).get('profit_target_debit')
+            or trade.get('profit_target_debit')
+            or 0.15
+        )
+        trade['quantity'] = int(trade.get('quantity') or trade.get('filled_quantity') or 1)
+        trade['filename'] = os.path.basename(trade.get('_filepath', ''))
 
     return jsonify({
         'strategy': trades_layout.STRATEGY_PERMA_BULL,
@@ -2490,7 +3320,236 @@ def api_perma_bull_today():
         'date': today,
         'session': session,
         'trade': trade,
-        'history': [],
+    })
+
+
+@app.route('/api/perma_bull/close', methods=['POST'])
+def api_perma_bull_close():
+    """Manual close command for today's active Perma Bull PCS trade."""
+    from common.session_cleanup import central_today
+    from common.trades_layout import active_dir_for_strategy, STRATEGY_PERMA_BULL
+    from blocks.stop import state as state_mod
+
+    today = central_today().isoformat()
+    trade = _perma_bull_trade_for_date(today)
+    if not trade:
+        return jsonify({'status': 'error', 'error': 'No Perma Bull trade found for today'}), 404
+
+    if str(trade.get('status', '')).lower() == 'closed':
+        return jsonify({'status': 'error', 'error': 'Trade is already closed'}), 400
+
+    filename = os.path.basename(trade.get('_filepath', ''))
+    if not filename:
+        active = active_dir_for_strategy(STRATEGY_PERMA_BULL, ROOT)
+        for path in glob.glob(os.path.join(active, '*.json')):
+            if not os.path.basename(path).startswith(('session_', 'halted_')):
+                filename = os.path.basename(path)
+                break
+
+    if not filename:
+        return jsonify({'status': 'error', 'error': 'Could not identify active trade filename'}), 404
+
+    cmd_dir = os.path.join(ROOT, 'trades', 'commands')
+    os.makedirs(cmd_dir, exist_ok=True)
+    cmd_path = os.path.join(cmd_dir, f'{filename}.close.json')
+    try:
+        with open(cmd_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'action': 'close',
+                'close_mechanism': 'manual_close',
+                'ts': state_mod.now_iso(),
+                'source': 'dashboard_perma_bull',
+            }, f)
+        log.info('Wrote manual close command for Perma Bull %s at %s', filename, cmd_path)
+    except Exception as exc:
+        log.error('Failed writing close command for %s: %s', filename, exc)
+        return jsonify({'status': 'error', 'error': str(exc)}), 500
+
+    emit_summary_update()
+    return jsonify({
+        'status': 'ok',
+        'message': f'Close command issued for {filename}',
+        'filename': filename,
+    })
+
+
+@app.route('/api/perma_bull/manage_manually', methods=['POST'])
+def api_perma_bull_manage_manually():
+    """Toggle manual management for today's active Perma Bull PCS trade.
+    Disarms resting OCO/stop order on the broker so operator can manually manage, close, or roll.
+    """
+    from common.session_cleanup import central_today
+    from common.trades_layout import active_dir_for_strategy, STRATEGY_PERMA_BULL
+    from blocks.stop import state as state_mod
+
+    today = central_today().isoformat()
+    trade = _perma_bull_trade_for_date(today)
+    if not trade:
+        return jsonify({'status': 'error', 'error': 'No Perma Bull trade found for today'}), 404
+
+    if str(trade.get('status', '')).lower() == 'closed':
+        return jsonify({'status': 'error', 'error': 'Trade is already closed'}), 400
+
+    filename = os.path.basename(trade.get('_filepath', ''))
+    if not filename:
+        active = active_dir_for_strategy(STRATEGY_PERMA_BULL, ROOT)
+        for p in glob.glob(os.path.join(active, '*.json')):
+            if not os.path.basename(p).startswith(('session_', 'halted_')):
+                filename = os.path.basename(p)
+                trade['_filepath'] = p
+                break
+
+    if not filename:
+        return jsonify({'status': 'error', 'error': 'Could not identify active trade filename'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    currently_manual = bool(trade.get('manual_management'))
+    enabled = payload.get('enabled', not currently_manual if 'enabled' not in payload else payload['enabled'])
+
+    # Write command file for StopMonitor
+    cmd_dir = os.path.join(ROOT, 'trades', 'commands')
+    os.makedirs(cmd_dir, exist_ok=True)
+    cmd_path = os.path.join(cmd_dir, f'{filename}.manage_manually.json')
+    try:
+        with open(cmd_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'action': 'manage_manually',
+                'enabled': bool(enabled),
+                'ts': state_mod.now_iso(),
+                'source': 'dashboard_perma_bull',
+            }, f)
+        log.info('Wrote manage_manually command (enabled=%s) for Perma Bull %s at %s', enabled, filename, cmd_path)
+    except Exception as exc:
+        log.error('Failed writing manage_manually command for %s: %s', filename, exc)
+        return jsonify({'status': 'error', 'error': str(exc)}), 500
+
+    # Also directly cancel active stop on broker if enabling manual management
+    active_stop = trade.get('active_stop') or {}
+    order_id = active_stop.get('order_id')
+    if enabled and order_id:
+        try:
+            from common.broker_factory import get_shared_broker_for_strategy
+            paper = _strategy_paper_flag(trades_layout.STRATEGY_PERMA_BULL)
+            broker = get_shared_broker_for_strategy(trades_layout.STRATEGY_PERMA_BULL, paper=paper)
+            if broker and hasattr(broker, 'cancel_order'):
+                broker.cancel_order(str(order_id))
+                log.info('Directly cancelled stop/OCO #%s on broker for manual management', order_id)
+        except Exception as exc:
+            log.warning('Direct broker cancel failed in server (command file will handle): %s', exc)
+
+    # Immediately reflect in trade file
+    trade_path = trade.get('_filepath')
+    if trade_path and os.path.isfile(trade_path):
+        try:
+            from blocks.stop import state as state_mod
+            st = state_mod.load_state(trade_path)
+            st['manual_management'] = bool(enabled)
+            if enabled:
+                st['active_stop'] = None
+                st['stop_quantity'] = 0
+                st['status_reason'] = 'Managed manually by user (stop/OCO disarmed)'
+                if order_id:
+                    state_mod.append_stop_history(
+                        st,
+                        action='cancelled',
+                        order_id=order_id,
+                        price=float((active_stop or {}).get('stop_price') or 0.0),
+                        phase=int((active_stop or {}).get('phase', 1)),
+                        reason='manage_manually',
+                    )
+            else:
+                st['status_reason'] = 'Automated management re-armed'
+            state_mod.save_state(trade_path, st)
+        except Exception as exc:
+            log.warning('Could not update trade file directly: %s', exc)
+
+    emit_summary_update()
+    msg = (
+        'Perma Bull switched to Manual Management. Stop/OCO disarmed on broker.'
+        if enabled
+        else 'Automated management re-armed for Perma Bull.'
+    )
+    return jsonify({
+        'status': 'ok',
+        'manual_management': bool(enabled),
+        'message': msg,
+    })
+
+
+@app.route('/api/perma_bull/params', methods=['POST'])
+def api_perma_bull_params():
+    """Update Perma Bull strategy parameters (quantity, spread_width, target_credit, profit_target_debit)."""
+    data = request.get_json(force=True) or {}
+    from common.session_cleanup import central_today
+    from common.daily_overrides import set_overrides
+    from strategies.perma_bull_pcs.strategy import PermaBullPCSConfig
+
+    updates = {}
+    if 'quantity' in data:
+        try:
+            qty = int(data['quantity'])
+            if qty > 0:
+                updates['quantity'] = qty
+        except (ValueError, TypeError):
+            pass
+
+    if 'spread_width' in data:
+        try:
+            sw = int(data['spread_width'])
+            if sw > 0:
+                updates['spread_width'] = sw
+        except (ValueError, TypeError):
+            pass
+
+    if 'target_credit' in data:
+        try:
+            tc = round(float(data['target_credit']), 2)
+            if tc > 0:
+                updates['target_credit'] = tc
+        except (ValueError, TypeError):
+            pass
+
+    if 'profit_target_debit' in data:
+        try:
+            pt = round(float(data['profit_target_debit']), 2)
+            if pt > 0:
+                updates['profit_target_debit'] = pt
+        except (ValueError, TypeError):
+            pass
+
+    if not updates:
+        return jsonify({'status': 'error', 'error': 'No valid parameters provided'}), 400
+
+    # 1. Update strategy overrides (persisted to session & strategy_overrides.json)
+    try:
+        set_overrides('PERMA_BULL_PCS', ROOT, updates, PermaBullPCSConfig)
+    except Exception as exc:
+        log.warning('Could not set overrides for PERMA_BULL_PCS: %s', exc)
+
+    # 2. If an active trade is currently open, dynamically update its exit_config
+    today = central_today().isoformat()
+    trade = _perma_bull_trade_for_date(today)
+    updated_active = False
+    if trade and str(trade.get('status', '')).lower() != 'closed' and trade.get('_filepath'):
+        filepath = trade['_filepath']
+        try:
+            from blocks.stop import state as state_mod
+            st = state_mod.load_state(filepath)
+            if 'profit_target_debit' in updates:
+                exit_cfg = st.setdefault('exit_config', {})
+                exit_cfg['profit_target_debit'] = updates['profit_target_debit']
+                st['profit_target_debit'] = updates['profit_target_debit']
+            state_mod.save_state(filepath, st)
+            updated_active = True
+            log.info('Updated active trade %s exit_config with %s', filepath, updates)
+        except Exception as exc:
+            log.warning('Could not update active trade JSON %s: %s', filepath, exc)
+
+    emit_summary_update()
+    return jsonify({
+        'status': 'ok',
+        'updates': updates,
+        'updated_active_trade': updated_active,
     })
 
 
@@ -2630,20 +3689,19 @@ def api_drma_hm_today():
 
     history = []
     hist_trade_ids = set()
-    if os.path.isdir(hist_dir):
-        for path in sorted(glob.glob(os.path.join(hist_dir, f'drma_hm_{today}_*.json')), reverse=True):
-            try:
-                with open(path, encoding='utf-8') as f:
-                    row = json.load(f)
-                attach_dollar_pnl_display(row)
-                if not row.get('date'):
-                    entered_at = row.get('entered_at') or ''
-                    row['date'] = entered_at[:10] if len(entered_at) >= 10 else today
-                history.append(row)
-                if row.get('trade_id'):
-                    hist_trade_ids.add(row['trade_id'])
-            except (OSError, json.JSONDecodeError):
-                continue
+    for path in _collect_drma_hm_session_trade_files(hist_dir, today):
+        try:
+            with open(path, encoding='utf-8') as f:
+                row = json.load(f)
+            attach_dollar_pnl_display(row)
+            if not row.get('date'):
+                entered_at = row.get('entered_at') or ''
+                row['date'] = entered_at[:10] if len(entered_at) >= 10 else today
+            history.append(row)
+            if row.get('trade_id'):
+                hist_trade_ids.add(row['trade_id'])
+        except (OSError, json.JSONDecodeError):
+            continue
 
     # Sort history descending by entry time (newest on top)
     history.sort(key=lambda x: str(x.get('entered_at') or x.get('date') or ''), reverse=True)
@@ -2654,7 +3712,7 @@ def api_drma_hm_today():
     live_es_price = fetch_es_current_price(levels=session.get('levels') or {}, spx_spot=(strat_status.get('close') if strat_status else None))
 
     if os.path.isdir(active):
-        candidates = sorted(glob.glob(os.path.join(active, f'drma_hm_{today}_*.json')), reverse=True)
+        candidates = _collect_drma_hm_session_trade_files(active, today)
         all_symbols = []
         open_trades_with_paths = []
         for path in candidates:
@@ -2663,6 +3721,25 @@ def api_drma_hm_today():
                     t = json.load(f)
                 tid = t.get('trade_id')
                 st = t.get('status')
+                # If active trade has a broker OCO order, check if broker already filled it
+                if st == 'open' and t.get('oco_order_id') and t.get('paper') is False:
+                    try:
+                        from common.broker_factory import get_shared_broker_for_strategy
+                        b_chk = get_shared_broker_for_strategy(trades_layout.STRATEGY_DRMA_HM, paper=False)
+                        if hasattr(b_chk, 'get_order_status'):
+                            chk_st = b_chk.get_order_status(str(t['oco_order_id']))
+                            if chk_st and getattr(chk_st, 'status', '').lower() == 'filled':
+                                from strategies.drma_hm.strategy import DRMAHMStrategy
+                                DRMAHMStrategy()._manage_open_trade(ROOT, path)
+                                try:
+                                    with open(path, encoding='utf-8') as f_re:
+                                        t = json.load(f_re)
+                                    st = t.get('status')
+                                except (OSError, json.JSONDecodeError):
+                                    st = 'closed'
+                    except Exception:
+                        pass
+
                 # If already in history or marked closed, clean up stale active file
                 if (tid and tid in hist_trade_ids) or st == 'closed':
                     try:
@@ -3240,6 +4317,17 @@ def api_system_status():
     })
 
 
+@app.route('/api/system/service/start', methods=['POST'])
+def api_system_service_start():
+    data = request.get_json(force=True) or {}
+    svc = data.get('service')
+    if not svc:
+        return jsonify({'error': 'service is required'}), 400
+    from dashboard.process_manager import start_service
+    res = start_service(svc)
+    return jsonify(res)
+
+
 @app.route('/api/system/service/restart', methods=['POST'])
 def api_system_service_restart():
     data = request.get_json(force=True) or {}
@@ -3357,6 +4445,8 @@ def api_strategy_overrides_delete(name, key):
 
 @app.route('/api/strategy/<name>/close', methods=['POST'])
 def api_strategy_close(name):
+    if name == 'PERMA_BULL_PCS':
+        return api_perma_bull_close()
     data = request.get_json(force=True) or {}
     structure = data.get('structure', 'all')
     trade_id = data.get('trade_id')
@@ -3371,6 +4461,184 @@ def api_strategy_close(name):
     result = close_structure(name, structure, root=ROOT, paper=paper, trade_id=trade_id)
     code = 200 if result.success else 400
     return jsonify({'status': 'ok' if result.success else 'error', **result.__dict__}), code
+
+
+def _persist_env_updates(updates: dict[str, str]) -> None:
+    env_file = os.path.join(ROOT, '.env')
+    if not os.path.isfile(env_file):
+        lines = []
+    else:
+        with open(env_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+    existing_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            key = stripped.split('=', 1)[0].strip()
+            if key in updates:
+                new_lines.append(f'{key}={updates[key]}\n')
+                existing_keys.add(key)
+                continue
+        if not line.endswith('\n'):
+            line += '\n'
+        new_lines.append(line)
+
+    for k, v in updates.items():
+        if k not in existing_keys:
+            new_lines.append(f'{k}={v}\n')
+
+    with open(env_file, 'w', encoding='utf-8') as f:
+        f.writelines(new_lines)
+
+
+@app.route('/api/system_config', methods=['GET'])
+def api_get_system_config():
+    from common.trading_gate import read_state, gate_enabled
+    from common.market_hours import is_early_close_day_ct, market_close_time_ct
+    from meic0dte.app.utilities import central_date
+
+    today = central_date()
+    early_close = is_early_close_day_ct(today)
+    close_time = market_close_time_ct(today).strftime('%H:%M')
+    gate_state = read_state()
+
+    low_mem = os.environ.get('LOW_MEMORY_MODE', 'false').lower() in ('1', 'true', 'yes')
+    sidecar_opt = os.environ.get('MEIC_SIDE_OPTION_COLLECTION', 'true').lower() in ('1', 'true', 'yes')
+    if low_mem:
+        sidecar_opt = False
+
+    ladder_symbols = int(os.environ.get('SPX_LADDER_MAX_ACTIVE_SYMBOLS', '50' if low_mem else '500'))
+    in_process = os.environ.get('IN_PROCESS_SERVICES', 'false').lower() in ('1', 'true', 'yes') or low_mem
+    sms_enabled = os.environ.get('SMS_NOTIFICATIONS_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+    sms_to = os.environ.get('SMS_TO_NUMBER', os.environ.get('SMS_PHONE_NUMBER', '')).strip()
+    sunday_futures = os.environ.get('SUNDAY_FUTURES_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+    log_retention = int(os.environ.get('LOG_RETENTION_DAYS', '14'))
+
+    return jsonify({
+        'status': 'ok',
+        'config': {
+            'new_risk_gate_enabled': gate_enabled(),
+            'trading_gate': {
+                'latched': bool(gate_state.get('new_risk_latched')),
+                'latch_reason': gate_state.get('latch_reason') or '',
+                'rest_status': gate_state.get('rest_status') or 'unknown',
+                'cooldown_active': bool(gate_state.get('cooldown_active')),
+                'session_date_ct': gate_state.get('session_date_ct') or '',
+            },
+            'low_memory_mode': low_mem,
+            'meic_side_option_collection': sidecar_opt,
+            'spx_ladder_max_symbols': ladder_symbols,
+            'in_process_services': in_process,
+            'sms_notifications_enabled': sms_enabled,
+            'sms_to_number': sms_to,
+            'sunday_futures_launch_enabled': sunday_futures,
+            'log_retention_days': log_retention,
+            'nyse_schedule': {
+                'today': today.isoformat(),
+                'is_early_close': early_close,
+                'close_time_ct': close_time,
+                'status_label': f'Early Close ({close_time} CT)' if early_close else f'Normal Close ({close_time} CT)',
+            },
+        },
+    })
+
+
+@app.route('/api/system_config', methods=['POST'])
+def api_update_system_config():
+    data = request.get_json(force=True) or {}
+    env_updates = {}
+
+    if 'new_risk_gate_enabled' in data:
+        val = 'true' if data['new_risk_gate_enabled'] else 'false'
+        os.environ['NEW_RISK_GATE_ENABLED'] = val
+        env_updates['NEW_RISK_GATE_ENABLED'] = val
+
+    if 'low_memory_mode' in data:
+        val = 'true' if data['low_memory_mode'] else 'false'
+        os.environ['LOW_MEMORY_MODE'] = val
+        env_updates['LOW_MEMORY_MODE'] = val
+        if data['low_memory_mode']:
+            os.environ['SPX_LADDER_MAX_ACTIVE_SYMBOLS'] = '50'
+            os.environ['MEIC_SIDE_OPTION_COLLECTION'] = 'false'
+            env_updates['SPX_LADDER_MAX_ACTIVE_SYMBOLS'] = '50'
+            env_updates['MEIC_SIDE_OPTION_COLLECTION'] = 'false'
+
+    if 'meic_side_option_collection' in data and not data.get('low_memory_mode'):
+        val = 'true' if data['meic_side_option_collection'] else 'false'
+        os.environ['MEIC_SIDE_OPTION_COLLECTION'] = val
+        env_updates['MEIC_SIDE_OPTION_COLLECTION'] = val
+
+    if 'spx_ladder_max_symbols' in data:
+        try:
+            val = str(max(10, min(1000, int(data['spx_ladder_max_symbols']))))
+            os.environ['SPX_LADDER_MAX_ACTIVE_SYMBOLS'] = val
+            env_updates['SPX_LADDER_MAX_ACTIVE_SYMBOLS'] = val
+        except (ValueError, TypeError):
+            pass
+
+    if 'sms_notifications_enabled' in data:
+        val = 'true' if data['sms_notifications_enabled'] else 'false'
+        os.environ['SMS_NOTIFICATIONS_ENABLED'] = val
+        env_updates['SMS_NOTIFICATIONS_ENABLED'] = val
+
+    if 'sms_to_number' in data:
+        phone = str(data['sms_to_number']).strip()
+        os.environ['SMS_TO_NUMBER'] = phone
+        os.environ['SMS_PHONE_NUMBER'] = phone
+        env_updates['SMS_TO_NUMBER'] = phone
+
+    if 'sunday_futures_launch_enabled' in data:
+        val = 'true' if data['sunday_futures_launch_enabled'] else 'false'
+        os.environ['SUNDAY_FUTURES_ENABLED'] = val
+        env_updates['SUNDAY_FUTURES_ENABLED'] = val
+
+    if 'log_retention_days' in data:
+        try:
+            days = str(max(1, min(90, int(data['log_retention_days']))))
+            os.environ['LOG_RETENTION_DAYS'] = days
+            env_updates['LOG_RETENTION_DAYS'] = days
+        except (ValueError, TypeError):
+            pass
+
+    try:
+        _persist_env_updates(env_updates)
+    except Exception as exc:
+        log.warning('Could not persist updates to .env: %s', exc)
+
+    emit_summary_update()
+    return api_get_system_config()
+
+
+@app.route('/api/system_config/test_sms', methods=['POST'])
+def api_test_sms():
+    from common.notifications import dispatch_notification
+
+    to_num = os.environ.get('SMS_TO_NUMBER', os.environ.get('SMS_PHONE_NUMBER', '')).strip()
+    msg = f"[MEIC Test] SMS notification test from dashboard at {_central_now_str()}"
+    ok, detail = dispatch_notification(msg, force_sms=True)
+    if ok:
+        return jsonify({'status': 'ok', 'message': f'Test SMS dispatched to {to_num or "configured number"}'})
+    return jsonify({'status': 'error', 'error': detail or 'SMS dispatch failed'}), 400
+
+
+@app.route('/api/system_config/resume_gate', methods=['POST'])
+def api_system_resume_gate():
+    from common.trading_gate import resume_new_risk, _mutate
+    from common.broker_cooldown import clear_cooldown
+
+    clear_cooldown()
+
+    def _clear(s):
+        s['new_risk_latched'] = False
+        s['latch_reason'] = ''
+        s['latch_source'] = ''
+
+    _mutate(_clear)
+    resume_new_risk(cleared_by='operator')
+    emit_summary_update()
+    return jsonify({'status': 'ok', 'message': 'Trading gate resumed and latches cleared'})
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 register_manual_spread_routes(
@@ -3398,5 +4666,6 @@ if __name__ == '__main__':
     from common.logging_config import silence_noisy_loggers
 
     silence_noisy_loggers('werkzeug')
+    bind_host = os.environ.get('DASHBOARD_BIND_HOST', '0.0.0.0').strip() or '0.0.0.0'
     with process_lock('dashboard', command='dashboard/server.py'):
-        socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)
+        socketio.run(app, host=bind_host, port=5002, debug=False, allow_unsafe_werkzeug=True)

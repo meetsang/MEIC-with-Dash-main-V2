@@ -54,6 +54,7 @@ class BrokerBase(ABC):
         profit_price: float,
         stop_price: float,
         limit_price: float,
+        action: str = "BUY_TO_CLOSE",
     ) -> OrderResult:
         """Place an OCO (One-Cancels-Other) order on a single leg with profit target limit + stop limit."""
         raise NotImplementedError
@@ -142,8 +143,12 @@ class BrokerBase(ABC):
         ...
 
     @abstractmethod
-    def cancel_order(self, order_id: str) -> OrderResult:
+    def cancel_order(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
         ...
+
+    def cancel_order_and_confirm(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
+        """Universal wrapper to cancel an order and guarantee status confirmation from the brokerage."""
+        return self.cancel_order(order_id, timeout=timeout)
 
     @abstractmethod
     def get_order_status(

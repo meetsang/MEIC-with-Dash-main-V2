@@ -32,6 +32,15 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT, ".env"))
+except ImportError:
+    pass
+
+import atexit
+from common.process_lock import acquire_lock, release_lock
+
 from flask import Flask, jsonify, request
 
 logging.basicConfig(
@@ -169,6 +178,18 @@ def main():
     parser.add_argument("--domain", type=str, default="", help="Optional static ngrok domain (e.g. my-relay.ngrok-free.app)")
     args = parser.parse_args()
 
+    # Fallback to environment variables if not passed on CLI
+    if not args.domain:
+        args.domain = os.environ.get("NGROK_DOMAIN", "").strip()
+    if not args.authtoken:
+        args.authtoken = os.environ.get("NGROK_AUTHTOKEN", "").strip()
+
+    # Singleton lock check
+    if not acquire_lock("clone_relay", command="relay.py"):
+        log.warning("Process lock clone_relay already held by active PID — exiting duplicate.")
+        return
+    atexit.register(release_lock, "clone_relay")
+
     secret = load_secret(ROOT)
     allowed_ips = load_allowed_ips(ROOT)
 
@@ -192,11 +213,12 @@ def main():
                 print(f"  [+] Public Webhook URL : {public_url}/webhook")
                 print("\n  Share this with your friend:")
                 print(f"  1. Webhook URL : {public_url}/webhook")
-                print(f"  2. Header      : X-Webhook-Secret: {secret}")
+                masked_secret = (secret[:4] + "..." + secret[-4:]) if len(secret) > 8 else "***"
+                print(f"  2. Header      : X-Webhook-Secret: {masked_secret} (redacted in logs)")
                 print("\n  Sample Curl command for your friend to test:")
                 print(f'  curl -X POST "{public_url}/webhook" \\')
                 print(f'    -H "Content-Type: application/json" \\')
-                print(f'    -H "X-Webhook-Secret: {secret}" \\')
+                print('    -H "X-Webhook-Secret: <YOUR_WEBHOOK_SECRET>" \\')
                 print('    -d \'{"ticker":"SPY","expiration":"2026-09-25","strike":771,"call_put":"call","price":1.00}\'')
                 print("\n" + "=" * 76 + "\n")
         except Exception as exc:

@@ -4,11 +4,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import meic0dte.app.config as meic_config
 import meic0dte.app.utilities as util
-from blocks.entry.chase import chase_credit_step
+from blocks.entry.chase import chase_credit_step, chase_debit_step
 from blocks.entry.handoff import apply_stop_snapshot
 from blocks.entry.result import EntryWorkerResult
 from blocks.session.manual_place import apply_plan_metadata
@@ -25,7 +25,14 @@ from manual_spread.butterfly import (
     order_price_for_butterfly,
     strikes_for_body,
 )
-from manual_spread.entry import _resolve_strikes_for_overlap, parse_expiry, _write_butterfly_pending
+from manual_spread.entry import (
+    _resolve_strikes_for_overlap,
+    _write_butterfly_pending,
+    is_debit_side,
+    opt_type_for_side,
+    parse_expiry,
+    validate_debit_spread_strikes,
+)
 from meic0dte.open import open_spread_tt
 
 log = logging.getLogger(__name__)
@@ -262,9 +269,22 @@ def run_manual_entry_row(
         if is_butterfly_side(row.side):
             return _run_manual_butterfly_row(row, row_log, broker, expiry_yymmdd)
 
+        is_debit = is_debit_side(row.side)
+        opt_type = opt_type_for_side(row.side)
+        if is_debit:
+            strike_err = validate_debit_spread_strikes(opt_type, int(row.short_strike), int(row.long_strike))
+            if strike_err:
+                return EntryWorkerResult(
+                    slot_key=row.slot_key,
+                    state='failed',
+                    error=strike_err,
+                    api_status='error',
+                    lot=row.lot,
+                )
+
         short_strike, long_strike, short_symbol, long_symbol, _shifts = _resolve_strikes_for_overlap(
             expiry_yymmdd,
-            row.side,
+            opt_type,
             int(row.short_strike),
             int(row.long_strike),
             paper=paper,
@@ -303,15 +323,32 @@ def run_manual_entry_row(
                 if oid:
                     broker.cancel_order(str(oid))
                     time.sleep(1)
-                credit = chase_credit_step(credit)
-                if chase_floor > 0 and credit < chase_floor:
-                    row_log.info('Chase credit %.2f below floor %.2f — stopping', credit, chase_floor)
-                    break
+                if is_debit:
+                    credit = chase_debit_step(credit)
+                    if chase_floor > 0 and credit > chase_floor:
+                        row_log.info('Chase debit %.2f above ceiling %.2f — stopping', credit, chase_floor)
+                        break
+                else:
+                    credit = chase_credit_step(credit)
+                    if chase_floor > 0 and credit < chase_floor:
+                        row_log.info('Chase credit %.2f below floor %.2f — stopping', credit, chase_floor)
+                        break
                 reason = 'cancelled_for_chase'
             else:
                 reason = 'placed'
 
-            place = broker.place_spread_order(short_symbol, long_symbol, quantity, credit)
+            if is_debit:
+                if hasattr(broker, 'place_debit_spread_order'):
+                    place = broker.place_debit_spread_order(long_symbol, short_symbol, quantity, credit)
+                else:
+                    from brokers.base import ComboLeg
+                    legs = [
+                        ComboLeg(symbol=long_symbol, action='BUY_TO_OPEN', quantity=quantity),
+                        ComboLeg(symbol=short_symbol, action='SELL_TO_OPEN', quantity=quantity),
+                    ]
+                    place = broker.place_multi_leg_order(legs, price=-abs(credit))
+            else:
+                place = broker.place_spread_order(short_symbol, long_symbol, quantity, credit)
             if not place.success:
                 if trade_path:
                     break
@@ -343,6 +380,12 @@ def run_manual_entry_row(
             )
 
             st = state_mod.load_state(trade_path)
+            if is_debit:
+                st['spread_type'] = 'debit'
+                st['stop_profile'] = 'manual_debit_spread'
+                st['entry']['debit'] = credit
+                st['entry']['net_debit'] = credit
+                st['entry']['limit_debit'] = credit
             apply_plan_metadata(st, row)
             state_mod.save_state(trade_path, st)
             register_spread_symbols(st, row.lot, row_log)

@@ -8,6 +8,7 @@ from common.market_watch import (
     VOLUME_TOPIC_SUFFIX,
     WATCH_SYMBOLS,
     canonical_watch_symbol,
+    get_drma_stock_watch_symbols,
     mqtt_topic_from_dxlink,
 )
 
@@ -19,10 +20,19 @@ def watch_symbol_from_mqtt_topic(topic_symbol: str) -> Optional[str]:
     text = (topic_symbol or '').strip()
     if not text:
         return None
+    # Strip optional broker prefix e.g. TASTYTRADE/ or SCHWAB/
+    if '/' in text and not text.startswith(('/ES', '/MES', '/NQ', '/MNQ')):
+        text = text.split('/')[-1]
     if text.endswith(VOLUME_TOPIC_SUFFIX):
         text = text[: -len(VOLUME_TOPIC_SUFFIX)]
     elif text.endswith(TRADE_SIZE_TOPIC_SUFFIX):
         text = text[: -len(TRADE_SIZE_TOPIC_SUFFIX)]
-    if text in _WATCH_SET:
+    if text in _WATCH_SET or text in get_drma_stock_watch_symbols():
         return text
-    return canonical_watch_symbol(text) or mqtt_topic_from_dxlink(text) if mqtt_topic_from_dxlink(text) in _WATCH_SET else None
+    canonical = canonical_watch_symbol(text)
+    if canonical:
+        return canonical
+    mqtt = mqtt_topic_from_dxlink(text)
+    if mqtt in _WATCH_SET or mqtt in get_drma_stock_watch_symbols():
+        return mqtt
+    return None

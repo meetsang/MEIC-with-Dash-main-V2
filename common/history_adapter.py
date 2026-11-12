@@ -55,6 +55,7 @@ def skyline_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, An
     return {
         'date_opened': date_opened,
         'time_opened': trade.get('entry_time_et', ''),
+        'time_closed': trade.get('closed_at') or trade.get('exited_at') or '',
         'strategy': trades_layout.STRATEGY_SKYLINE,
         'lot': f'skyline-{date_opened}',
         'side': 'X',
@@ -114,6 +115,7 @@ def drma_hm_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, An
     return {
         'date_opened': date_opened,
         'time_opened': entered_at,
+        'time_closed': trade.get('closed_at') or trade.get('exited_at') or '',
         'strategy': trades_layout.STRATEGY_DRMA_HM,
         'lot': trade_id,
         'side': side,
@@ -192,6 +194,7 @@ def drma_stocks_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str
     return {
         'date_opened': date_opened,
         'time_opened': entered_at,
+        'time_closed': trade.get('closed_at') or trade.get('exited_at') or '',
         'strategy': trades_layout.STRATEGY_DRMA_STOCKS,
         'ticker': ticker,
         'lot': trade_id,
@@ -238,6 +241,7 @@ def iron_fly_trade_to_history_row(trade: Dict[str, Any]) -> Optional[Dict[str, A
     return {
         'date_opened': date_opened,
         'time_opened': date_opened,
+        'time_closed': trade.get('closed_at') or trade.get('exited_at') or '',
         'strategy': strat,
         'lot': lot,
         'side': 'IF',

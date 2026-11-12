@@ -220,7 +220,7 @@ def evaluate_quote_pair_readiness(
     if short_q.price <= 0 or long_q.price <= 0:
         return _invalid_pair(short_q, long_q, REASON_NONPOSITIVE_PRICE, fill_ref, pair_skew_sec=round(pair_skew, 3))
 
-    spread_mid = spread_mark_price(short_q.price, long_q.price)
+    spread_mid = spread_mark_price(short_q.price, long_q.price, spread_type=str(state.get('spread_type') or 'credit'))
     if spread_mid < 0:
         return _invalid_pair(
             short_q, long_q, REASON_NEGATIVE_SPREAD, fill_ref,
@@ -418,7 +418,7 @@ def evaluate_software_breach_exit(
         return False, readiness, update_breach_confirmation(state, readiness, spread_breached=False, now=now)
 
     threshold = spread_breach_threshold(state)
-    spread_breached = spread_breach_triggered(readiness.spread_mid, threshold)
+    spread_breached = spread_breach_triggered(readiness.spread_mid, threshold, spread_type=str(state.get('spread_type') or 'credit'))
     confirmation = update_breach_confirmation(state, readiness, spread_breached=spread_breached, now=now)
     should_exit = bool(confirmation.get('software_breach_confirmed') and spread_breached)
     return should_exit, readiness, confirmation

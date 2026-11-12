@@ -181,10 +181,12 @@ class Phase3SpxProximityClose(PhaseBase):
             return False
         if monitor.state.get('is_scale_out_split') or (monitor.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
             return False
-        from meic0dte.app.utilities import central_time
+        from common.market_hours import effective_session_time_ct
+        from meic0dte.app.utilities import central_now, central_time
 
         now = central_time()
-        trigger = datetime.time(14, app_config.STRK_CHK_MIN, 0)
+        base_trigger = datetime.time(14, app_config.STRK_CHK_MIN, 0)
+        trigger = effective_session_time_ct(base_trigger, central_now().date(), default=base_trigger)
         return now >= trigger
 
     def _evaluate_active(self, monitor: 'StopMonitor') -> str:

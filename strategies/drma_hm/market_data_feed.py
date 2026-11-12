@@ -101,9 +101,10 @@ def fetch_yahoo_market_levels(
 ) -> Dict[str, Optional[float]]:
     """Fetch overnight ES futures levels (ONH, ONL) and previous day SPX levels (PDH, PDL, PDC).
 
-    Yahoo Finance is ONLY queried when `allow_yahoo=True` (used once around 08:30 AM CST
-    to grab ONL and ONH for the morning session). Outside that window or if disabled/offline,
-    levels are populated from local TastyTrade-recorded CSV files (`SPX_5m.csv` and `ES_5m.csv`).
+    Prioritizes locally recorded TastyTrade data (`SPX_5m.csv` and `ES_5m.csv`/`MES_5m.csv`).
+    Since ES/MES is streamed and recorded throughout the night, local data provides exact
+    overnight highs and lows with ES-to-SPX cash close basis offset without calling Yahoo.
+    Yahoo Finance is queried ONLY as a fallback if local data files are missing or incomplete.
     """
     levels: Dict[str, Optional[float]] = {
         'pdh': cfg.manual_pdh,
@@ -121,8 +122,73 @@ def fetch_yahoo_market_levels(
         return levels
 
     data_root = os.path.join(root, cfg.data_dir)
+    fut_sym = getattr(cfg, 'futures_symbol', 'ES') or 'ES'
+    alt_sym = 'MES' if fut_sym == 'ES' else 'ES'
 
-    # 1. Try Yahoo Finance ONLY when explicitly allowed (morning 08:30 AM CST grab) and enabled
+    # 1. Derive from LOCAL TastyTrade recorded data FIRST
+    prev_info = _find_prev_trading_day_dir(data_root, today, filename='SPX_5m.csv')
+    prev_date = None
+    if prev_info:
+        prev_date, prev_spx_csv = prev_info
+        try:
+            df_prev_spx = pd.read_csv(prev_spx_csv, on_bad_lines='skip')
+            if not df_prev_spx.empty and 'close' in df_prev_spx.columns:
+                dedup = df_prev_spx.drop_duplicates(subset=['datetime'], keep='last')
+                if levels['pdh'] is None:
+                    levels['pdh'] = round(float(dedup['high'].max()), 2)
+                if levels['pdl'] is None:
+                    levels['pdl'] = round(float(dedup['low'].min()), 2)
+                if levels['pdc'] is None:
+                    levels['pdc'] = round(float(dedup.iloc[-1]['close']), 2)
+        except Exception as exc:
+            log.debug('Could not read prev day SPX CSV %s: %s', prev_spx_csv, exc)
+
+    # Calculate ES Basis Offset at previous day cash close (15:00 CST) from local ES CSV
+    if levels['es_offset'] is None and levels['pdc'] is not None and prev_date is not None:
+        es_prev_csv = os.path.join(data_root, prev_date.isoformat(), f'{fut_sym}_5m.csv')
+        if not os.path.isfile(es_prev_csv):
+            es_prev_csv = os.path.join(data_root, prev_date.isoformat(), f'{alt_sym}_5m.csv')
+        if os.path.isfile(es_prev_csv):
+            try:
+                df_prev_es = pd.read_csv(es_prev_csv, on_bad_lines='skip')
+                if not df_prev_es.empty and 'datetime' in df_prev_es.columns and 'close' in df_prev_es.columns:
+                    close_bars = df_prev_es[
+                        (df_prev_es['datetime'].astype(str).str.slice(11, 16) >= '14:55') &
+                        (df_prev_es['datetime'].astype(str).str.slice(11, 16) <= '15:05')
+                    ]
+                    if not close_bars.empty:
+                        es_close = float(close_bars.iloc[-1]['close'])
+                        levels['es_offset'] = round(es_close - float(levels['pdc']), 2)
+            except Exception as exc:
+                log.debug('Could not derive ES offset from local %s: %s', es_prev_csv, exc)
+
+    # Derive ONH and ONL from local ES/MES overnight data
+    if levels['onh'] is None or levels['onl'] is None:
+        loc_onh, loc_onl = _compute_local_overnight_levels(
+            data_root,
+            today,
+            symbol=fut_sym,
+            es_offset=float(levels.get('es_offset') or 0.0),
+        )
+        if loc_onh is None or loc_onl is None:
+            loc_onh, loc_onl = _compute_local_overnight_levels(
+                data_root,
+                today,
+                symbol=alt_sym,
+                es_offset=float(levels.get('es_offset') or 0.0),
+            )
+        if levels['onh'] is None and loc_onh is not None:
+            levels['onh'] = loc_onh
+        if levels['onl'] is None and loc_onl is not None:
+            levels['onl'] = loc_onl
+
+    # If all levels are populated from local data, return immediately (zero network calls)
+    if all(levels[k] is not None for k in ['pdh', 'pdl', 'pdc', 'onh', 'onl']):
+        levels['source'] = f'local_tastytrade_{prev_date.isoformat() if prev_date else "csv"}'
+        log.info('Successfully derived SPX ONH/ONL & daily levels from local TastyTrade data: %s', levels)
+        return levels
+
+    # 2. Yahoo Finance FALLBACK only if local data is missing/incomplete and explicitly allowed
     if cfg.enable_yahoo_finance and allow_yahoo:
         try:
             # Query ES futures 5m bars for overnight session ONH / ONL
@@ -138,23 +204,18 @@ def fetch_yahoo_market_levels(
                     lows = quote.get('low', [])
                     closes = quote.get('close', [])
 
-                    # Determine target session date in ET (if queried on weekend, target next trading day)
                     target_date = today
-                    if target_date.weekday() == 6:  # Sunday -> targets Monday
+                    if target_date.weekday() == 6:
                         target_date = target_date + timedelta(days=1)
-                    elif target_date.weekday() == 5:  # Saturday -> targets Monday
+                    elif target_date.weekday() == 5:
                         target_date = target_date + timedelta(days=2)
 
                     today_et_start = datetime.datetime.combine(target_date, datetime.time(9, 30), tzinfo=_ET)
-
-                    # Determine previous RTH trading day
                     prev_rth_end = target_date - timedelta(days=1)
                     while prev_rth_end.weekday() >= 5:
                         prev_rth_end -= timedelta(days=1)
                     prev_rth_close_dt = datetime.datetime.combine(prev_rth_end, datetime.time(16, 0), tzinfo=_ET)
 
-                    # For Monday session, CME Globex overnight session opens Sunday at 18:00 ET (17:00 CT).
-                    # For Tue-Fri, overnight session begins at previous day's RTH close (16:00 ET).
                     if target_date.weekday() == 0:
                         sunday_date = target_date - timedelta(days=1)
                         overnight_start_dt = datetime.datetime.combine(sunday_date, datetime.time(18, 0), tzinfo=_ET)
@@ -169,43 +230,39 @@ def fetch_yahoo_market_levels(
                         if ts is None or h is None or l is None or c is None:
                             continue
                         dt_bar = datetime.datetime.fromtimestamp(ts, tz=_ET)
-
-                        # Check near previous RTH close (15:55 to 16:05 ET)
                         if abs((dt_bar - prev_rth_close_dt).total_seconds()) <= 600:
                             es_prev_close = c
-
-                        # Overnight window: from overnight start to target session 09:30 ET open
                         if overnight_start_dt <= dt_bar < today_et_start:
                             es_overnight_highs.append(h)
                             es_overnight_lows.append(l)
 
                     # Query SPX daily chart for PDC, PDH, PDL if not already available
-                    spx_url = 'https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=5d&interval=1d'
-                    resp_spx = requests.get(spx_url, headers=_DEFAULT_HEADERS, timeout=8)
-                    if resp_spx.status_code == 200:
-                        spx_res = resp_spx.json().get('chart', {}).get('result', [])
-                        if spx_res:
-                            spx_data = spx_res[0]
-                            spx_ts = spx_data.get('timestamp', [])
-                            spx_q = spx_data.get('indicators', {}).get('quote', [{}])[0]
-                            spx_h = spx_q.get('high', [])
-                            spx_l = spx_q.get('low', [])
-                            spx_c = spx_q.get('close', [])
+                    if levels['pdc'] is None or levels['pdh'] is None or levels['pdl'] is None:
+                        spx_url = 'https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=5d&interval=1d'
+                        resp_spx = requests.get(spx_url, headers=_DEFAULT_HEADERS, timeout=8)
+                        if resp_spx.status_code == 200:
+                            spx_res = resp_spx.json().get('chart', {}).get('result', [])
+                            if spx_res:
+                                spx_data = spx_res[0]
+                                spx_ts = spx_data.get('timestamp', [])
+                                spx_q = spx_data.get('indicators', {}).get('quote', [{}])[0]
+                                spx_h = spx_q.get('high', [])
+                                spx_l = spx_q.get('low', [])
+                                spx_c = spx_q.get('close', [])
 
-                            prev_date = prev_rth_end
-                            for ts, h, l, c in zip(spx_ts, spx_h, spx_l, spx_c):
-                                if ts is None or c is None:
-                                    continue
-                                dt_d = datetime.datetime.fromtimestamp(ts, tz=_ET).date()
-                                if dt_d == prev_date:
-                                    if levels['pdc'] is None:
-                                        levels['pdc'] = round(float(c), 2)
-                                    if levels['pdh'] is None:
-                                        levels['pdh'] = round(float(h), 2)
-                                    if levels['pdl'] is None:
-                                        levels['pdl'] = round(float(l), 2)
+                                prev_date_rth = prev_rth_end
+                                for ts, h, l, c in zip(spx_ts, spx_h, spx_l, spx_c):
+                                    if ts is None or c is None:
+                                        continue
+                                    dt_d = datetime.datetime.fromtimestamp(ts, tz=_ET).date()
+                                    if dt_d == prev_date_rth:
+                                        if levels['pdc'] is None:
+                                            levels['pdc'] = round(float(c), 2)
+                                        if levels['pdh'] is None:
+                                            levels['pdh'] = round(float(h), 2)
+                                        if levels['pdl'] is None:
+                                            levels['pdl'] = round(float(l), 2)
 
-                    # Calculate ES Basis offset and scaled ONH/ONL
                     if es_prev_close is not None and levels['pdc'] is not None and levels['es_offset'] is None:
                         levels['es_offset'] = round(float(es_prev_close) - float(levels['pdc']), 2)
 
@@ -215,46 +272,10 @@ def fetch_yahoo_market_levels(
                     if es_overnight_lows and levels['onl'] is None:
                         levels['onl'] = round(min(es_overnight_lows) - offset, 2)
 
-                    levels['source'] = 'yahoo_finance'
-                    log.info('Successfully fetched morning ONH/ONL levels from Yahoo Finance: %s', levels)
+                    levels['source'] = 'yahoo_finance_fallback'
+                    log.info('Fetched fallback morning ONH/ONL levels from Yahoo Finance: %s', levels)
         except Exception as exc:
-            log.warning('Yahoo Finance morning levels fetch exception: %s — falling back to local files', exc)
-
-    # 2. Local CSV fallback for any missing PDH / PDL / PDC
-    prev_info = _find_prev_trading_day_dir(data_root, today)
-    if prev_info and (levels['pdh'] is None or levels['pdl'] is None or levels['pdc'] is None):
-        prev_date, prev_csv_path = prev_info
-        try:
-            df_prev = pd.read_csv(prev_csv_path)
-            if not df_prev.empty and 'close' in df_prev.columns:
-                dedup = df_prev.drop_duplicates(subset=['datetime'], keep='last')
-                if levels['pdh'] is None:
-                    levels['pdh'] = round(float(dedup['high'].max()), 2)
-                if levels['pdl'] is None:
-                    levels['pdl'] = round(float(dedup['low'].min()), 2)
-                if levels['pdc'] is None:
-                    levels['pdc'] = round(float(dedup.iloc[-1]['close']), 2)
-                if levels['source'] == 'uninitialized':
-                    levels['source'] = f'local_csv_{prev_date.isoformat()}'
-                log.info('Filled previous day levels from local file %s: %s', prev_csv_path, levels)
-        except Exception as exc:
-            log.warning('Failed to load local previous day CSV: %s', exc)
-
-    # 3. Local TastyTrade ES/MES CSV fallback for ONH / ONL if not yet populated
-    if levels['onh'] is None or levels['onl'] is None:
-        fut_sym = getattr(cfg, 'futures_symbol', 'ES') or 'ES'
-        loc_onh, loc_onl = _compute_local_overnight_levels(
-            data_root,
-            today,
-            symbol=fut_sym,
-            es_offset=float(levels.get('es_offset') or 0.0),
-        )
-        if levels['onh'] is None and loc_onh is not None:
-            levels['onh'] = loc_onh
-        if levels['onl'] is None and loc_onl is not None:
-            levels['onl'] = loc_onl
-        if (loc_onh is not None or loc_onl is not None) and levels['source'] == 'uninitialized':
-            levels['source'] = f'local_tastytrade_{fut_sym.lower()}_csv'
+            log.warning('Yahoo Finance fallback levels fetch exception: %s', exc)
 
     return levels
 
@@ -435,48 +456,46 @@ def load_es_5m_bars(
         except Exception as exc:
             log.debug('Could not read previous day futures CSV %s: %s', prev_csv_path, exc)
 
-    frames: List[pd.DataFrame] = []
+    # Combine available prev and today DataFrames into a single deduplicated, chronologically sorted set
+    raw_frames: List[pd.DataFrame] = []
     if not df_prev.empty and 'datetime' in df_prev.columns:
-        df_prev_dedup = df_prev.drop_duplicates(subset=['datetime'], keep='last').copy()
-        if include_overnight:
-            time_part = df_prev_dedup['datetime'].astype(str).str.slice(11, 16)
-            prev_overnight = df_prev_dedup[time_part >= '17:00'].copy()
-            prev_daytime = df_prev_dedup[time_part < '17:00'].tail(max(0, prepend_prev_bars)).copy()
-            if not prev_daytime.empty:
-                prev_daytime['is_today'] = False
-                frames.append(prev_daytime[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
-            if not prev_overnight.empty:
-                prev_overnight['is_today'] = True
-                frames.append(prev_overnight[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
-        elif prepend_prev_bars > 0:
-            prev_tail = df_prev_dedup.tail(prepend_prev_bars).copy()
-            prev_tail['is_today'] = False
-            frames.append(prev_tail[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
-
+        raw_frames.append(df_prev)
     if not df_today.empty and 'datetime' in df_today.columns:
-        df_today_dedup = df_today.drop_duplicates(subset=['datetime'], keep='last').copy()
-        # If we are in the evening session (>= 17:00 CST on for_date), the new Globex cycle starts at 17:00 CST
-        time_part = df_today_dedup['datetime'].astype(str).str.slice(11, 16)
-        has_evening = (time_part >= '17:00').any()
-        if has_evening and include_overnight:
-            earlier = df_today_dedup[time_part < '17:00'].tail(max(0, prepend_prev_bars)).copy()
-            evening = df_today_dedup[time_part >= '17:00'].copy()
-            frames.clear()
-            if not earlier.empty:
-                earlier['is_today'] = False
-                frames.append(earlier[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
-            if not evening.empty:
-                evening['is_today'] = True
-                frames.append(evening[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
-        else:
-            df_today_dedup['is_today'] = True
-            frames.append(df_today_dedup[['datetime', 'open', 'high', 'low', 'close', 'is_today']])
+        raw_frames.append(df_today)
 
-    combined = (
-        pd.concat(frames, ignore_index=True).drop_duplicates(subset=['datetime'], keep='last').reset_index(drop=True)
-        if frames
-        else pd.DataFrame(columns=['datetime', 'open', 'high', 'low', 'close', 'is_today'])
-    )
+    if not raw_frames:
+        combined = pd.DataFrame(columns=['datetime', 'open', 'high', 'low', 'close', 'is_today'])
+    else:
+        all_bars = pd.concat(raw_frames, ignore_index=True)
+        req_cols = ['datetime', 'open', 'high', 'low', 'close']
+        for col in req_cols:
+            if col not in all_bars.columns:
+                all_bars[col] = 0.0
+        all_bars = all_bars[req_cols].copy()
+        all_bars = all_bars.drop_duplicates(subset=['datetime'], keep='last')
+        all_bars = all_bars.sort_values('datetime').reset_index(drop=True)
+
+        if not include_overnight:
+            today_prefix = for_date.isoformat()
+            warmup = all_bars[all_bars['datetime'] < f'{today_prefix} 08:30:00'].tail(max(0, prepend_prev_bars)).copy()
+            warmup['is_today'] = False
+            active = all_bars[(all_bars['datetime'] >= f'{today_prefix} 08:30:00') & (all_bars['datetime'] <= f'{today_prefix} 15:00:00')].copy()
+            active['is_today'] = True
+            combined = pd.concat([warmup, active], ignore_index=True).reset_index(drop=True)
+        else:
+            for_date_str = for_date.isoformat()
+            has_for_date_evening = (all_bars['datetime'] >= f'{for_date_str} 17:00:00').any()
+            if has_for_date_evening:
+                cycle_start = f'{for_date_str} 17:00:00'
+            else:
+                prev_date_str = prev_info[0].isoformat() if prev_info else (for_date - datetime.timedelta(days=1)).isoformat()
+                cycle_start = f'{prev_date_str} 17:00:00'
+
+            warmup = all_bars[all_bars['datetime'] < cycle_start].tail(max(0, prepend_prev_bars)).copy()
+            warmup['is_today'] = False
+            active = all_bars[all_bars['datetime'] >= cycle_start].copy()
+            active['is_today'] = True
+            combined = pd.concat([warmup, active], ignore_index=True).reset_index(drop=True)
 
     # Cold-start backfill from TastyTrade DXLink Candles if local CSV has < 2 bars
     if len(combined) < 2 and allow_backfill:

@@ -18,4 +18,19 @@ def sanitize_ssl_env() -> None:
         os.environ.pop('SSLKEYLOGFILE', None)
 
 
+def configure_utf8_io() -> None:
+    """Ensure stdout and stderr use UTF-8 with replacement to prevent charmap UnicodeEncodeErrors on Windows."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    if hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
+
 sanitize_ssl_env()
+configure_utf8_io()

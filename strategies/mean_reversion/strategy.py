@@ -465,8 +465,10 @@ class MeanReversionStrategy(BaseStrategy):
         if trade.get('status') != 'open':
             return
 
-        mhour, mminute = map(int, self.config.market_close_cst.split(':'))
-        eod_cutoff = util.central_now().replace(hour=mhour, minute=mminute, second=0, microsecond=0)
+        from common.market_hours import effective_session_time_ct
+        now_ct = util.central_now()
+        eff_close = effective_session_time_ct(self.config.market_close_cst, now_ct.date())
+        eod_cutoff = now_ct.replace(hour=eff_close.hour, minute=eff_close.minute, second=0, microsecond=0)
 
         entry_credit = float(trade['entry_credit'])
         qty = int(trade.get('quantity') or 1)
@@ -761,8 +763,8 @@ class MeanReversionStrategy(BaseStrategy):
         return is_disabled_for_today(self.config, self.config.name, root)
 
     def _check_trading_day(self) -> tuple[bool, str]:
-        import run as launcher
-        return launcher.check_trading_day()
+        from common.config import check_trading_day
+        return check_trading_day()
 
     def _register_streamer_legs(self, trade: dict) -> None:
         from common.streamer_symbols import register_option_symbols

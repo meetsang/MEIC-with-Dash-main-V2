@@ -47,7 +47,8 @@ class TestBuildManualTradesRows(unittest.TestCase):
                     json.dump(state, f)
 
             with patch('manual_spread.entry.state_mod.manual_spread_active_dir', return_value=active), \
-                 patch('manual_spread.entry.state_mod.manual_spread_closed_dir', return_value=os.path.join(tmp, 'history')):
+                 patch('manual_spread.entry.state_mod.manual_spread_closed_dir', return_value=os.path.join(tmp, 'history')), \
+                 patch('blocks.session.plan.load_manual_session_today', return_value=None):
                 rows, _, _, _ = build_manual_trades(
                     live_price_fn=_noop,
                     phase_display_fn=lambda *a, **k: '',

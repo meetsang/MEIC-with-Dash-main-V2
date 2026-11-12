@@ -133,6 +133,7 @@
     font-weight: 600;
   }
   /* Strategy sub-panels: visibility toggled via showStrategy() */
+  #strategy-live[data-visible="true"],
   #strategy-meic[data-visible="true"],
   #strategy-manual[data-visible="true"],
   #strategy-skyline[data-visible="true"],
@@ -140,6 +141,7 @@
   #strategy-mean-reversion[data-visible="true"],
   #strategy-iron-fly[data-visible="true"],
   #strategy-iron-fly-xsp[data-visible="true"] { display: block !important; min-height: 200px; }
+  #strategy-live[data-visible="false"],
   #strategy-meic[data-visible="false"],
   #strategy-manual[data-visible="false"],
   #strategy-skyline[data-visible="false"],
@@ -1349,6 +1351,57 @@
     color: #f1f5f9 !important;
     vertical-align: middle;
   }
+
+  /* ── Live Trades Hub Styles ── */
+  .live-trade-card {
+    background: #1a1d27;
+    border: 1px solid #2d3148;
+    border-radius: 12px;
+    transition: all 0.16s ease-in-out;
+    position: relative;
+    overflow: hidden;
+  }
+  .live-trade-card:hover {
+    border-color: #3b82f6;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+    transform: translateY(-1px);
+  }
+  .live-card-breached {
+    border-left: 5px solid #ef4444 !important;
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.09) 0%, #1a1d27 35%);
+  }
+  .live-card-open-pos {
+    border-left: 5px solid #10b981 !important;
+  }
+  .live-card-open-neg {
+    border-left: 5px solid #f59e0b !important;
+  }
+  .live-card-working {
+    border-left: 5px solid #06b6d4 !important;
+    background: linear-gradient(90deg, rgba(6, 182, 212, 0.07) 0%, #1a1d27 35%);
+  }
+  .live-card-closing {
+    border-left: 5px solid #eab308 !important;
+  }
+  .live-pulse-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background-color: #ef4444;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.8);
+    animation: livePulseRing 1.6s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+  }
+  @keyframes livePulseRing {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.8); }
+    70% { transform: scale(1.1); box-shadow: 0 0 0 7px rgba(239, 68, 68, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  }
+  .live-filter-pill.active {
+    background-color: #3b82f6 !important;
+    color: #fff !important;
+    border-color: #3b82f6 !important;
+  }
 </style>
 </head>
 <body>
@@ -1376,11 +1429,11 @@
 
   <!-- Tabs -->
   <ul class="nav nav-tabs mb-3" id="mainTabs">
-    <li class="nav-item"><a class="nav-link active" href="#" onclick="showTab('today');return false;"><i class="bi bi-activity me-1"></i>Today</a></li>
-    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('history');return false;"><i class="bi bi-clock-history me-1"></i>History</a></li>
-    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('gex');return false;"><i class="bi bi-bar-chart-steps me-1"></i>GEX</a></li>
-    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('strategy-controls');return false;"><i class="bi bi-toggles2 me-1"></i>Strategy Controls Manager <span class="badge bg-secondary ms-1" id="strategy-controls-tab-badge">9 Strategies</span></a></li>
-    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('system');return false;"><i class="bi bi-cpu me-1"></i>Processes &amp; System <span class="badge bg-secondary ms-1" id="system-services-badge">6 Services</span></a></li>
+    <li class="nav-item"><a class="nav-link active" href="#" data-tab="today" onclick="showTab('today');return false;"><i class="bi bi-activity me-1"></i>Today</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="history" onclick="showTab('history');return false;"><i class="bi bi-clock-history me-1"></i>History</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="gex" onclick="showTab('gex');return false;"><i class="bi bi-bar-chart-steps me-1"></i>GEX</a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="strategy-controls" onclick="showTab('strategy-controls');return false;"><i class="bi bi-toggles2 me-1"></i>Strategy Controls Manager <span class="badge bg-secondary ms-1" id="strategy-controls-tab-badge">9 Strategies</span></a></li>
+    <li class="nav-item"><a class="nav-link" href="#" data-tab="system" onclick="showTab('system');return false;"><i class="bi bi-cpu me-1"></i>Processes &amp; System <span class="badge bg-secondary ms-1" id="system-services-badge">6 Services</span></a></li>
   </ul>
 
   <!-- ═══ TODAY TAB ═══ -->
@@ -1446,17 +1499,18 @@
     </div>
 
     <ul class="nav nav-tabs mb-3" id="strategyTabs" style="border-bottom-color:#2d3148;">
-      <li class="nav-item"><a class="nav-link active" href="#" onclick="showStrategy('meic');return false;">MEIC <span class="badge bg-secondary ms-1" id="meic-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('manual');return false;">Manual Spread <span class="badge bg-danger ms-1" id="manual-nav-badge">LIVE</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('clone_trades');return false;"><i class="bi bi-copy me-1"></i>Discretionary <span class="badge bg-danger ms-1" id="clone-nav-badge">LIVE</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('skyline');return false;">Skyline <span class="badge bg-secondary" id="skyline-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('perma-bull');return false;">Perma Bull PCS <span class="badge bg-secondary" id="perma-bull-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('mean_reversion');return false;">Mean Reversion <span class="badge bg-secondary" id="mean-reversion-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('iron_fly');return false;">Iron Fly <span class="badge bg-secondary" id="iron-fly-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('iron_fly_xsp');return false;">Iron Fly XSP <span class="badge bg-secondary" id="iron-fly-xsp-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('drma_hm');return false;">DRMA + H-M <span class="badge bg-secondary ms-1" id="drma-hm-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('drma_stocks');return false;">DRMA Stocks <span class="badge bg-secondary ms-1" id="drma-stocks-nav-badge">PAPER</span></a></li>
-      <li class="nav-item"><a class="nav-link" href="#" onclick="showStrategy('inverse_meic');return false;">Inverse MEIC <span class="badge bg-secondary ms-1" id="inverse-meic-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link active" href="#" data-strategy="live" onclick="showStrategy('live');return false;"><i class="bi bi-broadcast me-1 text-danger"></i>Live Stack <span class="badge bg-danger ms-1" id="live-nav-badge">0</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="meic" onclick="showStrategy('meic');return false;">MEIC <span class="badge bg-secondary ms-1" id="meic-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="manual" onclick="showStrategy('manual');return false;">Manual Spread <span class="badge bg-danger ms-1" id="manual-nav-badge">LIVE</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="clone_trades" onclick="showStrategy('clone_trades');return false;"><i class="bi bi-copy me-1"></i>Discretionary <span class="badge bg-danger ms-1" id="clone-nav-badge">LIVE</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="skyline" onclick="showStrategy('skyline');return false;">Skyline <span class="badge bg-secondary" id="skyline-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="perma-bull" onclick="showStrategy('perma-bull');return false;">Perma Bull PCS <span class="badge bg-secondary" id="perma-bull-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="mean_reversion" onclick="showStrategy('mean_reversion');return false;">Mean Reversion <span class="badge bg-secondary" id="mean-reversion-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="iron_fly" onclick="showStrategy('iron_fly');return false;">Iron Fly <span class="badge bg-secondary" id="iron-fly-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="iron_fly_xsp" onclick="showStrategy('iron_fly_xsp');return false;">Iron Fly XSP <span class="badge bg-secondary" id="iron-fly-xsp-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="drma_hm" onclick="showStrategy('drma_hm');return false;">DRMA + H-M <span class="badge bg-secondary ms-1" id="drma-hm-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="drma_stocks" onclick="showStrategy('drma_stocks');return false;">DRMA Stocks <span class="badge bg-secondary ms-1" id="drma-stocks-nav-badge">PAPER</span></a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-strategy="inverse_meic" onclick="showStrategy('inverse_meic');return false;">Inverse MEIC <span class="badge bg-secondary ms-1" id="inverse-meic-nav-badge">PAPER</span></a></li>
     </ul>
     <div id="manual-meic-banner" class="alert alert-warning mb-3 d-none" style="border-radius:10px;"></div>
 
@@ -1567,7 +1621,10 @@
         <div class="col-md-3">
           <div class="pnl-card" style="background:#1a1d27;border:1px solid #2d3148;">
             <div class="section-title">Actions</div>
-            <button class="btn btn-sm btn-outline-warning mt-2" id="perma-bull-pause-btn" onclick="permaBullTogglePause()">Pause Today</button>
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              <button class="btn btn-sm btn-outline-warning" id="perma-bull-pause-btn" onclick="permaBullTogglePause()">Pause Today</button>
+              <button class="btn btn-sm btn-outline-info" id="perma-bull-manual-btn" onclick="permaBullToggleManageManually()" title="Disarm OCO/Stop so you can manually close or roll the trade">Manage Manually</button>
+            </div>
           </div>
         </div>
         <div class="col-md-3">
@@ -1582,9 +1639,9 @@
         <div class="table-responsive">
           <table class="table table-sm mb-0 perma-bull-table">
             <thead><tr>
-              <th>Structure</th><th>Strikes</th><th>Status</th><th>Credit</th><th>P/L</th>
+              <th>Structure</th><th>Strikes</th><th>Status</th><th>Credit</th><th>P/L</th><th>Action</th>
             </tr></thead>
-            <tbody id="perma-bull-spread"><tr><td colspan="5" class="text-muted text-center py-3">No data</td></tr></tbody>
+            <tbody id="perma-bull-spread"><tr><td colspan="6" class="text-muted text-center py-3">No data</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1979,6 +2036,36 @@
       <span id="drma-hm-pnl-label" style="display:none;"></span>
       <span id="drma-hm-pnl" style="display:none;"></span>
       <span id="drma-hm-pnl-sub" style="display:none;"></span>
+
+      <!-- Sub-Strategy Performance & Subtotals Card -->
+      <div class="card mb-3" style="background:#1a1d27;border:1px solid #2d3148;" id="drma-hm-subtotals-card">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 py-2" style="background:#131622;border-bottom:1px solid #2d3148;">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-bold"><i class="bi bi-pie-chart-fill me-2 text-info"></i>Sub-Strategy Performance &amp; Subtotals</span>
+            <span class="badge bg-dark border border-secondary text-light" style="font-size:0.7rem;">LIVE &amp; PAPER BREAKDOWN</span>
+          </div>
+          <small class="text-muted" id="drma-hm-subtotals-caption">Today's positions categorized by sub-strategy and execution mode</small>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 drma-hm-table" style="font-size:0.84rem;">
+            <thead>
+              <tr>
+                <th style="min-width:210px;">Sub-Strategy</th>
+                <th class="text-center" style="width:105px;">Mode</th>
+                <th class="text-center" style="width:85px;">Active</th>
+                <th class="text-center" style="width:120px;">Closed (W/L)</th>
+                <th class="text-center" style="width:90px;">Win Rate</th>
+                <th class="text-end" style="width:115px;">Realized P/L</th>
+                <th class="text-end" style="width:115px;">Open P/L</th>
+                <th class="text-end" style="width:125px;">Total P/L</th>
+              </tr>
+            </thead>
+            <tbody id="drma-hm-subtotals-tbody">
+              <tr><td colspan="8" class="text-center text-muted py-3">Computing sub-strategy subtotals...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- Second Row: Technical Matrix & Key Reference Levels -->
       <div class="row g-3 mb-3">
@@ -2511,7 +2598,128 @@
       </div>
     </div><!-- /strategy-drma-stocks -->
 
-    <div id="strategy-meic" class="strategy-panel" data-visible="true">
+    <!-- ── Strategy: Live Stack (All Live Orders Stacked) ── -->
+    <div id="strategy-live" class="strategy-panel" data-visible="true" style="display:block;">
+      <!-- Open vs Closed & Strategy / Sub-Strategy Filters -->
+      <div class="card p-3 mb-3" style="background:#1a1d27;border:1px solid #2d3148;">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <span class="live-pulse-dot"></span>
+            <span class="fw-bold text-light fs-5"><i class="bi bi-broadcast me-2 text-danger"></i>Live Orders Stack</span>
+            <div class="btn-group shadow-sm ms-1" role="group" id="live-filter-toggle">
+              <button type="button" class="btn btn-primary fw-bold px-4 py-2" id="live-toggle-open" onclick="setLiveFilterState('open')">
+                <i class="bi bi-activity me-1 text-warning"></i>Open Live Orders (<span id="live-open-tab-count">0</span>)
+              </button>
+              <button type="button" class="btn btn-outline-secondary text-light fw-bold px-4 py-2" id="live-toggle-closed" onclick="setLiveFilterState('closed')">
+                <i class="bi bi-check2-circle me-1 text-success"></i>Closed Live Orders (<span id="live-closed-tab-count">0</span>)
+              </button>
+            </div>
+            <span id="live-last-updated" class="text-muted small font-monospace ms-2"></span>
+          </div>
+
+          <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-info fw-semibold" id="live-refresh-btn" onclick="loadLiveTrades(true)">
+              <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+            </button>
+          </div>
+        </div>
+
+        <!-- Strategy & Sub-Strategy Dropdown Filters -->
+        <div class="d-flex flex-wrap align-items-center gap-3 pt-3 mt-3 border-top" style="border-top-color:#2d3148 !important;">
+          <div class="d-flex align-items-center gap-2">
+            <label class="text-muted small fw-bold text-uppercase mb-0" for="live-filter-strategy"><i class="bi bi-diagram-3 me-1 text-info"></i>Strategy:</label>
+            <select id="live-filter-strategy" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto;min-width:180px;" onchange="onLiveStrategyChange()">
+              <option value="ALL">All Strategies</option>
+            </select>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <label class="text-muted small fw-bold text-uppercase mb-0" for="live-filter-substrat"><i class="bi bi-diagram-2 me-1 text-info"></i>Sub-Strategy:</label>
+            <select id="live-filter-substrat" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto;min-width:180px;" onchange="onLiveSubStrategyChange()">
+              <option value="ALL">All Sub-strategies</option>
+            </select>
+          </div>
+          <button id="live-filter-reset-btn" class="btn btn-sm btn-outline-secondary" onclick="resetLiveFilters()" style="display:none;" title="Reset Strategy & Sub-strategy filters">
+            <i class="bi bi-x-circle me-1"></i>Reset Filters
+          </button>
+          <div class="ms-auto text-muted small font-monospace" id="live-filter-match-count"></div>
+        </div>
+      </div>
+
+      <!-- Live Summary Metrics Row -->
+      <div class="row g-2 mb-3">
+        <div class="col-6 col-md-4">
+          <div class="stat-card p-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+            <div class="stat-label text-muted small text-uppercase fw-semibold" id="live-metric-title">Open Live Orders</div>
+            <div class="stat-val fs-3 fw-bold font-monospace text-light" id="live-stat-count">0</div>
+            <div class="text-muted small mt-1 font-monospace" id="live-stat-sub">Live Broker Orders Only</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-4">
+          <div class="stat-card p-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+            <div class="stat-label text-muted small text-uppercase fw-semibold" id="live-metric-pnl-title">Unrealized P&amp;L</div>
+            <div class="stat-val fs-3 fw-bold font-monospace" id="live-stat-pnl">$0.00</div>
+            <div class="text-muted small mt-1 font-monospace" id="live-stat-pnl-sub">All live active positions</div>
+          </div>
+        </div>
+        <div class="col-12 col-md-4">
+          <div class="stat-card p-3" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+            <div class="stat-label text-muted small text-uppercase fw-semibold">Status Overview</div>
+            <div class="mt-2" id="live-stat-extra-badges">
+              <span class="badge bg-success" id="live-badge-open">0 Open</span>
+              <span class="badge bg-danger ms-1" id="live-badge-breached">0 Breached</span>
+              <span class="badge bg-info text-dark ms-1" id="live-badge-working">0 Working</span>
+            </div>
+            <div class="text-muted small mt-1" id="live-stat-status-sub">Live monitoring across all strategies</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Strategy P&L Breakdown by Strategy on Top -->
+      <div class="card p-3 mb-3 shadow-sm" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-pie-chart text-info"></i>
+            <span class="text-light small fw-bold text-uppercase" id="live-strat-pnl-title">P&amp;L by Strategy</span>
+          </div>
+          <span class="text-muted small" style="font-size:0.75rem;">Click any strategy to filter table</span>
+        </div>
+        <div id="live-strategy-pnl-chips" class="d-flex flex-wrap gap-2 align-items-center">
+          <!-- Dynamically populated strategy P&L cards -->
+        </div>
+      </div>
+
+      <!-- Live Trades Table & Card Container -->
+      <div id="live-cards-stack" class="card p-0 mb-4 shadow-sm" style="background:#1a1d27;border:1px solid #2d3148;border-radius:10px;overflow:hidden;">
+        <div class="table-responsive">
+          <table class="table table-dark table-hover align-middle mb-0" id="live-trades-table" style="font-size:0.875rem;">
+            <thead class="text-secondary text-uppercase font-monospace" style="background:#13151f;border-bottom:1px solid #2d3148;font-size:0.75rem;">
+              <tr>
+                <th scope="col" style="min-width:130px;">Strategy</th>
+                <th scope="col" style="min-width:110px;">Sub-Strategy</th>
+                <th scope="col" style="min-width:110px;">Symbol &amp; Lot</th>
+                <th scope="col" style="min-width:200px;">Structure &amp; Strikes</th>
+                <th scope="col" style="min-width:65px;">Qty</th>
+                <th scope="col" style="min-width:145px;" id="live-col-price-hdr">Entry / Mark</th>
+                <th scope="col" style="min-width:130px;" id="live-col-pnl-hdr">Unrealized P&amp;L</th>
+                <th scope="col" style="min-width:130px;" id="live-col-time-hdr">Time (CT)</th>
+                <th scope="col" style="min-width:95px;">Status</th>
+                <th scope="col" style="min-width:185px;text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="live-trades-tbody">
+              <!-- Dynamically populated rows -->
+            </tbody>
+          </table>
+        </div>
+        <div id="live-empty-state" class="p-5 text-center text-muted" style="display:none;">
+          <i class="bi bi-inbox fs-1 d-block mb-2 text-secondary"></i>
+          <h5 class="text-light" id="live-empty-title">No Live Orders</h5>
+          <p class="mb-0 small" id="live-empty-desc">There are no live trades matching the selected filters.</p>
+        </div>
+      </div>
+    </div><!-- /strategy-live -->
+
+    <div id="strategy-meic" class="strategy-panel" data-visible="false" style="display:none;">
       <div id="control-bar-MEIC_IC" class="strategy-control-bar-container"></div>
     <!-- Top Row: PnL + Bot Status + System Health -->
     <div class="row g-3 mb-3">
@@ -2715,8 +2923,8 @@
           <div class="row g-2 align-items-end mt-3">
             <div class="col-md-2"><label class="section-title">Structure</label>
               <select class="form-select form-select-sm" id="ms-structure" onchange="msOnStructureChange()" style="background:#0f1117;color:#e2e8f0;border-color:#2d3148;">
-                <option value="vertical_p" selected>Put Credit Spread (PCS)</option>
-                <option value="vertical_c">Call Credit Spread (CCS)</option>
+                <option value="vertical_p" selected>Put Spread</option>
+                <option value="vertical_c">Call Spread</option>
                 <option value="sell_call_bf">Sell Call Butterfly (1-2-1)</option>
                 <option value="buy_call_bf">Buy Call Butterfly (1-2-1)</option>
                 <option value="sell_put_bf">Sell Put Butterfly (1-2-1)</option>
@@ -2749,24 +2957,30 @@
         <div class="card-body">
           <div class="row g-2 align-items-end mb-2">
             <div class="col-md-3"><label class="section-title">Selected</label><div id="ms-selected-label" class="font-monospace">&mdash;</div></div>
+            <div class="col-md-2 ms-vertical-only"><label class="section-title">Type</label>
+              <select class="form-select form-select-sm plan-input" id="ms-place-spread-type" onchange="msOnPlaceSpreadTypeChange()">
+                <option value="credit" selected>Credit Spread (PCS)</option>
+                <option value="debit">Debit Spread (PDS)</option>
+              </select>
+            </div>
             <div class="col-md-2"><label class="section-title" id="ms-limit-label">Limit credit</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-limit" value="0.60"></div>
             <div class="col-md-1"><label class="section-title">Qty</label><input type="number" class="form-control form-control-sm plan-input" id="ms-place-qty" value="1" min="1"></div>
-            <div class="col-md-1 ms-vertical-only"><label class="section-title">Stop&times;</label><input type="number" step="0.1" min="0.5" max="10" class="form-control form-control-sm plan-input" id="ms-place-stop" value="2" title="Stop multiplier (e.g. 1.5, 2, 3)"></div>
-            <div class="col-md-1 ms-vertical-only"><label class="section-title">PT %</label><input type="number" step="5" min="5" max="100" class="form-control form-control-sm plan-input" id="ms-place-pt" value="50" title="Profit Target % (default 50%)"></div>
+            <div class="col-md-1 ms-vertical-only"><label class="section-title" id="ms-place-stop-label">SL %</label><input type="number" step="any" min="1" max="1000" class="form-control form-control-sm plan-input" id="ms-place-stop" value="100" title="Stop Loss % of entry credit/debit (e.g. 100% = 2x credit on PCS/CCS, 200% = 3x credit, 33.5% on PDS/CDS)"></div>
+            <div class="col-md-1 ms-vertical-only"><label class="section-title">PT %</label><input type="number" step="any" min="1" max="1000" class="form-control form-control-sm plan-input" id="ms-place-pt" value="50" title="Profit Target % (allows >100% for debit spreads, e.g. 100%, 150%, 200%)"></div>
             <div class="col-md-2"><button class="btn btn-ctrl btn-sm w-100" style="background:#16a34a;border:none;color:#fff;" id="ms-place-btn" onclick="msPlace()" disabled>Place Trade</button></div>
           </div>
           <div class="row g-2 align-items-end ms-vertical-only">
             <div class="col-md-3"><label class="section-title">If unfilled after wait</label>
               <select class="form-select form-select-sm plan-input" id="ms-place-unfilled" onchange="msToggleChaseFields()">
                 <option value="none" selected>Leave order working</option>
-                <option value="chase_same_trade">Reprice same spread (&minus;$0.05)</option>
+                <option value="chase_same_trade" id="ms-place-chase-opt">Reprice same spread (&minus;$0.05)</option>
               </select>
             </div>
             <div class="col-md-2"><label class="section-title">Wait per try (s)</label><input type="number" min="1" max="120" class="form-control form-control-sm plan-input" id="ms-place-fill-wait" value="5" title="Seconds to wait for fill before next reprice"></div>
-            <div class="col-md-2 ms-chase-fields d-none"><label class="section-title">Chase floor $</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-place-chase-floor" value="0.45" title="Lowest limit credit when repricing"></div>
+            <div class="col-md-2 ms-chase-fields d-none"><label class="section-title" id="ms-place-chase-floor-label">Chase floor $</label><input type="number" step="0.05" class="form-control form-control-sm plan-input" id="ms-place-chase-floor" value="0.45" title="Lowest limit credit when repricing"></div>
             <div class="col-md-2 ms-chase-fields d-none"><label class="section-title">Max reprices</label><input type="number" min="1" max="20" class="form-control form-control-sm plan-input" id="ms-place-chase-max" value="3" title="Cancel and reprice at most this many times"></div>
           </div>
-          <p class="ms-place-hint mt-2 mb-0" id="ms-place-hint">Stop&times;, PT %, and fill settings are saved to session CSV and trade JSON. Width comes from scan (step 1).</p>
+          <p class="ms-place-hint mt-2 mb-0" id="ms-place-hint">SL %, PT %, and fill settings are saved to session CSV and trade JSON. Width comes from scan (step 1).</p>
           <p class="ms-bf-hint mt-2 mb-0 d-none" id="ms-bf-hint">Butterflies use hold-to-expiry — no automated stop. Close manually from the active table.</p>
         </div>
       </div>
@@ -2906,36 +3120,6 @@
             </div>
           </div>
         </div>
-
-        <!-- Sub-Strategy Filter Bar (PC / Genie / Others) -->
-        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 pt-2" style="border-top:1px solid #23293f;">
-          <div class="d-flex align-items-center gap-2 flex-wrap">
-            <span class="fw-bold" style="font-size:0.76rem;letter-spacing:0.04em;color:#f1f5f9;">SUB-STRATEGIES:</span>
-            <div class="btn-group btn-group-sm" role="group" id="clone-substrat-filter-group">
-              <button type="button" class="btn btn-info active fw-bold" id="btn-substrat-all" onclick="setCloneSubStrategyFilter('ALL')">
-                <i class="bi bi-grid-fill me-1"></i>All Sub-Strategies
-                <span class="badge bg-secondary ms-1" id="badge-substrat-all-count">0</span>
-              </button>
-              <button type="button" class="btn btn-outline-primary fw-semibold" id="btn-substrat-pc" onclick="setCloneSubStrategyFilter('PC')">
-                <i class="bi bi-cpu me-1"></i>PC (Live)
-                <span class="badge bg-danger ms-1" id="badge-substrat-pc-count">0</span>
-              </button>
-              <button type="button" class="btn btn-outline-success fw-semibold" id="btn-substrat-genie" onclick="setCloneSubStrategyFilter('Genie')">
-                <i class="bi bi-magic me-1"></i>Genie
-                <span class="badge bg-info text-dark ms-1" id="badge-substrat-genie-mode">TRACKING</span>
-                <span class="badge bg-secondary ms-1" id="badge-substrat-genie-count">0</span>
-              </button>
-              <button type="button" class="btn btn-outline-secondary fw-semibold" id="btn-substrat-others" onclick="setCloneSubStrategyFilter('Others')">
-                <i class="bi bi-collection me-1"></i>Others
-                <span class="badge bg-dark border border-secondary text-info ms-1" id="badge-substrat-others-mode">TRACKING</span>
-                <span class="badge bg-secondary ms-1" id="badge-substrat-others-count">0</span>
-              </button>
-            </div>
-          </div>
-          <div class="text-muted" style="font-size:0.73rem;">
-            <i class="bi bi-funnel me-1 text-info"></i>Filter: <span class="text-light fw-bold" id="clone-current-filter-label">All Sub-Strategies</span>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -2963,19 +3147,28 @@
             <div class="d-flex align-items-center gap-2">
               <span class="fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Ladder &amp; Risk Settings:</span>
               <div class="btn-group btn-group-sm" role="group" id="clone-cfg-tab-group">
-                <button type="button" class="btn btn-primary fw-bold" id="cfg-tab-pc" onclick="switchCloneConfigSubStrat('PC')">
-                  <i class="bi bi-cpu me-1"></i>PC
+                <button type="button" class="btn btn-danger fw-bold" id="cfg-tab-tg" onclick="switchCloneConfigSubStrat('TG')">
+                  <i class="bi bi-person-fill me-1"></i>TG
+                </button>
+                <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-pc" onclick="switchCloneConfigSubStrat('PC')">
+                  <i class="bi bi-person-fill me-1"></i>PC
+                </button>
+                <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-pc2" onclick="switchCloneConfigSubStrat('PC2')">
+                  <i class="bi bi-person-fill me-1"></i>PC2
+                </button>
+                <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-cowboy" onclick="switchCloneConfigSubStrat('Cowboy')">
+                  <i class="bi bi-shield-shaded me-1"></i>Cowboy
                 </button>
                 <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-genie" onclick="switchCloneConfigSubStrat('Genie')">
                   <i class="bi bi-magic me-1"></i>Genie
                 </button>
                 <button type="button" class="btn btn-outline-secondary fw-semibold" id="cfg-tab-others" onclick="switchCloneConfigSubStrat('Others')">
-                  <i class="bi bi-collection me-1"></i>Others
+                  <i class="bi bi-folder-fill me-1"></i>Others
                 </button>
               </div>
             </div>
             <button class="btn btn-sm btn-primary px-3 fw-bold" onclick="saveCloneConfig()">
-              <i class="bi bi-check2-circle me-1"></i>Save Settings (<span id="clone-cfg-current-strat-label">PC</span>)
+              <i class="bi bi-check2-circle me-1"></i>Save Settings (<span id="clone-cfg-current-strat-label">TG</span>)
             </button>
           </div>
 
@@ -3056,6 +3249,43 @@
                   <option value="live">LIVE (TastyTrade Broker Orders)</option>
                 </select>
                 <small class="text-muted" id="clone-cfg-exec-mode-subtext" style="font-size:0.67rem;">Tracking mode monitors quotes with Buy / Get In button</small>
+              </div>
+            </div>
+
+            <!-- Second Row of Settings: Max Alert Price Cap, Allowed Tickers Filter, Last-Rung Runner Roll -->
+            <div class="row g-2 mb-3 align-items-center">
+              <div class="col-6 col-md-3">
+                <label class="section-title mb-1 d-block">Max Alert Price Cap ($)</label>
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text bg-dark text-muted border-secondary">$</span>
+                  <input type="number" id="clone-cfg-max-alert-price" class="form-control bg-dark text-light border-secondary font-monospace fw-bold" value="0" step="0.10" min="0"/>
+                </div>
+                <small class="text-muted" style="font-size:0.67rem;">e.g. 1.50 cap for PC2 (0 = disabled)</small>
+              </div>
+
+              <div class="col-6 col-md-4">
+                <label class="section-title mb-1 d-block">Allowed Tickers Filter</label>
+                <input type="text" id="clone-cfg-allowed-tickers" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace" placeholder="e.g. SPY, QQQ, NVDA"/>
+                <small class="text-muted" style="font-size:0.67rem;">Comma-separated whitelist. If set, only alerts on these tickers trade.</small>
+              </div>
+
+              <div class="col-12 col-md-5">
+                <label class="section-title mb-1 d-block text-info">Last-Rung Runner Roll</label>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="clone-cfg-roll-runner-enabled"/>
+                    <label class="form-check-label fw-bold text-light" for="clone-cfg-roll-runner-enabled" style="font-size:0.80rem;">Roll Runner</label>
+                  </div>
+                  <div class="input-group input-group-sm" style="width:110px;">
+                    <span class="input-group-text bg-dark text-muted border-secondary">Qty</span>
+                    <input type="number" id="clone-cfg-roll-runner-qty" class="form-control bg-dark text-warning border-secondary font-monospace fw-bold" value="1" min="1" step="1"/>
+                  </div>
+                  <div class="form-check mb-0 ms-1">
+                    <input class="form-check-input" type="checkbox" id="clone-cfg-roll-runner-every-leg"/>
+                    <label class="form-check-label text-light small" for="clone-cfg-roll-runner-every-leg" style="font-size:0.75rem;" title="When checked, rolls on all legs/steps; when unchecked, only rolls on final last-rung PT">All Legs</label>
+                  </div>
+                </div>
+                <small class="text-muted d-block mt-1" style="font-size:0.67rem;">On last rung PT, roll to further OTM @ ~entry cost (infinite roll, no stop). Roll never happens on stopped trades.</small>
               </div>
             </div>
 
@@ -3155,8 +3385,11 @@
               <div class="row g-1 mb-2">
                 <div class="col-12">
                   <select id="sim-calledby" class="form-select form-select-sm bg-dark text-info border-secondary font-monospace fw-semibold" title="Select Called By key">
-                    <option value="PC">calledBy: "PC" (Live PC Sub-Strategy)</option>
-                    <option value="genie">calledBy: "genie" (Genie Sub-Strategy)</option>
+                    <option value="Cowboy">calledBy: "Cowboy" (Cowboy / AI FlowAlgos)</option>
+                    <option value="genie">calledBy: "genie" (Genie / AI FlowAlgos)</option>
+                    <option value="TG">calledBy: "TG" (TG Sub-Strategy)</option>
+                    <option value="PC">calledBy: "PC" (PC Sub-Strategy)</option>
+                    <option value="PC2">calledBy: "PC2" (PC2 Sub-Strategy)</option>
                     <option value="Daemon">calledBy: "Daemon" (Others Bucket - Paper Only)</option>
                     <option value="custom_caller">calledBy: custom (Others Bucket)</option>
                   </select>
@@ -3173,12 +3406,33 @@
 
     <!-- ═══ TRACKED ALERTS & REAL-TIME WATCHLIST (TRACKING MODE) ═══ -->
     <div class="card mb-3" id="clone-tracked-container" style="background:#131826;border:1px solid #1e3a8a;">
-      <div class="card-header d-flex justify-content-between align-items-center py-2" style="background:#0f172a;border-bottom:1px solid #1e3a8a;">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 py-2" style="background:#0f172a;border-bottom:1px solid #1e3a8a;">
         <div class="d-flex align-items-center gap-2">
           <span class="fw-bold text-light">
             <i class="bi bi-radar text-info me-2"></i>Live Tracked Alerts (Tracking Mode)
           </span>
           <span class="badge bg-info text-dark font-monospace fw-bold" id="clone-tracked-count-badge">0 TRACKING</span>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <div class="d-flex align-items-center gap-1">
+            <span class="text-muted small fw-semibold" style="font-size:0.75rem;"><i class="bi bi-funnel me-1 text-info"></i>Sub-Strat:</span>
+            <select id="clone-tracked-substrat-filter" class="form-select form-select-sm bg-dark text-light border-secondary" style="font-size:0.75rem;padding:0.18rem 1.8rem 0.18rem 0.5rem;width:auto;" onchange="onCloneTrackedFilterChange(this.value)">
+              <option value="ALL">All Sub-Strats</option>
+              <option value="Cowboy">Cowboy</option>
+              <option value="Genie">Genie</option>
+              <option value="TG">TG</option>
+              <option value="PC">PC</option>
+              <option value="PC2">PC2</option>
+              <option value="Others">Others</option>
+            </select>
+          </div>
+          <div class="d-flex align-items-center gap-1">
+            <span class="text-muted small fw-semibold" style="font-size:0.75rem;"><i class="bi bi-arrow-down-up me-1 text-info"></i>Sort Date:</span>
+            <select id="clone-tracked-sort-order" class="form-select form-select-sm bg-dark text-light border-secondary" style="font-size:0.75rem;padding:0.18rem 1.8rem 0.18rem 0.5rem;width:auto;" onchange="onCloneTrackedSortChange(this.value)">
+              <option value="desc" selected>Newest First (Desc)</option>
+              <option value="asc">Oldest First (Asc)</option>
+            </select>
+          </div>
         </div>
         <small class="text-muted" style="font-size:0.74rem;">
           <i class="bi bi-lightning-charge me-1 text-warning"></i>Live quotes streaming. Click <strong>"Buy / Get In"</strong> to enter trade with ladder exit.
@@ -3191,7 +3445,7 @@
               <tr>
                 <th class="text-nowrap">Sub-Strat</th>
                 <th>Option / Spec</th>
-                <th class="text-nowrap">Alert Time (CST)</th>
+                <th class="text-nowrap" style="cursor:pointer;" onclick="toggleCloneTrackedDateSort()" id="th-clone-tracked-time" title="Click to toggle Newest/Oldest sort">Alert Time (CST) <i class="bi bi-arrow-down-short text-info" id="icon-clone-tracked-time-sort"></i></th>
                 <th class="text-nowrap">Alert Px</th>
                 <th class="text-nowrap">Broker @ Alert</th>
                 <th class="text-nowrap">Current Px</th>
@@ -5044,7 +5298,15 @@ const PLAN_MASTER_FIELDS = [
 let socket;
 let pnlChart = null;
 let activeTab = 'today';
-let activeStrategy = 'meic';
+let activeStrategy = 'live';
+try {
+  const savedStrat = localStorage.getItem('meic_active_strategy');
+  if (savedStrat && savedStrat !== 'meic') {
+    activeStrategy = savedStrat;
+  } else {
+    activeStrategy = 'live';
+  }
+} catch (e) {}
 let lastData = null;
 const SUMMARY_POLL_MS = 3000;
 let summaryPollTimer = null;
@@ -5121,6 +5383,616 @@ function startSummaryPolling() {
   }, SUMMARY_POLL_MS);
 }
 
+// ── Live Trades Hub Client Logic ──────────────────────────────────────────────
+let liveTradesData = null;
+let liveFilterState = 'open'; // 'open' (default) or 'closed'
+let liveSelectedStrategy = 'ALL';
+let liveSelectedSubStrategy = 'ALL';
+let liveLoading = false;
+
+const STRATEGY_COLORS = {
+  'MEIC_IC': { bg: '#8b5cf6', label: 'MEIC' },
+  'MANUAL_SPREAD': { bg: '#f97316', label: 'Manual' },
+  'CLONE_TRADES': { bg: '#06b6d4', label: 'Discretionary' },
+  'PERMA_BULL_PCS': { bg: '#10b981', label: 'Perma Bull' },
+  'SKYLINE_SPX': { bg: '#3b82f6', label: 'Skyline' },
+  'DRMA_HM_STOCKS': { bg: '#eab308', label: 'DRMA Stocks' },
+  'DRMA_HM_SPX': { bg: '#6366f1', label: 'DRMA H-M' },
+  'IRON_FLY_SPX': { bg: '#ec4899', label: 'Iron Fly SPX' },
+  'IRON_FLY_XSP': { bg: '#f43f5e', label: 'Iron Fly XSP' },
+  'MEAN_REVERSION_SPX': { bg: '#14b8a6', label: 'Mean Reversion' },
+  'INVERSE_MEIC': { bg: '#a855f7', label: 'Inverse MEIC' },
+};
+
+function setLiveFilterState(state) {
+  liveFilterState = state;
+  const btnOpen = document.getElementById('live-toggle-open');
+  const btnClosed = document.getElementById('live-toggle-closed');
+  if (state === 'open') {
+    if (btnOpen) btnOpen.className = 'btn btn-primary fw-bold px-4 py-2';
+    if (btnClosed) btnClosed.className = 'btn btn-outline-secondary text-light fw-bold px-4 py-2';
+  } else {
+    if (btnOpen) btnOpen.className = 'btn btn-outline-secondary text-light fw-bold px-4 py-2';
+    if (btnClosed) btnClosed.className = 'btn btn-success fw-bold px-4 py-2';
+  }
+  updateLiveDropdowns(true);
+  renderLiveTrades();
+}
+
+function onLiveStrategyChange() {
+  const sel = document.getElementById('live-filter-strategy');
+  liveSelectedStrategy = sel ? sel.value : 'ALL';
+  updateLiveDropdowns(false);
+  renderLiveTrades();
+}
+
+function onLiveSubStrategyChange() {
+  const sel = document.getElementById('live-filter-substrat');
+  liveSelectedSubStrategy = sel ? sel.value : 'ALL';
+  renderLiveTrades();
+}
+
+function resetLiveFilters() {
+  liveSelectedStrategy = 'ALL';
+  liveSelectedSubStrategy = 'ALL';
+  updateLiveDropdowns(true);
+  renderLiveTrades();
+}
+
+function setLiveFilterStrategy(stratKey) {
+  liveSelectedStrategy = (liveSelectedStrategy === stratKey) ? 'ALL' : stratKey;
+  const sel = document.getElementById('live-filter-strategy');
+  if (sel) sel.value = liveSelectedStrategy;
+  updateLiveDropdowns(false);
+  renderLiveTrades();
+}
+
+function updateLiveDropdowns(rebuildStrategy = true) {
+  if (!liveTradesData) return;
+  const pool = liveFilterState === 'open' ? (liveTradesData.open_trades || []) : (liveTradesData.closed_trades || []);
+
+  const stratSel = document.getElementById('live-filter-strategy');
+  const subSel = document.getElementById('live-filter-substrat');
+  const resetBtn = document.getElementById('live-filter-reset-btn');
+
+  if (rebuildStrategy && stratSel) {
+    const stratMap = new Map();
+    pool.forEach(t => {
+      const k = t.strategy_key || 'UNKNOWN';
+      const lbl = t.strategy_label || k;
+      stratMap.set(k, lbl);
+    });
+    let stratOptionsHtml = '<option value="ALL">All Strategies</option>';
+    stratMap.forEach((lbl, k) => {
+      stratOptionsHtml += `<option value="${k}">${lbl}</option>`;
+    });
+    stratSel.innerHTML = stratOptionsHtml;
+    if (stratMap.has(liveSelectedStrategy)) {
+      stratSel.value = liveSelectedStrategy;
+    } else {
+      liveSelectedStrategy = 'ALL';
+      stratSel.value = 'ALL';
+    }
+  }
+
+  if (subSel) {
+    const validSubs = new Set();
+    pool.forEach(t => {
+      if (liveSelectedStrategy === 'ALL' || t.strategy_key === liveSelectedStrategy) {
+        if (t.sub_strategy) validSubs.add(t.sub_strategy);
+      }
+    });
+    let subOptionsHtml = '<option value="ALL">All Sub-strategies</option>';
+    Array.from(validSubs).sort().forEach(sub => {
+      subOptionsHtml += `<option value="${sub}">${sub}</option>`;
+    });
+    subSel.innerHTML = subOptionsHtml;
+    if (validSubs.has(liveSelectedSubStrategy)) {
+      subSel.value = liveSelectedSubStrategy;
+    } else {
+      liveSelectedSubStrategy = 'ALL';
+      subSel.value = 'ALL';
+    }
+  }
+
+  if (resetBtn) {
+    resetBtn.style.display = (liveSelectedStrategy !== 'ALL' || liveSelectedSubStrategy !== 'ALL') ? 'inline-block' : 'none';
+  }
+}
+
+async function loadLiveTrades(isManualClick = false) {
+  if (liveLoading && !isManualClick) return;
+  liveLoading = true;
+  const refreshBtn = document.getElementById('live-refresh-btn');
+  if (refreshBtn && isManualClick) refreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Loading...';
+  try {
+    const res = await fetch('/api/live_trades');
+    if (!res.ok) throw new Error('Status ' + res.status);
+    const data = await res.json();
+    liveTradesData = data;
+    updateLiveNavBadge(data.stats || {});
+    updateLiveDropdowns(true);
+    renderLiveTrades();
+  } catch (err) {
+    console.warn('Error loading live trades:', err);
+    if (isManualClick) toast('Error loading live trades: ' + err.message, 'error');
+  } finally {
+    liveLoading = false;
+    if (refreshBtn && isManualClick) refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh';
+  }
+}
+
+function updateLiveNavBadge(stats) {
+  const openCount = stats.open_count || 0;
+  const closedCount = stats.closed_count || 0;
+  const navBadge = document.getElementById('live-nav-badge');
+  if (navBadge) {
+    navBadge.textContent = openCount;
+    navBadge.className = 'badge ' + (openCount > 0 ? (stats.breached_count > 0 ? 'bg-danger' : 'bg-primary') : 'bg-secondary') + ' ms-1';
+  }
+  const openTabCount = document.getElementById('live-open-tab-count');
+  if (openTabCount) openTabCount.textContent = openCount;
+  const closedTabCount = document.getElementById('live-closed-tab-count');
+  if (closedTabCount) closedTabCount.textContent = closedCount;
+}
+
+function renderLiveTrades() {
+  if (!liveTradesData) return;
+  const stats = liveTradesData.stats || {};
+  const openTrades = liveTradesData.open_trades || [];
+  const closedTrades = liveTradesData.closed_trades || [];
+
+  updateLiveNavBadge(stats);
+
+  const lastUpEl = document.getElementById('live-last-updated');
+  if (lastUpEl) lastUpEl.textContent = `Synced: ${liveTradesData.updated_at || 'Just now'}`;
+
+  const tableHdrPrice = document.getElementById('live-col-price-hdr');
+  const tableHdrPnl = document.getElementById('live-col-pnl-hdr');
+  const tableHdrTime = document.getElementById('live-col-time-hdr');
+  const tbody = document.getElementById('live-trades-tbody');
+  const tableContainer = document.getElementById('live-trades-table');
+  const emptyState = document.getElementById('live-empty-state');
+  const emptyTitle = document.getElementById('live-empty-title');
+  const emptyDesc = document.getElementById('live-empty-desc');
+  const matchCountEl = document.getElementById('live-filter-match-count');
+
+  const metricTitle = document.getElementById('live-metric-title');
+  const metricPnlTitle = document.getElementById('live-metric-pnl-title');
+  const statCount = document.getElementById('live-stat-count');
+  const statSub = document.getElementById('live-stat-sub');
+  const statPnl = document.getElementById('live-stat-pnl');
+  const statPnlSub = document.getElementById('live-stat-pnl-sub');
+  const badgeOpen = document.getElementById('live-badge-open');
+  const badgeBreached = document.getElementById('live-badge-breached');
+  const badgeWorking = document.getElementById('live-badge-working');
+
+  if (badgeOpen) badgeOpen.textContent = `${stats.open_count || 0} Open`;
+  if (badgeBreached) {
+    badgeBreached.textContent = `${stats.breached_count || 0} Breached`;
+    badgeBreached.className = (stats.breached_count || 0) > 0 ? 'badge bg-danger shadow-sm pulse-badge ms-1' : 'badge bg-secondary ms-1';
+  }
+  if (badgeWorking) badgeWorking.textContent = `${stats.working_count || 0} Working`;
+
+  const pool = liveFilterState === 'open' ? openTrades : closedTrades;
+  const filtered = pool.filter(t => {
+    if (liveSelectedStrategy !== 'ALL' && t.strategy_key !== liveSelectedStrategy) return false;
+    if (liveSelectedSubStrategy !== 'ALL' && t.sub_strategy !== liveSelectedSubStrategy) return false;
+    return true;
+  });
+
+  if (matchCountEl) {
+    const isFiltered = (liveSelectedStrategy !== 'ALL' || liveSelectedSubStrategy !== 'ALL');
+    matchCountEl.textContent = isFiltered
+      ? `Showing ${filtered.length} of ${pool.length} live orders`
+      : `Total: ${pool.length} live orders`;
+  }
+
+  // Render Strategy P&L Breakdown on Top
+  const pnlByStrat = liveFilterState === 'open' ? (stats.open_strategy_pnl || {}) : (stats.closed_strategy_pnl || {});
+  const countsByStrat = liveFilterState === 'open' ? (stats.open_strategy_counts || {}) : (stats.closed_strategy_counts || {});
+  const stratHdrTitle = document.getElementById('live-strat-pnl-title');
+  if (stratHdrTitle) {
+    stratHdrTitle.textContent = liveFilterState === 'open' ? 'P&L by Strategy (Open Positions)' : 'Realized P&L by Strategy (Closed Today)';
+  }
+  const chipsContainer = document.getElementById('live-strategy-pnl-chips');
+  if (chipsContainer) {
+    const stratKeys = Object.keys(countsByStrat);
+    if (stratKeys.length === 0) {
+      chipsContainer.innerHTML = '<span class="text-muted small">No active strategy positions in this tab</span>';
+    } else {
+      chipsContainer.innerHTML = stratKeys.map(sk => {
+        const stratMeta = STRATEGY_COLORS[sk] || { bg: '#64748b', label: sk };
+        const stratPnl = pnlByStrat[sk] || 0.0;
+        const cnt = countsByStrat[sk] || 0;
+        const isSelected = liveSelectedStrategy === sk;
+        return `
+          <div class="stat-card px-3 py-2 d-flex align-items-center gap-2"
+               style="background:#1a1d27;border:1px solid ${isSelected ? '#3b82f6' : '#2d3148'};border-radius:8px;cursor:pointer;${isSelected ? 'box-shadow:0 0 8px rgba(59,130,246,0.5);' : ''}"
+               onclick="setLiveFilterStrategy('${sk}')"
+               title="Filter by ${stratMeta.label}">
+            <span class="badge fw-bold" style="background:${stratMeta.bg};">${stratMeta.label}</span>
+            <span class="text-muted small">(${cnt})</span>
+            <span class="fs-6 fw-bold font-monospace ${pnlClass(stratPnl)}">${fmtPnl(stratPnl)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  if (liveFilterState === 'open') {
+    // Headers for Open Mode
+    if (tableHdrPrice) tableHdrPrice.textContent = 'Entry / Mark';
+    if (tableHdrPnl) tableHdrPnl.textContent = 'Unrealized P&L';
+    if (tableHdrTime) tableHdrTime.textContent = 'Opened (CT)';
+    if (metricTitle) metricTitle.textContent = 'Open Live Orders';
+    if (metricPnlTitle) metricPnlTitle.textContent = 'Open Unrealized P&L';
+    if (statCount) statCount.textContent = filtered.length;
+    if (statSub) statSub.textContent = (liveSelectedStrategy !== 'ALL' || liveSelectedSubStrategy !== 'ALL')
+      ? `Filtered (${filtered.length}/${pool.length}) • Broker Live`
+      : `${pool.length} Live Broker Positions`;
+
+    const filteredUPnl = filtered.reduce((acc, t) => acc + (t.unrealized_pnl || 0), 0);
+    if (statPnl) {
+      statPnl.textContent = fmtPnl(filteredUPnl);
+      statPnl.className = 'stat-val fs-3 fw-bold font-monospace ' + pnlClass(filteredUPnl);
+    }
+    if (statPnlSub) statPnlSub.textContent = 'Active open risk across strategies';
+
+    if (filtered.length === 0) {
+      if (tableContainer) tableContainer.style.display = 'none';
+      if (emptyState) {
+        emptyState.style.display = 'block';
+        if (emptyTitle) emptyTitle.textContent = pool.length === 0 ? 'No Open Live Orders' : 'No Matching Live Orders';
+        if (emptyDesc) emptyDesc.textContent = pool.length === 0
+          ? 'There are currently no open positions or working orders on the live account.'
+          : 'No open live orders match the selected Strategy or Sub-strategy filters.';
+      }
+      return;
+    }
+
+    if (tableContainer) tableContainer.style.display = 'table';
+    if (emptyState) emptyState.style.display = 'none';
+
+    if (tbody) {
+      tbody.innerHTML = filtered.map(t => {
+        const stratMeta = STRATEGY_COLORS[t.strategy_key] || { bg: '#64748b', label: t.strategy_label };
+        const pnl = t.unrealized_pnl || 0;
+        const pnlPctStr = t.unrealized_pnl_pct != null
+          ? `<span class="badge ${t.unrealized_pnl_pct >= 0 ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'} font-monospace ms-1" style="font-size:0.75rem;">${t.unrealized_pnl_pct >= 0 ? '+' : ''}${t.unrealized_pnl_pct}%</span>`
+          : '';
+
+        const statusBadge = t.status === 'BREACHED'
+          ? `<span class="badge bg-danger text-white"><i class="bi bi-exclamation-triangle-fill me-1"></i>BREACHED</span>`
+          : (t.status === 'OPEN'
+            ? `<span class="badge bg-success text-white"><i class="bi bi-check-circle me-1"></i>OPEN</span>`
+            : (['WORKING', 'PENDING'].includes(t.status)
+              ? `<span class="badge bg-info text-dark"><i class="bi bi-clock-history me-1"></i>WORKING</span>`
+              : `<span class="badge bg-warning text-dark">${t.status}</span>`));
+
+        // Action Buttons
+        const actions = t.actions || [];
+        let actionButtons = '';
+        if (actions.includes('close')) {
+          actionButtons += `<button class="btn btn-sm btn-danger fw-semibold py-1 px-2" onclick="liveTabActionClose('${t.id}')" title="Close trade now at market"><i class="bi bi-x-circle me-1"></i>Close</button>`;
+        }
+        if (actions.includes('close_all')) {
+          actionButtons += `<button class="btn btn-sm btn-danger fw-semibold py-1 px-2" onclick="liveTabActionClose('${t.id}')" title="Close structure at market"><i class="bi bi-x-circle me-1"></i>Close All</button>`;
+        }
+        if (actions.includes('scale_out')) {
+          actionButtons += `<button class="btn btn-sm btn-outline-warning fw-semibold py-1 px-2" onclick="liveTabActionScaleOut('${t.id}')" title="Scale out contracts"><i class="bi bi-pie-chart me-1"></i>Scale</button>`;
+        }
+        if (actions.includes('cancel')) {
+          actionButtons += `<button class="btn btn-sm btn-warning text-dark fw-semibold py-1 px-2" onclick="liveTabActionCancel('${t.id}')" title="Cancel working order"><i class="bi bi-slash-circle me-1"></i>Cancel</button>`;
+        }
+        if (actions.includes('view_ladder')) {
+          actionButtons += `<button class="btn btn-sm btn-outline-info fw-semibold py-1 px-2" onclick="liveTabActionLadder('${t.id}')" title="View Ladder Stages"><i class="bi bi-ladder me-1"></i>Ladder</button>`;
+        }
+        if (actions.includes('manage_manually')) {
+          actionButtons += `<button class="btn btn-sm btn-outline-info fw-semibold py-1 px-2" onclick="liveTabActionManageManually('${t.id}')" title="Manage manually"><i class="bi bi-hand-index-thumb me-1"></i>Manual</button>`;
+        }
+        actionButtons += `<button class="btn btn-sm btn-outline-secondary py-1 px-2" onclick="showStrategy('${t.tab_id}')" title="Open full ${stratMeta.label} page"><i class="bi bi-box-arrow-up-right"></i></button>`;
+
+        const timeOpenedStr = t.time_opened ? formatCST(t.time_opened, true) : '&ndash;';
+        const entryPxStr = t.entry_price != null ? `$${Number(t.entry_price).toFixed(2)}` : '&ndash;';
+        const currPxStr = t.current_price != null ? `$${Number(t.current_price).toFixed(2)}` : '&ndash;';
+        const strikesStr = t.strikes || '&ndash;';
+
+        return `
+          <tr style="border-bottom:1px solid #232738;">
+            <td>
+              <span class="badge fw-bold" style="background:${stratMeta.bg};">${stratMeta.label}</span>
+            </td>
+            <td>
+              <span class="badge bg-dark border border-secondary text-info">${t.sub_strategy || '–'}</span>
+            </td>
+            <td>
+              <div class="fw-bold font-monospace text-light">${t.symbol}</div>
+              <div class="text-muted small font-monospace">${t.lot || t.id}</div>
+            </td>
+            <td>
+              <div class="fw-semibold font-monospace text-light">${t.structure}</div>
+              ${strikesStr !== '&ndash;' ? `<div class="text-muted small font-monospace">${strikesStr}</div>` : ''}
+            </td>
+            <td>
+              <span class="badge bg-secondary font-monospace">${t.quantity}x</span>
+            </td>
+            <td>
+              <div class="font-monospace text-light">In: ${entryPxStr} | Mark: ${currPxStr}</div>
+              ${t.stop_loss ? `<div class="font-monospace text-danger small">Stop: ${t.stop_loss}</div>` : ''}
+            </td>
+            <td>
+              <div class="d-flex align-items-center gap-1">
+                <span class="fs-6 fw-bold font-monospace ${pnlClass(pnl)}">${fmtPnl(pnl)}</span>
+                ${pnlPctStr}
+              </div>
+            </td>
+            <td>
+              <div class="font-monospace text-muted small"><i class="bi bi-clock me-1"></i>${timeOpenedStr}</div>
+            </td>
+            <td>
+              ${statusBadge}
+            </td>
+            <td style="text-align:right;">
+              <div class="d-flex align-items-center justify-content-end gap-1 flex-wrap">
+                ${actionButtons}
+              </div>
+            </td>
+          </tr>`;
+      }).join('');
+    }
+
+  } else {
+    // Headers for Closed Mode
+    if (tableHdrPrice) tableHdrPrice.textContent = 'Entry / Exit';
+    if (tableHdrPnl) tableHdrPnl.textContent = 'Realized P&L';
+    if (tableHdrTime) tableHdrTime.textContent = 'Closed (CT)';
+    if (metricTitle) metricTitle.textContent = 'Closed Live Orders Today';
+    if (metricPnlTitle) metricPnlTitle.textContent = 'Total Realized P&L Today';
+    if (statCount) statCount.textContent = filtered.length;
+    if (statSub) statSub.textContent = (liveSelectedStrategy !== 'ALL' || liveSelectedSubStrategy !== 'ALL')
+      ? `Filtered (${filtered.length}/${pool.length}) • Broker Live`
+      : `${pool.length} Live Orders Closed Today`;
+
+    const filteredRPnl = filtered.reduce((acc, t) => acc + (t.realized_pnl || 0), 0);
+    if (statPnl) {
+      statPnl.textContent = fmtPnl(filteredRPnl);
+      statPnl.className = 'stat-val fs-3 fw-bold font-monospace ' + pnlClass(filteredRPnl);
+    }
+    if (statPnlSub) statPnlSub.textContent = 'Realized trades settled today';
+
+    if (filtered.length === 0) {
+      if (tableContainer) tableContainer.style.display = 'none';
+      if (emptyState) {
+        emptyState.style.display = 'block';
+        if (emptyTitle) emptyTitle.textContent = pool.length === 0 ? 'No Closed Live Orders Today' : 'No Matching Live Orders';
+        if (emptyDesc) emptyDesc.textContent = pool.length === 0
+          ? 'No positions have been closed or settled yet today on the live account.'
+          : 'No closed live orders match the selected Strategy or Sub-strategy filters.';
+      }
+      return;
+    }
+
+    if (tableContainer) tableContainer.style.display = 'table';
+    if (emptyState) emptyState.style.display = 'none';
+
+    if (tbody) {
+      tbody.innerHTML = filtered.map(t => {
+        const stratMeta = STRATEGY_COLORS[t.strategy_key] || { bg: '#64748b', label: t.strategy_label };
+        const pnl = t.realized_pnl || 0;
+        const timeOpenedStr = t.time_opened ? formatCST(t.time_opened, true) : '&ndash;';
+        const timeClosedStr = t.time_closed ? formatCST(t.time_closed, true) : '&ndash;';
+        const entryPxStr = t.entry_price != null ? `$${Number(t.entry_price).toFixed(2)}` : '&ndash;';
+        const exitPxStr = t.exit_price != null ? `$${Number(t.exit_price).toFixed(2)}` : '&ndash;';
+        const strikesStr = t.strikes || '&ndash;';
+
+        return `
+          <tr style="border-bottom:1px solid #232738;">
+            <td>
+              <span class="badge fw-bold" style="background:${stratMeta.bg};">${stratMeta.label}</span>
+            </td>
+            <td>
+              <span class="badge bg-dark border border-secondary text-info">${t.sub_strategy || '–'}</span>
+            </td>
+            <td>
+              <div class="fw-bold font-monospace text-light">${t.symbol}</div>
+              <div class="text-muted small font-monospace">${t.lot || t.id}</div>
+            </td>
+            <td>
+              <div class="fw-semibold font-monospace text-light">${t.structure}</div>
+              ${strikesStr !== '&ndash;' ? `<div class="text-muted small font-monospace">${strikesStr}</div>` : ''}
+            </td>
+            <td>
+              <span class="badge bg-secondary font-monospace">${t.quantity}x</span>
+            </td>
+            <td>
+              <div class="font-monospace text-light">In: ${entryPxStr} | Out: ${exitPxStr}</div>
+            </td>
+            <td>
+              <span class="fs-6 fw-bold font-monospace ${pnlClass(pnl)}">${fmtPnl(pnl)}</span>
+            </td>
+            <td>
+              <div class="font-monospace text-info small"><i class="bi bi-check-circle me-1"></i>${timeClosedStr}</div>
+              ${timeOpenedStr !== '&ndash;' ? `<div class="text-muted small font-monospace" style="font-size:0.72rem;">Opened: ${timeOpenedStr}</div>` : ''}
+            </td>
+            <td>
+              <span class="badge bg-secondary text-light"><i class="bi bi-check2-all me-1"></i>CLOSED</span>
+            </td>
+            <td style="text-align:right;">
+              <button class="btn btn-sm btn-outline-secondary py-1 px-2" onclick="showStrategy('${t.tab_id}')" title="Open full ${stratMeta.label} page">
+                <i class="bi bi-box-arrow-up-right me-1"></i>${stratMeta.label}
+              </button>
+            </td>
+          </tr>`;
+      }).join('');
+    }
+  }
+}
+
+// ── Replicated Specific Page Action Handlers ──────────────────────────────────
+async function liveTabActionClose(id) {
+  if (!liveTradesData) return;
+  const t = (liveTradesData.open_trades || []).find(x => x.id === id);
+  if (!t) { toast('Trade not found', 'warning'); return; }
+
+  const strat = t.strategy_key;
+  const msg = `Are you sure you want to CLOSE ${t.strategy_label} position (${t.symbol} ${t.structure})?`;
+  if (!confirm(msg)) return;
+
+  try {
+    if (strat === 'MEIC_IC') {
+      const res = await fetch('/api/close_trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: t.filename })
+      });
+      toast(`Close sent for MEIC ${t.lot} ${t.side}`, 'success');
+    } else if (strat === 'MANUAL_SPREAD') {
+      const res = await fetch('/api/manual_spread/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: t.filename })
+      });
+      toast(`Close sent for Manual Spread`, 'success');
+    } else if (strat === 'CLONE_TRADES') {
+      flattenCloneTrade(t.trade_id || t.id, false);
+      return;
+    } else if (strat === 'PERMA_BULL_PCS') {
+      const res = await fetch('/api/perma_bull/close', { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Close failed');
+      toast('Close sent for Perma Bull PCS', 'success');
+    } else if (strat === 'SKYLINE_SPX') {
+      const res = await fetch('/api/strategy/SKYLINE_SPX/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ structure: 'all' })
+      });
+      toast('Skyline close requested', 'success');
+    } else if (strat === 'DRMA_HM_STOCKS') {
+      const res = await fetch('/api/drma_stocks/close_trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trade_id: t.trade_id || t.id })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.message || 'Close failed');
+      toast(`Closed DRMA Stock position ${t.symbol}`, 'success');
+    } else if (strat === 'DRMA_HM_SPX') {
+      const res = await fetch('/api/strategy/DRMA_HM_SPX/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ structure: 'all' })
+      });
+      toast('DRMA H-M close requested', 'success');
+    } else if (strat === 'IRON_FLY_SPX') {
+      const res = await fetch('/api/iron_fly/close_all', { method: 'POST' });
+      toast('Iron Fly close requested', 'success');
+    } else if (strat === 'IRON_FLY_XSP') {
+      const res = await fetch('/api/iron_fly_xsp/close_all', { method: 'POST' });
+      toast('Iron Fly XSP close requested', 'success');
+    } else if (strat === 'MEAN_REVERSION_SPX') {
+      const res = await fetch('/api/strategy/MEAN_REVERSION_SPX/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ structure: 'all' })
+      });
+      toast('Mean Reversion close requested', 'success');
+    } else if (strat === 'INVERSE_MEIC') {
+      const res = await fetch('/api/strategy/INVERSE_MEIC/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ structure: 'all' })
+      });
+      toast('Inverse MEIC close requested', 'success');
+    }
+    await loadLiveTrades(true);
+    refreshSummary();
+  } catch (err) {
+    toast('Action failed: ' + err.message, 'error');
+  }
+}
+
+async function liveTabActionScaleOut(id) {
+  if (!liveTradesData) return;
+  const t = (liveTradesData.open_trades || []).find(x => x.id === id);
+  if (!t || !t.filename) { toast('Scale out requires trade filename', 'warning'); return; }
+  openScaleOutModal(t.filename);
+}
+
+async function liveTabActionCancel(id) {
+  if (!liveTradesData) return;
+  const t = (liveTradesData.open_trades || []).find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`Cancel working order for ${t.strategy_label} (${t.symbol})?`)) return;
+
+  try {
+    if (t.strategy_key === 'MANUAL_SPREAD') {
+      await fetch('/api/manual_spread/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: t.filename })
+      });
+      toast('Cancelled working manual order', 'success');
+    } else if (t.strategy_key === 'CLONE_TRADES') {
+      flattenCloneTrade(t.trade_id || t.id, true);
+      return;
+    }
+    await loadLiveTrades(true);
+    refreshSummary();
+  } catch (err) {
+    toast('Cancel failed: ' + err.message, 'error');
+  }
+}
+
+function liveTabActionLadder(id) {
+  if (!liveTradesData) return;
+  const t = (liveTradesData.open_trades || []).find(x => x.id === id);
+  if (!t) return;
+  viewTradeLadderExecution(t.trade_id || t.id);
+}
+
+function liveTabActionEditLadder(id) {
+  if (!liveTradesData) return;
+  const t = (liveTradesData.open_trades || []).find(x => x.id === id);
+  if (!t) return;
+  openEditTradeLadderModal(t.trade_id || t.id);
+}
+
+async function liveTabActionManageManually(id) {
+  if (!confirm('Disarm resting OCO/stop order on broker to manually manage, close, or roll?')) return;
+  try {
+    const res = await fetch('/api/perma_bull/manage_manually', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'Failed');
+    toast('Perma Bull set to manual management mode', 'success');
+    await loadLiveTrades(true);
+  } catch (err) {
+    toast('Manage manually failed: ' + err.message, 'error');
+  }
+}
+
+// Polling interval for live trades tab under Today
+setInterval(() => {
+  if (activeTab === 'today' && activeStrategy === 'live') {
+    loadLiveTrades();
+  }
+}, 2500);
+
+// Background badge count updater
+setInterval(() => {
+  if (!(activeTab === 'today' && activeStrategy === 'live')) {
+    fetch('/api/live_trades')
+      .then(r => r.json())
+      .then(d => { if (d && d.stats) updateLiveNavBadge(d.stats); })
+      .catch(() => {});
+  }
+}, 8000);
+
+// Pre-load on launch
+setTimeout(() => loadLiveTrades(), 1200);
+
+
 function initSocket() {
   if (typeof io !== 'function') {
     console.warn('Socket.IO client not loaded — live updates disabled (summary polling still active)');
@@ -5194,17 +6066,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }).catch(() => {});
   loadSystemStatus();
   startSummaryPolling();
-  // Ensure MEIC panel visible on first load (inline display wins over any stale CSS)
-  setStrategyPanelVisible(document.getElementById('strategy-meic'), activeStrategy === 'meic');
-  setStrategyPanelVisible(document.getElementById('strategy-manual'), activeStrategy === 'manual');
-  setStrategyPanelVisible(document.getElementById('strategy-clone-trades'), activeStrategy === 'clone_trades');
-  setStrategyPanelVisible(document.getElementById('strategy-skyline'), activeStrategy === 'skyline');
-  setStrategyPanelVisible(document.getElementById('strategy-perma-bull'), activeStrategy === 'perma-bull');
-  setStrategyPanelVisible(document.getElementById('strategy-mean-reversion'), activeStrategy === 'mean_reversion');
-  setStrategyPanelVisible(document.getElementById('strategy-iron-fly'), activeStrategy === 'iron_fly');
-  setStrategyPanelVisible(document.getElementById('strategy-iron-fly-xsp'), activeStrategy === 'iron_fly_xsp');
-  setStrategyPanelVisible(document.getElementById('strategy-drma-hm'), activeStrategy === 'drma_hm');
-  setStrategyPanelVisible(document.getElementById('strategy-drma-stocks'), activeStrategy === 'drma_stocks');
+  // Ensure strategy panel visible on first load
+  showStrategy(activeStrategy);
   const planWrap = document.getElementById('session-plan-table-wrap');
   if (planWrap) {
     planWrap.addEventListener('input', onPlanFieldEdit);
@@ -5222,7 +6085,10 @@ function showTab(tab) {
     if (el) el.style.display = (t === tab) ? '' : 'none';
   });
   document.querySelectorAll('#mainTabs .nav-item').forEach((li, i) => {
-    li.querySelector('.nav-link')?.classList.toggle('active', MAIN_TABS[i] === tab);
+    const link = li.querySelector('.nav-link');
+    if (!link) return;
+    const tabKey = link.getAttribute('data-tab') || MAIN_TABS[i];
+    link.classList.toggle('active', tabKey === tab);
   });
   if (tab === 'history') loadHistory();
   if (tab === 'gex') gexInit();
@@ -5235,6 +6101,7 @@ function showTab(tab) {
   if (tab === 'today' && activeStrategy === 'iron_fly_xsp') loadIronFlyXsp();
   if (tab === 'today' && activeStrategy === 'drma_hm') loadDrmaHm();
   if (tab === 'today' && activeStrategy === 'drma_stocks') loadDrmaStocks();
+  if (tab === 'today' && activeStrategy === 'live') loadLiveTrades();
   if (tab === 'today' && activeStrategy === 'clone_trades') loadCloneTrades();
   if (tab === 'today' && activeStrategy === 'inverse_meic') loadInverseMeic();
 }
@@ -5242,6 +6109,10 @@ function showTab(tab) {
 function showStrategy(s) {
   showTab('today');
   activeStrategy = s;
+  try {
+    localStorage.setItem('meic_active_strategy', s);
+  } catch (e) {}
+  const liveEl = document.getElementById('strategy-live');
   const meicEl = document.getElementById('strategy-meic');
   const manualEl = document.getElementById('strategy-manual');
   const cloneTradesEl = document.getElementById('strategy-clone-trades');
@@ -5254,6 +6125,7 @@ function showStrategy(s) {
   const drmaStocksEl = document.getElementById('strategy-drma-stocks');
   const inverseMeicEl = document.getElementById('strategy-inverse-meic');
   const pnlRow = document.getElementById('pnl-by-strategy-row');
+  setStrategyPanelVisible(liveEl, s === 'live');
   setStrategyPanelVisible(meicEl, s === 'meic');
   setStrategyPanelVisible(manualEl, s === 'manual');
   setStrategyPanelVisible(cloneTradesEl, s === 'clone_trades');
@@ -5291,10 +6163,14 @@ function showStrategy(s) {
   }
   // Keep summary row visible so the tab never looks empty below the sub-tabs
   if (pnlRow) pnlRow.style.display = '';
-  const strategyKeys = ['meic', 'manual', 'clone_trades', 'skyline', 'perma-bull', 'mean_reversion', 'iron_fly', 'iron_fly_xsp', 'drma_hm', 'drma_stocks', 'inverse_meic'];
+  const strategyKeys = ['live', 'meic', 'manual', 'clone_trades', 'skyline', 'perma-bull', 'mean_reversion', 'iron_fly', 'iron_fly_xsp', 'drma_hm', 'drma_stocks', 'inverse_meic'];
   document.querySelectorAll('#strategyTabs .nav-link').forEach((el, i) => {
-    el.classList.toggle('active', strategyKeys[i] === s);
+    const stratKey = el.getAttribute('data-strategy') || strategyKeys[i];
+    el.classList.toggle('active', stratKey === s);
   });
+  if (s === 'live') {
+    loadLiveTrades();
+  }
   if (s === 'clone_trades') {
     loadCloneTrades();
     stopSkylinePolling();
@@ -6532,17 +7408,43 @@ function gridRowHasData(s) {
 const MEIC_GRID_COL_COUNT = 17;
 const MANUAL_GRID_COL_COUNT = 19;
 
+function msFormatStrikePair(s1, s2, sideOrType) {
+  const k1 = Number(s1);
+  const k2 = Number(s2);
+  if (!Number.isFinite(k1) || !Number.isFinite(k2) || k1 <= 0 || k2 <= 0) {
+    return [s1, s2];
+  }
+  const s = String(sideOrType || '').toUpperCase();
+  const isPut = s.includes('_P') || s.endsWith('P') || s.startsWith('P') || s.includes('PUT');
+  const isCall = !isPut && (s.includes('_C') || s.endsWith('C') || s.startsWith('C') || s.includes('CALL'));
+  if (isCall) {
+    return [Math.min(k1, k2), Math.max(k1, k2)];
+  } else {
+    return [Math.max(k1, k2), Math.min(k1, k2)];
+  }
+}
+
+function msFormatStrikes(s1, s2, sideOrType, sep = ' / ') {
+  const [first, second] = msFormatStrikePair(s1, s2, sideOrType);
+  return `${first}${sep}${second}`;
+}
+
 function gridLegBadge(s, hasData) {
-  const letter = s.side === 'P' ? 'P' : 'C';
-  const badgeCls = s.side === 'P'
-    ? 'badge bg-primary grid-leg-badge'
-    : 'badge bg-warning text-dark grid-leg-badge';
+  const rawSide = String(s.side || 'P').toUpperCase();
+  const isPut = rawSide.startsWith('P');
+  const isDebit = rawSide === 'PDS' || rawSide === 'CDS' || s.spread_type === 'debit';
+  const letter = isDebit ? (isPut ? 'PDS' : 'CDS') : (isPut ? 'P' : 'C');
+  const badgeCls = isPut
+    ? (isDebit ? 'badge bg-info text-dark grid-leg-badge' : 'badge bg-primary grid-leg-badge')
+    : (isDebit ? 'badge bg-success grid-leg-badge' : 'badge bg-warning text-dark grid-leg-badge');
   if (!hasData || !s.short_strike) {
     return `<span class="${badgeCls}">${letter}</span>`;
   }
-  const short = s.short_strike;
-  const long = s.long_strike || '–';
-  return `<span class="${badgeCls}">${letter}<span class="grid-leg-strikes">${short}/<br class="d-md-none">${long}</span></span>`;
+  if (String(s.short_strike).includes('/')) {
+    return `<span class="${badgeCls}">${letter}<span class="grid-leg-strikes">${s.short_strike}</span></span>`;
+  }
+  const [first, second] = msFormatStrikePair(s.short_strike, s.long_strike, s.side);
+  return `<span class="${badgeCls}">${letter}<span class="grid-leg-strikes">${first}/<br class="d-md-none">${second}</span></span>`;
 }
 
 function renderGrid(grid) {
@@ -7359,14 +8261,58 @@ function msIsButterfly() {
   return s.endsWith('_bf');
 }
 
+function msIsDebitVertical() {
+  const typeSelect = document.getElementById('ms-place-spread-type');
+  if (typeSelect) {
+    return typeSelect.value === 'debit';
+  }
+  const s = document.getElementById('ms-structure')?.value || '';
+  return s === 'debit_p' || s === 'debit_c';
+}
+
+function msFormatPctDisplay(ratio, fallbackPct = 50) {
+  if (ratio == null || !Number.isFinite(Number(ratio))) return fallbackPct;
+  const r = Number(ratio);
+  return +(r * 100).toFixed(2);
+}
+
+function msRowSlPctDisplay(r) {
+  if (!r) return 100;
+  if (r.stop_loss_pct != null && Number.isFinite(Number(r.stop_loss_pct)) && Number(r.stop_loss_pct) > 0) {
+    return +(Number(r.stop_loss_pct) * 100).toFixed(2);
+  }
+  const isDebit = r.spread_type === 'debit' || r.side === 'PDS' || r.side === 'CDS' || r.structure_type === 'debit_p' || r.structure_type === 'debit_c';
+  const mult = Number(r.stop_multiplier || (isDebit ? 0.5 : 2.0));
+  if (isDebit) {
+    return +((Math.max(0.01, 1.0 - mult)) * 100).toFixed(2);
+  }
+  return +((Math.max(0.05, mult - 1.0)) * 100).toFixed(2);
+}
+
 function msOnStructureChange() {
   const bf = msIsButterfly();
   const struct = document.getElementById('ms-structure').value;
+  const isCall = struct === 'vertical_c';
   const widthInput = document.getElementById('ms-width');
   const widthLabel = document.getElementById('ms-width-label');
   const targetLabel = document.getElementById('ms-target-label');
   const limitLabel = document.getElementById('ms-limit-label');
   const targetInput = document.getElementById('ms-target');
+  const typeSelect = document.getElementById('ms-place-spread-type');
+  if (typeSelect) {
+    const curVal = typeSelect.value || 'credit';
+    if (isCall) {
+      typeSelect.innerHTML = `
+        <option value="credit"${curVal === 'credit' ? ' selected' : ''}>Credit Spread (CCS)</option>
+        <option value="debit"${curVal === 'debit' ? ' selected' : ''}>Debit Spread (CDS)</option>
+      `;
+    } else {
+      typeSelect.innerHTML = `
+        <option value="credit"${curVal === 'credit' ? ' selected' : ''}>Credit Spread (PCS)</option>
+        <option value="debit"${curVal === 'debit' ? ' selected' : ''}>Debit Spread (PDS)</option>
+      `;
+    }
+  }
   document.querySelectorAll('.ms-vertical-only').forEach(el => el.classList.toggle('d-none', bf));
   document.getElementById('ms-place-hint').classList.toggle('d-none', bf);
   document.getElementById('ms-bf-hint').classList.toggle('d-none', !bf);
@@ -7386,10 +8332,39 @@ function msOnStructureChange() {
     widthLabel.textContent = 'Width';
     document.getElementById('ms-otm-hint').textContent =
       'Searches whole downloaded chain (Chain ± pts). Widen chain band for 1+ DTE if needed.';
+    msOnPlaceSpreadTypeChange();
+  }
+}
+
+function msOnPlaceSpreadTypeChange() {
+  if (msIsButterfly()) return;
+  const isDebit = msIsDebitVertical();
+  const limitLabel = document.getElementById('ms-limit-label');
+  const targetLabel = document.getElementById('ms-target-label');
+  const targetInput = document.getElementById('ms-target');
+  const stopInput = document.getElementById('ms-place-stop');
+  const ptInput = document.getElementById('ms-place-pt');
+  const chaseOpt = document.getElementById('ms-place-chase-opt');
+  const chaseFloorLabel = document.getElementById('ms-place-chase-floor-label');
+  if (isDebit) {
+    targetLabel.textContent = 'Target debit $';
+    limitLabel.textContent = 'Limit debit';
+    if (!targetInput.value || targetInput.value === '0.60') targetInput.value = '1.50';
+    if (stopInput) stopInput.value = '50';
+    if (ptInput) ptInput.value = '100';
+    if (chaseOpt) chaseOpt.textContent = 'Reprice same spread (+$0.05)';
+    if (chaseFloorLabel) chaseFloorLabel.textContent = 'Chase ceiling $';
+  } else {
     targetLabel.textContent = 'Target credit $';
     limitLabel.textContent = 'Limit credit';
-    if (struct === 'vertical_c') targetInput.value = '0.60';
-    else targetInput.value = '0.60';
+    if (!targetInput.value || targetInput.value === '1.50') targetInput.value = '0.60';
+    if (stopInput) stopInput.value = '100';
+    if (ptInput) ptInput.value = '50';
+    if (chaseOpt) chaseOpt.textContent = 'Reprice same spread (−$0.05)';
+    if (chaseFloorLabel) chaseFloorLabel.textContent = 'Chase floor $';
+  }
+  if (msSelected) {
+    msSelectCandidate(msSelected);
   }
 }
 
@@ -7533,19 +8508,26 @@ function msToggleChaseFields() {
 function msSelectCandidate(c) {
   msSelected = c;
   const bf = msIsButterfly();
-  const price = bf ? c.market_price : c.market_credit;
+  const isDebit = msIsDebitVertical();
+  const price = bf ? c.market_price : (isDebit ? (c.market_debit != null ? c.market_debit : Math.max(0.05, Math.abs(document.getElementById('ms-width').value - c.market_credit))) : c.market_credit);
   if (bf) {
     document.getElementById('ms-selected-label').textContent =
       `${c.strike_label} (${price.toFixed(2)} mkt)`;
   } else {
+    const struct = document.getElementById('ms-structure').value;
+    const strikes = msFormatStrikes(c.short_strike, c.long_strike, struct);
     document.getElementById('ms-selected-label').textContent =
-      `${c.short_strike} / ${c.long_strike} (${price.toFixed(2)} mkt)`;
+      `${strikes} (${price.toFixed(2)} mkt)`;
   }
   document.getElementById('ms-limit').value = price.toFixed(2);
   document.getElementById('ms-place-qty').value = document.getElementById('ms-qty').value;
   const limit = price;
   if (!bf) {
-    document.getElementById('ms-place-chase-floor').value = Math.max(0.05, limit - 0.20).toFixed(2);
+    if (isDebit) {
+      document.getElementById('ms-place-chase-floor').value = (limit + 0.20).toFixed(2);
+    } else {
+      document.getElementById('ms-place-chase-floor').value = Math.max(0.05, limit - 0.20).toFixed(2);
+    }
   }
   document.getElementById('ms-place-btn').disabled = !!c.overlap_warning;
   document.querySelectorAll('.ms-cand-cb').forEach(cb => {
@@ -7612,7 +8594,8 @@ function msHandleScanResponse(d, isLoadAndScan = false) {
   const bf = d.scan_kind === 'butterfly';
   tbody.innerHTML = d.candidates.map((c, i) => {
     const price = bf ? c.market_price : c.market_credit;
-    const strikes = bf ? c.strike_label : `${c.short_strike} / ${c.long_strike}`;
+    const struct = document.getElementById('ms-structure').value;
+    const strikes = bf ? c.strike_label : msFormatStrikes(c.short_strike, c.long_strike, struct);
     const leg1 = bf ? c.wing_low_mid.toFixed(2) : c.short_mid.toFixed(2);
     const leg2 = bf ? c.wing_high_mid.toFixed(2) : c.long_mid.toFixed(2);
     const warn = bf ? '' : (c.overlap_warning ? '<span class="ms-warn-label">flip conflict</span>' : '');
@@ -7718,20 +8701,27 @@ function msPlacePlanFields() {
   const unfilled = document.getElementById('ms-place-unfilled').value || 'none';
   const chase = unfilled === 'chase_same_trade';
   const chaseMax = chase ? parseInt(document.getElementById('ms-place-chase-max').value, 10) || 0 : 0;
+  const isDebit = msIsDebitVertical();
   const ptEl = document.getElementById('ms-place-pt');
-  let ptVal = ptEl ? parseFloat(ptEl.value) : 50;
-  if (!Number.isFinite(ptVal) || ptVal <= 0) ptVal = 50;
-  const ptPct = ptVal > 1.0 ? ptVal / 100.0 : ptVal;
+  let ptVal = ptEl ? parseFloat(ptEl.value) : (isDebit ? 100 : 50);
+  if (!Number.isFinite(ptVal) || ptVal <= 0) ptVal = isDebit ? 100 : 50;
+  const ptPct = ptVal / 100.0;
   const base = {
     on_unfilled: unfilled,
     fill_wait_sec: parseInt(document.getElementById('ms-place-fill-wait').value, 10) || 5,
     max_attempts: chase ? 1 + chaseMax : 1,
     profit_target_pct: ptPct,
+    spread_type: isDebit ? 'debit' : 'credit',
   };
   if (msIsButterfly()) return base;
+  let slVal = parseFloat(document.getElementById('ms-place-stop').value);
+  if (!Number.isFinite(slVal) || slVal <= 0) slVal = isDebit ? 50 : 100;
+  const slPct = slVal / 100.0;
+  const stopMult = isDebit ? Math.max(0.0, 1.0 - slPct) : (1.0 + slPct);
   return {
     ...base,
-    stop_multiplier: parseFloat(document.getElementById('ms-place-stop').value) || 2,
+    stop_loss_pct: slPct,
+    stop_multiplier: stopMult,
     chase_floor: chase ? parseFloat(document.getElementById('ms-place-chase-floor').value) || 0 : 0,
     chase_max_attempts: chaseMax,
   };
@@ -7746,9 +8736,43 @@ async function msPlace() {
     payload.limit_price = parseFloat(document.getElementById('ms-limit').value);
     payload.limit_credit = payload.limit_price;
   } else {
-    payload.short_strike = msSelected.short_strike;
-    payload.long_strike = msSelected.long_strike;
-    payload.limit_credit = parseFloat(document.getElementById('ms-limit').value);
+    const isDebit = msIsDebitVertical();
+    const struct = document.getElementById('ms-structure').value;
+    const isCall = struct === 'vertical_c';
+    const k1 = Number(msSelected.short_strike);
+    const k2 = Number(msSelected.long_strike);
+    const kMin = Math.min(k1, k2);
+    const kMax = Math.max(k1, k2);
+
+    if (isCall) {
+      if (isDebit) {
+        payload.side = 'CDS';
+        payload.structure_type = 'debit_c';
+        payload.long_strike = kMin;
+        payload.short_strike = kMax;
+      } else {
+        payload.side = 'C';
+        payload.structure_type = 'vertical_c';
+        payload.short_strike = kMin;
+        payload.long_strike = kMax;
+      }
+    } else {
+      if (isDebit) {
+        payload.side = 'PDS';
+        payload.structure_type = 'debit_p';
+        payload.long_strike = kMax;
+        payload.short_strike = kMin;
+      } else {
+        payload.side = 'P';
+        payload.structure_type = 'vertical_p';
+        payload.short_strike = kMax;
+        payload.long_strike = kMin;
+      }
+    }
+    const limit = parseFloat(document.getElementById('ms-limit').value);
+    payload.limit_credit = limit;
+    payload.limit_debit = limit;
+    payload.limit_price = limit;
   }
   payload.quantity = parseInt(document.getElementById('ms-place-qty').value, 10);
   const btn = document.getElementById('ms-place-btn');
@@ -7985,9 +9009,10 @@ function openMsDuplicateModal(filename) {
   const liveSpread = (r.cur_spread != null && r.cur_spread > 0) ? Number(r.cur_spread).toFixed(2) : entryCredit;
   const stopMult = (r.stop_multiplier != null && r.stop_multiplier > 0) ? r.stop_multiplier : 2.0;
 
+  const strikesDisplay = String(shortStrike).includes('/') ? shortStrike : msFormatStrikes(shortStrike, longStrike, side);
   document.getElementById('modal-ms-dup-filename').value = filename;
   document.getElementById('modal-ms-dup-lot').textContent = lot;
-  document.getElementById('modal-ms-dup-leg').textContent = `${side} ${shortStrike}/${longStrike}`;
+  document.getElementById('modal-ms-dup-leg').textContent = `${side} ${strikesDisplay}`;
   document.getElementById('modal-ms-dup-expiry').textContent = expiry || '0DTE';
   document.getElementById('modal-ms-dup-state').textContent = state;
   document.getElementById('modal-ms-dup-orig-credit').textContent = `$${entryCredit}`;
@@ -7999,7 +9024,7 @@ function openMsDuplicateModal(filename) {
   const origPt = r.profit_target_pct != null ? (r.profit_target_pct <= 1.0 ? Math.round(r.profit_target_pct * 100) : r.profit_target_pct) : 50;
   const ptInput = document.getElementById('modal-ms-dup-pt-pct');
   if (ptInput) ptInput.value = origPt;
-  document.getElementById('modal-ms-dup-summary-strikes').textContent = `${shortStrike} / ${longStrike} ${side}`;
+  document.getElementById('modal-ms-dup-summary-strikes').textContent = `${strikesDisplay} ${side}`;
 
   const modalEl = document.getElementById('modal-ms-duplicate');
   if (modalEl) {
@@ -8098,10 +9123,11 @@ function openScaleOutModal(filename) {
   const liveSpread = (r.cur_spread != null && r.cur_spread > 0) ? Number(r.cur_spread).toFixed(2) : entryCredit;
   const stopLabel = r.stop_label || (r.stop_price ? `$${Number(r.stop_price).toFixed(2)}` : 'Active Stop');
 
+  const strikesDisplay = String(shortStrike).includes('/') ? shortStrike : msFormatStrikes(shortStrike, longStrike, side);
   document.getElementById('modal-scale-filename').value = filename;
   document.getElementById('modal-scale-holding-val').value = holding;
   document.getElementById('modal-scale-lot').textContent = lot;
-  document.getElementById('modal-scale-leg').textContent = `${side} ${shortStrike}/${longStrike}`;
+  document.getElementById('modal-scale-leg').textContent = `${side} ${strikesDisplay}`;
   document.getElementById('modal-scale-state').textContent = state;
   document.getElementById('modal-scale-holding').textContent = `${holding} contracts`;
   document.getElementById('modal-scale-orig-credit').textContent = `$${entryCredit}`;
@@ -10098,7 +11124,31 @@ function renderPermaBull(data, cfg) {
   const pnlLabel = document.getElementById('perma-bull-pnl-label');
   const cfgEl = document.getElementById('perma-bull-config-summary');
   const pauseBtn = document.getElementById('perma-bull-pause-btn');
+  const manualBtn = document.getElementById('perma-bull-manual-btn');
   const eff = (cfg && cfg.effective) || {};
+  const isManual = !!(trade && trade.manual_management);
+  const isOpen = trade && String(trade.status || '').toLowerCase() === 'open';
+
+  if (manualBtn) {
+    manualBtn.style.display = 'inline-block';
+    if (!trade || !isOpen) {
+      manualBtn.disabled = true;
+      manualBtn.className = 'btn btn-sm btn-outline-secondary';
+      manualBtn.innerHTML = '<i class="bi bi-hand-index-thumb"></i> Manage Manually';
+      manualBtn.title = trade ? 'Trade is closed (no active stop order to disarm)' : 'No active trade today';
+    } else {
+      manualBtn.disabled = false;
+      if (isManual) {
+        manualBtn.className = 'btn btn-sm btn-warning';
+        manualBtn.innerHTML = '<i class="bi bi-person-fill"></i> Manually Managed (Re-arm)';
+        manualBtn.title = 'Manual control is active (stop/OCO disarmed). Click to re-arm automation.';
+      } else {
+        manualBtn.className = 'btn btn-sm btn-outline-info';
+        manualBtn.innerHTML = '<i class="bi bi-hand-index-thumb"></i> Manage Manually';
+        manualBtn.title = 'Disarm resting OCO/stop so you can manually roll or close.';
+      }
+    }
+  }
 
   if (navBadge) navBadge.textContent = paper ? 'PAPER' : 'LIVE';
   if (titleEl) titleEl.textContent = paper ? 'Perma Bull PCS (Paper)' : 'Perma Bull PCS (Live)';
@@ -10148,7 +11198,7 @@ function renderPermaBull(data, cfg) {
   pnlEl.className = 'fs-4 fw-bold mt-1 ' + (pnl >= 0 ? 'text-success' : 'text-danger');
 
   if (!trade) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:#94a3b8;">No spread today</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-3" style="color:#94a3b8;">No spread today</td></tr>';
   } else {
     const entry = trade.entry || {};
     const shortLeg = trade.short_leg || {};
@@ -10156,13 +11206,22 @@ function renderPermaBull(data, cfg) {
     const credit = entry.net_credit != null ? entry.net_credit : entry.limit_credit;
     const status = String(trade.status || '').toLowerCase();
     const badgeClass = status === 'open' ? 'bg-success' : (status === 'closed' ? 'bg-secondary' : 'bg-primary');
+    const isManualTrade = !!trade.manual_management;
+    let statusBadge = `<span class="badge ${badgeClass}">${(trade.status || '—').toUpperCase()}</span>`;
+    if (status === 'open' && isManualTrade) {
+      statusBadge = `<span class="badge bg-warning text-dark"><i class="bi bi-person-fill"></i> MANUALLY MANAGED</span>`;
+    }
+    const actionCell = (status === 'open')
+      ? `<button class="btn btn-sm ${isManualTrade ? 'btn-outline-warning' : 'btn-outline-info'}" style="font-size:0.75rem;padding:2px 8px;" onclick="permaBullToggleManageManually()" title="${isManualTrade ? 'Click to re-arm automated stop/PT monitoring' : 'Disarm OCO/Stop order so you can manually roll or close'}">${isManualTrade ? 'Re-arm Auto' : 'Manage Manually'}</button>`
+      : '<span class="text-muted">—</span>';
     tbody.innerHTML = `
       <tr>
         <td class="fw-semibold text-light">PCS</td>
         <td class="font-monospace text-light">${shortLeg.strike || '—'}/${longLeg.strike || '—'}</td>
-        <td><span class="badge ${badgeClass}">${(trade.status || '—').toUpperCase()}</span></td>
+        <td>${statusBadge}</td>
         <td class="font-monospace text-light">${credit != null ? '$' + Number(credit).toFixed(2) : '—'}</td>
         <td class="${pnlClass(pnl)} fw-bold font-monospace">${fmtPnl(pnl)}</td>
+        <td>${actionCell}</td>
       </tr>
     `;
   }
@@ -10204,6 +11263,29 @@ async function permaBullTogglePause() {
     body: method === 'POST' ? JSON.stringify(body) : undefined,
   });
   loadPermaBull();
+}
+
+async function permaBullToggleManageManually() {
+  const btn = document.getElementById('perma-bull-manual-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/perma_bull/manage_manually', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    const d = await res.json();
+    if (d.status === 'ok') {
+      toast(d.message || (d.manual_management ? 'Switched to Manual Management' : 'Re-armed Automation'), 'info');
+      loadPermaBull();
+    } else {
+      toast(d.error || 'Failed to toggle manual management', 'error');
+    }
+  } catch (err) {
+    toast('Error toggling manual management: ' + err, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -11604,6 +12686,219 @@ function renderDrmaHm(data, cfg) {
     pnlSub.textContent = `Realized: ${fmtPnl(liveRealized + paperRealized)} | Open: ${fmtPnl(liveOpen + paperOpen)}`;
   }
 
+  // ── Render Sub-Strategy Performance & Subtotals Table ─────────────────
+  const subtotalsTbody = document.getElementById('drma-hm-subtotals-tbody');
+  const subtotalsCaption = document.getElementById('drma-hm-subtotals-caption');
+
+  if (subtotalsTbody) {
+    function classifyDrmaTrade(t) {
+      const sub = String(t.sub_strategy || '').toUpperCase();
+      if (sub.includes('FUT') || sub === 'FUTURES') return 'FUTURES';
+      if (sub.includes('DIR') && !sub.includes('NON')) return 'DIRECTIONAL';
+      if (sub.includes('NON') || sub.includes('CREDIT') || sub.includes('IC')) return 'NON_DIRECTIONAL';
+
+      const struct = String(t.structure_type || '').toLowerCase();
+      const tt = String(t.trade_type || '').toUpperCase();
+      if (struct === 'futures' || tt === 'DIRECTIONAL_FUTURES' || tt === 'FUTURES') return 'FUTURES';
+      if (tt === 'DIRECTIONAL') return 'DIRECTIONAL';
+      if (tt === 'NON_DIRECTIONAL') return 'NON_DIRECTIONAL';
+
+      const lot = String(t.lot || t.trade_id || '').toLowerCase();
+      if (lot.startsWith('fut_')) return 'FUTURES';
+      if (lot.startsWith('dir_')) return 'DIRECTIONAL';
+      if (lot.startsWith('credit_') || lot.startsWith('ic_')) return 'NON_DIRECTIONAL';
+
+      return 'DIRECTIONAL';
+    }
+
+    const processedTradeIds = new Set();
+    const todayTradesList = [];
+
+    for (const t of allTodayTrades) {
+      const tid = t.trade_id || JSON.stringify(t);
+      if (!processedTradeIds.has(tid)) {
+        processedTradeIds.add(tid);
+        todayTradesList.push(t);
+      }
+    }
+
+    for (const h of history) {
+      const hDate = h.date || (h.entered_at ? h.entered_at.slice(0, 10) : (h.exited_at ? h.exited_at.slice(0, 10) : data.date));
+      if (!data.date || hDate === data.date) {
+        const tid = h.trade_id || JSON.stringify(h);
+        if (!processedTradeIds.has(tid)) {
+          processedTradeIds.add(tid);
+          todayTradesList.push(h);
+        }
+      }
+    }
+
+    const subStats = {
+      DIRECTIONAL: {
+        name: 'Directional Spreads',
+        desc: '0DTE SPX Debit (Bull Call / Bear Put)',
+        icon: '<i class="bi bi-graph-up-arrow me-2" style="color:#38bdf8;"></i>',
+        configPaper: dirPaper,
+        live: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+        paper: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+      },
+      NON_DIRECTIONAL: {
+        name: 'Non-Directional Spreads',
+        desc: '0DTE SPX Credit (Bull Put / Bear Call / IC)',
+        icon: '<i class="bi bi-shield-check me-2" style="color:#10b981;"></i>',
+        configPaper: nonDirPaper,
+        live: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+        paper: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+      },
+      FUTURES: {
+        name: 'Directional Futures',
+        desc: '/ES Outright Scalp (5pt PT / 5pt SL)',
+        icon: '<i class="bi bi-lightning-charge me-2" style="color:#fbbf24;"></i>',
+        configPaper: futPaper,
+        live: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+        paper: { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 },
+      },
+    };
+
+    for (const t of todayTradesList) {
+      const key = classifyDrmaTrade(t);
+      const item = subStats[key] || subStats.DIRECTIONAL;
+      const isP = t.paper !== false;
+      const b = isP ? item.paper : item.live;
+      const isClosed = t.status === 'closed' || t.closed_at != null;
+
+      if (isClosed) {
+        const realPnl = Number(t.realized_pnl_dollars ?? t.pnl_dollars ?? t.pnl ?? 0);
+        b.closed += 1;
+        b.realized += realPnl;
+        if (realPnl > 0.001) b.wins += 1;
+        else if (realPnl < -0.001) b.losses += 1;
+      } else {
+        const openPnl = Number(t.unrealized_pnl_dollars ?? t.current_pnl_dollars ?? 0);
+        b.active += 1;
+        b.open += openPnl;
+      }
+    }
+
+    let rowsHtml = '';
+    const liveTot = { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 };
+    const paperTot = { active: 0, closed: 0, wins: 0, losses: 0, realized: 0, open: 0 };
+
+    function renderSubRow(stratObj, isPaperMode) {
+      const b = isPaperMode ? stratObj.paper : stratObj.live;
+      const totPnl = b.realized + b.open;
+      const winRate = b.closed > 0 ? ((b.wins / b.closed) * 100).toFixed(0) + '%' : '—';
+      const modeBadge = isPaperMode
+        ? '<span class="badge bg-secondary" style="font-size:0.7rem;letter-spacing:0.04em;">PAPER</span>'
+        : '<span class="badge bg-danger text-light" style="font-size:0.7rem;letter-spacing:0.04em;">LIVE</span>';
+      const totClass = totPnl > 0.001 ? 'text-success' : (totPnl < -0.001 ? 'text-danger' : 'text-muted');
+      const realClass = b.realized > 0.001 ? 'text-success' : (b.realized < -0.001 ? 'text-danger' : 'text-muted');
+      const openClass = b.open > 0.001 ? 'text-success' : (b.open < -0.001 ? 'text-danger' : 'text-muted');
+
+      return `<tr>
+        <td>
+          <div class="d-flex align-items-center">
+            ${stratObj.icon}
+            <div>
+              <span class="fw-semibold text-light">${stratObj.name}</span>
+              <small class="text-muted d-block" style="font-size:0.72rem;">${stratObj.desc}</small>
+            </div>
+          </div>
+        </td>
+        <td class="text-center">${modeBadge}</td>
+        <td class="text-center font-monospace">${b.active > 0 ? `<span class="badge bg-warning text-dark">${b.active}</span>` : '<span class="text-muted">0</span>'}</td>
+        <td class="text-center font-monospace">${b.closed} <span class="text-muted small">(${b.wins}W / ${b.losses}L)</span></td>
+        <td class="text-center font-monospace ${b.wins > 0 ? 'text-success' : (b.losses > 0 ? 'text-danger' : 'text-muted')}">${winRate}</td>
+        <td class="text-end font-monospace ${realClass}">${fmtPnl(b.realized)}</td>
+        <td class="text-end font-monospace ${openClass}">${fmtPnl(b.open)}</td>
+        <td class="text-end font-monospace fw-bold ${totClass}">${fmtPnl(totPnl)}</td>
+      </tr>`;
+    }
+
+    // Accumulate and render rows
+    for (const key of ['DIRECTIONAL', 'NON_DIRECTIONAL', 'FUTURES']) {
+      const item = subStats[key];
+      liveTot.active += item.live.active;
+      liveTot.closed += item.live.closed;
+      liveTot.wins += item.live.wins;
+      liveTot.losses += item.live.losses;
+      liveTot.realized += item.live.realized;
+      liveTot.open += item.live.open;
+
+      paperTot.active += item.paper.active;
+      paperTot.closed += item.paper.closed;
+      paperTot.wins += item.paper.wins;
+      paperTot.losses += item.paper.losses;
+      paperTot.realized += item.paper.realized;
+      paperTot.open += item.paper.open;
+
+      const showLive = !item.configPaper || (item.live.active > 0 || item.live.closed > 0);
+      const showPaper = item.configPaper || (item.paper.active > 0 || item.paper.closed > 0);
+
+      if (showLive) rowsHtml += renderSubRow(item, false);
+      if (showPaper) rowsHtml += renderSubRow(item, true);
+    }
+
+    const liveTotPnl = liveTot.realized + liveTot.open;
+    const paperTotPnl = paperTot.realized + paperTot.open;
+    const grandRealized = liveTot.realized + paperTot.realized;
+    const grandOpen = liveTot.open + paperTot.open;
+    const grandTotPnl = liveTotPnl + paperTotPnl;
+    const grandActive = liveTot.active + paperTot.active;
+    const grandClosed = liveTot.closed + paperTot.closed;
+    const grandWins = liveTot.wins + paperTot.wins;
+    const grandLosses = liveTot.losses + paperTot.losses;
+
+    const liveWinRate = liveTot.closed > 0 ? ((liveTot.wins / liveTot.closed) * 100).toFixed(0) + '%' : '—';
+    const paperWinRate = paperTot.closed > 0 ? ((paperTot.wins / paperTot.closed) * 100).toFixed(0) + '%' : '—';
+    const grandWinRate = grandClosed > 0 ? ((grandWins / grandClosed) * 100).toFixed(0) + '%' : '—';
+
+    rowsHtml += `<tr style="background:#221518 !important; border-top:2px solid #ef444455; font-weight:600;">
+      <td>
+        <span class="text-danger fw-bold"><i class="bi bi-broadcast me-2"></i>Live Trades Subtotal</span>
+      </td>
+      <td class="text-center"><span class="badge bg-danger" style="font-size:0.7rem;">ALL LIVE</span></td>
+      <td class="text-center font-monospace">${liveTot.active > 0 ? `<span class="badge bg-warning text-dark">${liveTot.active}</span>` : '<span class="text-muted">0</span>'}</td>
+      <td class="text-center font-monospace">${liveTot.closed} <span class="text-muted small">(${liveTot.wins}W / ${liveTot.losses}L)</span></td>
+      <td class="text-center font-monospace ${liveTot.wins > 0 ? 'text-success' : (liveTot.losses > 0 ? 'text-danger' : 'text-muted')}">${liveWinRate}</td>
+      <td class="text-end font-monospace ${liveTot.realized > 0.001 ? 'text-success' : (liveTot.realized < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(liveTot.realized)}</td>
+      <td class="text-end font-monospace ${liveTot.open > 0.001 ? 'text-success' : (liveTot.open < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(liveTot.open)}</td>
+      <td class="text-end font-monospace fw-bold ${liveTotPnl > 0.001 ? 'text-success' : (liveTotPnl < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(liveTotPnl)}</td>
+    </tr>`;
+
+    rowsHtml += `<tr style="background:#101e2c !important; border-top:1px solid #38bdf855; font-weight:600;">
+      <td>
+        <span class="text-info fw-bold"><i class="bi bi-journal-text me-2"></i>Paper Trades Subtotal</span>
+      </td>
+      <td class="text-center"><span class="badge bg-secondary" style="font-size:0.7rem;">ALL PAPER</span></td>
+      <td class="text-center font-monospace">${paperTot.active > 0 ? `<span class="badge bg-warning text-dark">${paperTot.active}</span>` : '<span class="text-muted">0</span>'}</td>
+      <td class="text-center font-monospace">${paperTot.closed} <span class="text-muted small">(${paperTot.wins}W / ${paperTot.losses}L)</span></td>
+      <td class="text-center font-monospace ${paperTot.wins > 0 ? 'text-success' : (paperTot.losses > 0 ? 'text-danger' : 'text-muted')}">${paperWinRate}</td>
+      <td class="text-end font-monospace ${paperTot.realized > 0.001 ? 'text-success' : (paperTot.realized < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(paperTot.realized)}</td>
+      <td class="text-end font-monospace ${paperTot.open > 0.001 ? 'text-success' : (paperTot.open < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(paperTot.open)}</td>
+      <td class="text-end font-monospace fw-bold ${paperTotPnl > 0.001 ? 'text-success' : (paperTotPnl < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(paperTotPnl)}</td>
+    </tr>`;
+
+    rowsHtml += `<tr style="background:#1b2130 !important; border-top:2px solid #64748b; font-weight:700;">
+      <td>
+        <span class="text-light fw-bold"><i class="bi bi-calculator me-2 text-warning"></i>Combined DRMA Total</span>
+      </td>
+      <td class="text-center"><span class="badge bg-primary" style="font-size:0.7rem;">TOTAL</span></td>
+      <td class="text-center font-monospace">${grandActive > 0 ? `<span class="badge bg-warning text-dark">${grandActive}</span>` : '<span class="text-muted">0</span>'}</td>
+      <td class="text-center font-monospace">${grandClosed} <span class="text-muted small">(${grandWins}W / ${grandLosses}L)</span></td>
+      <td class="text-center font-monospace ${grandWins > 0 ? 'text-success' : (grandLosses > 0 ? 'text-danger' : 'text-muted')}">${grandWinRate}</td>
+      <td class="text-end font-monospace ${grandRealized > 0.001 ? 'text-success' : (grandRealized < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(grandRealized)}</td>
+      <td class="text-end font-monospace ${grandOpen > 0.001 ? 'text-success' : (grandOpen < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(grandOpen)}</td>
+      <td class="text-end font-monospace fw-bold fs-6 ${grandTotPnl > 0.001 ? 'text-success' : (grandTotPnl < -0.001 ? 'text-danger' : 'text-muted')}">${fmtPnl(grandTotPnl)}</td>
+    </tr>`;
+
+    subtotalsTbody.innerHTML = rowsHtml;
+
+    if (subtotalsCaption) {
+      subtotalsCaption.textContent = `${todayTradesList.length} trade${todayTradesList.length === 1 ? '' : 's'} recorded today (${liveTot.active + liveTot.closed} Live, ${paperTot.active + paperTot.closed} Paper)`;
+    }
+  }
+
   // Confluence Indicators
   const spotEl = document.getElementById('drma-hm-spot-val');
   const maEl = document.getElementById('drma-hm-ma-val');
@@ -12604,18 +13899,121 @@ function setHistoryTickerFilter(ticker) {
 let lastCloneStatus = null;
 let clonePollTimer = null;
 let isEditingLadder = false;
-let activeCloneSubStrategyFilter = 'ALL'; // 'ALL', 'PC', 'Genie', 'Others'
-let activeCloneConfigSubStrat = 'PC'; // 'PC', 'Genie', 'Others'
+let activeCloneSubStrategyFilter = 'ALL'; // 'ALL', 'PC', 'TG', 'Genie', 'Others'
+let activeCloneConfigSubStrat = 'TG'; // 'PC', 'TG', 'Genie', 'Others'
+
+
+let cloneTrackedSubStratFilter = 'ALL';
+let cloneTrackedDateSortOrder = 'desc'; // Defaulted to descending (newest first)
+
+function onCloneTrackedFilterChange(val) {
+  cloneTrackedSubStratFilter = val;
+  if (lastCloneStatus) renderCloneTrades(lastCloneStatus);
+}
+
+function onCloneTrackedSortChange(val) {
+  cloneTrackedDateSortOrder = val;
+  if (lastCloneStatus) renderCloneTrades(lastCloneStatus);
+}
+
+function toggleCloneTrackedDateSort() {
+  cloneTrackedDateSortOrder = (cloneTrackedDateSortOrder === 'desc') ? 'asc' : 'desc';
+  const sortSelect = document.getElementById('clone-tracked-sort-order');
+  if (sortSelect) sortSelect.value = cloneTrackedDateSortOrder;
+  if (lastCloneStatus) renderCloneTrades(lastCloneStatus);
+}
+
+function getCloneSubKey(item) {
+  if (!item) return 'Others';
+  const rawCaller = (item.called_by || (item.raw_payload ? (item.raw_payload.calledBy || item.raw_payload.called_by) : '') || '').toString().trim().toLowerCase().replace(/[\s_\-]/g, '');
+  const rawSub = (item.sub_strategy || '').toString().trim().toUpperCase();
+  if (rawCaller === 'cowboy') return 'Cowboy';
+  if (rawCaller === 'genie') return 'Genie';
+  if (rawSub === 'TG' || rawCaller === 'tg') return 'TG';
+  if (rawSub === 'PC2' || rawCaller === 'pc2') return 'PC2';
+  if (rawSub === 'AI FLOWALGOS' || rawSub === 'AIFLOWALGOS') return 'AI FlowAlgos';
+  if (rawSub === 'PC' || rawCaller === 'pc' || rawSub === 'HUMAN ALERTERS') return 'PC';
+  return 'Others';
+}
+
+function matchCloneTrackedFilter(item, filterVal) {
+  if (!filterVal || filterVal === 'ALL') return true;
+  const rawCaller = (item.called_by || (item.raw_payload ? (item.raw_payload.calledBy || item.raw_payload.called_by) : '') || '').toString().trim().toLowerCase().replace(/[\s_\-]/g, '');
+  const rawSub = (item.sub_strategy || '').toString().trim().toUpperCase();
+
+  if (filterVal === 'Cowboy') {
+    return rawCaller === 'cowboy';
+  }
+  if (filterVal === 'Genie') {
+    return rawCaller === 'genie';
+  }
+  if (filterVal === 'AI FlowAlgos') {
+    return rawSub === 'AI FLOWALGOS' || rawSub === 'AIFLOWALGOS' || rawCaller === 'genie' || rawCaller === 'cowboy';
+  }
+  if (filterVal === 'TG') {
+    return rawSub === 'TG' || rawCaller === 'tg';
+  }
+  if (filterVal === 'PC2') {
+    return rawSub === 'PC2' || rawCaller === 'pc2';
+  }
+  if (filterVal === 'PC') {
+    return rawSub === 'PC' || rawCaller === 'pc' || rawSub === 'HUMAN ALERTERS';
+  }
+  if (filterVal === 'Others') {
+    return !['tg', 'pc', 'pc2', 'cowboy', 'genie'].includes(rawCaller) &&
+           !['TG', 'PC', 'PC2', 'AI FLOWALGOS', 'AIFLOWALGOS'].includes(rawSub);
+  }
+  return true;
+}
+
+function renderCloneSubBadge(item, modeBadge = '') {
+  if (!item) return `<span class="badge bg-secondary fw-bold">Unknown</span>`;
+  const rawCaller = (item.called_by || (item.raw_payload ? (item.raw_payload.calledBy || item.raw_payload.called_by) : '') || '').toString().trim();
+  const callerClean = rawCaller.toLowerCase().replace(/[\s_\-]/g, '');
+  const rawSub = (item.sub_strategy || '').toString().trim().toUpperCase();
+
+  let badgeHtml = '';
+  if (callerClean === 'cowboy' || rawSub === 'COWBOY') {
+    badgeHtml = `<span class="badge" style="background:#c2410c;color:#ffffff;font-weight:700;"><i class="bi bi-shield-shaded me-1"></i>Cowboy</span>`;
+  } else if (callerClean === 'genie' || rawSub === 'GENIE') {
+    badgeHtml = `<span class="badge" style="background:#0d9488;color:#ffffff;font-weight:700;"><i class="bi bi-magic me-1"></i>Genie</span>`;
+  } else if (rawSub === 'TG' || callerClean === 'tg') {
+    badgeHtml = `<span class="badge" style="background:#2563eb;color:#fff;font-weight:700;"><i class="bi bi-telegram me-1"></i>TG</span>`;
+  } else if (rawSub === 'PC2' || callerClean === 'pc2') {
+    badgeHtml = `<span class="badge" style="background:#7c3aed;color:#fff;font-weight:700;"><i class="bi bi-lightning-fill me-1"></i>PC2</span>`;
+  } else if (rawSub === 'PC' || callerClean === 'pc' || rawSub === 'HUMAN ALERTERS') {
+    badgeHtml = `<span class="badge bg-primary fw-bold"><i class="bi bi-cpu me-1"></i>PC</span>`;
+  } else if (rawSub === 'AI FLOWALGOS' || rawSub === 'AIFLOWALGOS') {
+    badgeHtml = `<span class="badge" style="background:#0d9488;color:#ffffff;font-weight:700;"><i class="bi bi-magic me-1"></i>AI Flow</span>`;
+  } else {
+    const disp = rawCaller || 'Others';
+    badgeHtml = `<span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace d-block" style="font-size:0.65rem;color:#cbd5e1;">${disp}</small>`;
+  }
+
+  if (item.is_flow_alt) {
+    badgeHtml += ` <span class="badge" style="background:#7c3aed;color:#ffffff;font-size:0.7rem;font-weight:700;"><i class="bi bi-tag-fill me-1"></i>ALT</span>`;
+  }
+
+  if (modeBadge) {
+    return `<div class="d-flex flex-column align-items-start gap-1">${badgeHtml}${modeBadge}</div>`;
+  }
+  return badgeHtml;
+}
+
+function matchCloneSubStrat(item, filterName) {
+  if (!filterName || filterName === 'ALL') return true;
+  return matchCloneTrackedFilter(item, filterName);
+}
 
 function setCloneSubStrategyFilter(filterName) {
   activeCloneSubStrategyFilter = filterName;
-  ['all', 'pc', 'genie', 'others'].forEach(k => {
+  ['all', 'pc', 'tg', 'genie', 'others'].forEach(k => {
     const btn = document.getElementById(`btn-substrat-${k}`);
     if (btn) {
       if (k.toUpperCase() === filterName.toUpperCase() || (k === 'all' && filterName === 'ALL')) {
-        btn.className = (k === 'pc' ? 'btn btn-primary fw-bold active' : (k === 'genie' ? 'btn btn-success fw-bold active' : (k === 'others' ? 'btn btn-secondary fw-bold active' : 'btn btn-info fw-bold active')));
+        btn.className = (k === 'pc' ? 'btn btn-primary fw-bold active' : (k === 'tg' ? 'btn btn-warning fw-bold active text-dark' : (k === 'genie' ? 'btn btn-success fw-bold active' : (k === 'others' ? 'btn btn-secondary fw-bold active' : 'btn btn-info fw-bold active'))));
       } else {
-        btn.className = (k === 'pc' ? 'btn btn-outline-primary fw-semibold' : (k === 'genie' ? 'btn btn-outline-success fw-semibold' : (k === 'others' ? 'btn btn-outline-secondary fw-semibold' : 'btn btn-outline-info fw-semibold')));
+        btn.className = (k === 'pc' ? 'btn btn-outline-primary fw-semibold' : (k === 'tg' ? 'btn btn-outline-warning fw-semibold' : (k === 'genie' ? 'btn btn-outline-success fw-semibold' : (k === 'others' ? 'btn btn-outline-secondary fw-semibold' : 'btn btn-outline-info fw-semibold'))));
       }
     }
   });
@@ -12653,45 +14051,71 @@ function onCloneExecutionModeChange(mode) {
 }
 
 function switchCloneConfigSubStrat(stratName) {
-  activeCloneConfigSubStrat = stratName;
-  ['pc', 'genie', 'others'].forEach(k => {
+  let normStrat = stratName;
+  activeCloneConfigSubStrat = normStrat;
+
+  const tabKeys = ['tg', 'pc', 'pc2', 'cowboy', 'genie', 'others'];
+  tabKeys.forEach(k => {
     const btn = document.getElementById(`cfg-tab-${k}`);
     if (btn) {
-      if (k.toLowerCase() === stratName.toLowerCase()) {
-        btn.className = 'btn btn-primary fw-bold';
+      let match = (k.toUpperCase() === normStrat.toUpperCase());
+
+      if (match) {
+        if (k === 'tg') { btn.className = 'btn btn-danger fw-bold'; btn.style.backgroundColor = ''; btn.style.borderColor = ''; }
+        else if (k === 'pc') { btn.className = 'btn btn-primary fw-bold'; btn.style.backgroundColor = ''; btn.style.borderColor = ''; }
+        else if (k === 'pc2') { btn.className = 'btn btn-primary fw-bold'; btn.style.backgroundColor = ''; btn.style.borderColor = ''; }
+        else if (k === 'cowboy') {
+          btn.className = 'btn fw-bold text-white';
+          btn.style.backgroundColor = '#c2410c';
+          btn.style.borderColor = '#c2410c';
+        }
+        else if (k === 'genie') {
+          btn.className = 'btn fw-bold text-white';
+          btn.style.backgroundColor = '#0d9488';
+          btn.style.borderColor = '#0d9488';
+        }
+        else { btn.className = 'btn btn-secondary fw-bold'; btn.style.backgroundColor = ''; btn.style.borderColor = ''; }
       } else {
         btn.className = 'btn btn-outline-secondary fw-semibold';
+        btn.style.backgroundColor = '';
+        btn.style.borderColor = '';
       }
     }
   });
 
   const labelEl = document.getElementById('clone-cfg-current-strat-label');
-  if (labelEl) labelEl.textContent = stratName;
+  if (labelEl) labelEl.textContent = normStrat;
 
   const descEl = document.getElementById('clone-cfg-sub-strat-desc');
   if (descEl) {
-    if (stratName === 'PC') {
+    if (normStrat === 'TG') {
+      descEl.innerHTML = '<span class="badge bg-danger me-2">LIVE TRADING</span> TG: Discretionary trader. Sizing: $200 Dollar Budget.';
+    } else if (normStrat === 'PC') {
       descEl.innerHTML = '<span class="badge bg-danger me-2">LIVE TRADING</span> Active live broker execution engine with 5-tier scaling ladder.';
-    } else if (stratName === 'Genie') {
-      descEl.innerHTML = '<span class="badge bg-info text-dark me-2">GENIE SUB-STRATEGY</span> Independent ladder scaling. Runs in Tracking Mode by default — alerts appear in live watchlist with Buy / Get In button.';
+    } else if (normStrat === 'PC2') {
+      descEl.innerHTML = '<span class="badge bg-danger me-2">LIVE TRADING</span> PC2 fast scalper with max alert price cap and ticker whitelist.';
+    } else if (normStrat === 'Cowboy') {
+      descEl.innerHTML = '<span class="badge me-2" style="background:#c2410c;color:#fff;">COWBOY</span> Cowboy flow alerts. Independent ladder scaling. Runs in Tracking Mode by default with Budget Alt generation.';
+    } else if (normStrat === 'Genie') {
+      descEl.innerHTML = '<span class="badge me-2" style="background:#0d9488;color:#fff;">GENIE</span> Genie flow alerts. Independent ladder scaling. Runs in Tracking Mode by default with Budget Alt generation.';
     } else {
       descEl.innerHTML = '<span class="badge bg-secondary me-2">OTHERS BUCKET</span> Captures all other incoming caller keys (e.g. Daemon). Runs in Tracking / Paper simulation mode (live brokerage disabled).';
     }
   }
 
   const subMap = (lastCloneStatus && lastCloneStatus.sub_strategies) || {};
-  const subCfg = subMap[stratName] || (stratName === 'PC' ? (lastCloneStatus && lastCloneStatus.config) : null) || {};
+  const subCfg = subMap[normStrat] || (normStrat === 'PC' ? (lastCloneStatus && lastCloneStatus.config) : null) || {};
 
   // Execution Mode selector
   const execEl = document.getElementById('clone-cfg-execution-mode');
   if (execEl) {
     const liveOpt = execEl.querySelector('option[value="live"]');
-    if (stratName === 'Others') {
+    if (normStrat === 'Others') {
       if (liveOpt) liveOpt.disabled = true;
       execEl.value = (subCfg.execution_mode === 'paper') ? 'paper' : 'tracking';
     } else {
       if (liveOpt) liveOpt.disabled = false;
-      const defMode = stratName === 'PC' ? (subCfg.paper_mode ? 'paper' : 'live') : 'tracking';
+      const defMode = (normStrat === 'PC' || normStrat === 'TG' || normStrat === 'PC2') ? (subCfg.paper_mode ? 'paper' : 'live') : 'tracking';
       execEl.value = subCfg.execution_mode || defMode;
     }
     onCloneExecutionModeChange(execEl.value);
@@ -12700,7 +14124,7 @@ function switchCloneConfigSubStrat(stratName) {
   // Entry Sizing Limit Mode (Either-Or: Budget vs Contracts)
   const entryModeEl = document.getElementById('clone-cfg-entry-limit-mode');
   if (entryModeEl) {
-    const defEntry = (stratName === 'Genie') ? 'contracts' : 'dollar';
+    const defEntry = (normStrat === 'Cowboy' || normStrat === 'Genie' || normStrat === 'AI FlowAlgos') ? 'contracts' : 'dollar';
     entryModeEl.value = subCfg.entry_limit_mode || defEntry;
     onCloneEntryModeChange(entryModeEl.value);
   }
@@ -12719,6 +14143,23 @@ function switchCloneConfigSubStrat(stratName) {
 
   const slEl = document.getElementById('clone-cfg-initial-sl');
   if (slEl && subCfg.initial_stop_loss_pct != null) slEl.value = subCfg.initial_stop_loss_pct;
+
+  const maxAlertEl = document.getElementById('clone-cfg-max-alert-price');
+  if (maxAlertEl) maxAlertEl.value = (subCfg.max_alert_price != null ? subCfg.max_alert_price : 0);
+
+  const tickersEl = document.getElementById('clone-cfg-allowed-tickers');
+  if (tickersEl) {
+    tickersEl.value = Array.isArray(subCfg.allowed_tickers) ? subCfg.allowed_tickers.join(', ') : (subCfg.allowed_tickers || '');
+  }
+
+  const rollEnabledEl = document.getElementById('clone-cfg-roll-runner-enabled');
+  if (rollEnabledEl) rollEnabledEl.checked = Boolean(subCfg.roll_runner_enabled);
+
+  const rollQtyEl = document.getElementById('clone-cfg-roll-runner-qty');
+  if (rollQtyEl) rollQtyEl.value = (subCfg.roll_runner_qty != null ? subCfg.roll_runner_qty : 1);
+
+  const rollEveryEl = document.getElementById('clone-cfg-roll-runner-every-leg');
+  if (rollEveryEl) rollEveryEl.checked = Boolean(subCfg.roll_runner_every_leg);
 
   if (subCfg.ladder_tiers) {
     isEditingLadder = false;
@@ -12858,13 +14299,18 @@ function renderCloneSignalRow(s, data, activeTrades) {
     actionBtn = `<button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.75rem;" onclick="openTakeManualModal('${s.id}')">Take Manually</button>`;
   }
 
-  const subStrat = s.sub_strategy || (s.called_by === 'genie' || s.called_by === 'Genie' ? 'Genie' : (s.called_by && s.called_by !== 'PC' ? 'Others' : 'PC'));
-  const calledBy = s.called_by || 'PC';
-  let subCell = `<span class="badge bg-primary fw-bold">PC</span>`;
-  if (subStrat === 'Genie') {
-    subCell = `<span class="badge bg-info text-dark fw-bold">Genie</span>`;
-  } else if (subStrat === 'Others') {
-    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace" style="font-size:0.65rem;color:#cbd5e1;">${calledBy}</small></div>`;
+  const subCell = renderCloneSubBadge(s);
+
+  let altBadge = '';
+  if (s.is_flow_alt) {
+    altBadge = ` <span class="badge" style="background:#7c3aed;color:#ffffff;font-size:0.70rem;font-weight:700;"><i class="bi bi-tag-fill me-1"></i>BUDGET ALT</span>`;
+  } else if (s.alt_signal_id) {
+    altBadge = ` <span class="badge" style="background:#083344;color:#38bdf8;border:1px solid #0284c7;font-size:0.70rem;font-weight:600;"><i class="bi bi-arrow-left-right me-1"></i>Alt Avail</span>`;
+  }
+
+  let alertCell = `<span class="font-monospace fw-bold">$${alertPx}</span>`;
+  if (s.whale_avg != null && Number(s.whale_avg) > 0) {
+    alertCell = `<div><span class="font-monospace fw-bold">$${alertPx}</span><small class="d-block font-monospace" style="font-size:0.70rem;color:#c084fc;">Whale: $${Number(s.whale_avg).toFixed(2)}</small></div>`;
   }
 
   const timeStr = s.received_at_cst || formatCST(s.received_at, true);
@@ -12929,16 +14375,9 @@ function renderCloneTradeAsRow(t, data) {
   const exitHtml = `${t.status_reason || 'Closed'} <small class="text-info d-block font-monospace" style="font-size:0.72rem;"><i class="bi bi-clock me-1"></i>${exitTimeCst}</small>`;
   const actionBtn = `<button class="btn btn-sm btn-outline-info py-1 px-2 fw-semibold" style="font-size:0.76rem;" onclick="viewTradeLadderExecution('${t.id}')" title="Check how trade executed at each ladder rung with times, quantities, and price"><i class="bi bi-layers-half me-1"></i>View Ladder</button>`;
 
-  const subStrat = t.sub_strategy || (t.called_by === 'genie' || t.called_by === 'Genie' ? 'Genie' : (t.called_by && t.called_by !== 'PC' ? 'Others' : 'PC'));
-  const calledBy = t.called_by || 'PC';
-  const isPaper = t.paper_mode ?? (subStrat !== 'PC');
+  const isPaper = t.paper_mode ?? ((t.sub_strategy || 'PC') !== 'PC');
   const modeBadge = isPaper ? '<span class="badge bg-dark border border-secondary text-warning" style="font-size:0.65rem;">PAPER</span>' : '<span class="badge bg-danger" style="font-size:0.65rem;">LIVE</span>';
-  let subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-primary fw-bold">PC</span>${modeBadge}</div>`;
-  if (subStrat === 'Genie') {
-    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-info text-dark fw-bold">Genie</span>${modeBadge}</div>`;
-  } else if (subStrat === 'Others') {
-    subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace" style="font-size:0.65rem;color:#cbd5e1;">${calledBy}</small>${modeBadge}</div>`;
-  }
+  const subCell = renderCloneSubBadge(t, modeBadge);
 
   return `
     <tr class="align-middle">
@@ -12952,7 +14391,7 @@ function renderCloneTradeAsRow(t, data) {
           <span class="badge ${otBadge} fw-bold px-2 py-1 shadow-sm" style="font-size:0.74rem;letter-spacing:0.04em;">
             <i class="bi ${otIcon} me-1"></i>${ot}
           </span>
-          <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
+          <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span> ${tradeAltBadge}
         </div>
         <small class="font-monospace d-block" style="font-size:0.72rem;color:#cbd5e1;">${exp}${spec.streamer_symbol ? ` • ${spec.streamer_symbol}` : ''}</small>
       </td>
@@ -13145,45 +14584,8 @@ function renderCloneTrades(data) {
   const secEl = document.getElementById('clone-webhook-secret');
   if (secEl && cfg.webhook_secret) secEl.value = cfg.webhook_secret;
 
-  // 1b. Update Sub-Strategy Filter Pill Badges
-  const subMap = data.sub_strategies || {};
-  const pcInfo = subMap.PC || {};
-  const genieInfo = subMap.Genie || {};
-  const othersInfo = subMap.Others || {};
-
-  const bAll = document.getElementById('badge-substrat-all-count');
-  if (bAll) bAll.textContent = activeTrades.length;
-
-  const bPc = document.getElementById('badge-substrat-pc-count');
-  if (bPc) bPc.textContent = pcInfo.active_trades_count || 0;
-
-  const bGenie = document.getElementById('badge-substrat-genie-count');
-  if (bGenie) bGenie.textContent = genieInfo.active_trades_count || 0;
-
-  const bGenieMode = document.getElementById('badge-substrat-genie-mode');
-  if (bGenieMode) {
-    const genieExec = (genieInfo.execution_mode || (genieInfo.paper_mode ? 'paper' : 'tracking')).toUpperCase();
-    bGenieMode.textContent = genieExec;
-    if (genieExec === 'TRACKING') {
-      bGenieMode.className = 'badge bg-warning text-dark ms-1';
-    } else if (genieExec === 'PAPER') {
-      bGenieMode.className = 'badge bg-info text-dark ms-1';
-    } else {
-      bGenieMode.className = 'badge bg-danger text-light ms-1';
-    }
-  }
-
-  const bOthers = document.getElementById('badge-substrat-others-count');
-  if (bOthers) bOthers.textContent = othersInfo.active_trades_count || 0;
-
-  const bOthersMode = document.getElementById('badge-substrat-others-mode');
-  if (bOthersMode) {
-    const othersExec = (othersInfo.execution_mode || 'tracking').toUpperCase();
-    bOthersMode.textContent = othersExec;
-    bOthersMode.className = (othersExec === 'TRACKING') ? 'badge bg-dark border border-secondary text-info ms-1' : 'badge bg-secondary ms-1';
-  }
-
   // 4. Config input fields (for currently active sub-strategy tab)
+  const subMap = data.sub_strategies || {};
   const curSubCfg = subMap[activeCloneConfigSubStrat] || (activeCloneConfigSubStrat === 'PC' ? cfg : {});
   if (document.activeElement !== document.getElementById('clone-cfg-execution-mode')) {
     const el = document.getElementById('clone-cfg-execution-mode');
@@ -13194,7 +14596,7 @@ function renderCloneTrades(data) {
         el.value = (curSubCfg.execution_mode === 'paper') ? 'paper' : 'tracking';
       } else {
         if (liveOpt) liveOpt.disabled = false;
-        const defMode = activeCloneConfigSubStrat === 'PC' ? (curSubCfg.paper_mode ? 'paper' : 'live') : 'tracking';
+        const defMode = (activeCloneConfigSubStrat === 'PC' || activeCloneConfigSubStrat === 'TG' || activeCloneConfigSubStrat === 'PC2') ? (curSubCfg.paper_mode ? 'paper' : 'live') : 'tracking';
         el.value = curSubCfg.execution_mode || defMode;
       }
       onCloneExecutionModeChange(el.value);
@@ -13204,7 +14606,7 @@ function renderCloneTrades(data) {
   if (document.activeElement !== document.getElementById('clone-cfg-entry-limit-mode')) {
     const el = document.getElementById('clone-cfg-entry-limit-mode');
     if (el) {
-      const defEntry = (activeCloneConfigSubStrat === 'Genie') ? 'contracts' : 'dollar';
+      const defEntry = (activeCloneConfigSubStrat === 'AI FlowAlgos' || activeCloneConfigSubStrat === 'Genie') ? 'contracts' : 'dollar';
       el.value = curSubCfg.entry_limit_mode || defEntry;
       onCloneEntryModeChange(el.value);
     }
@@ -13229,6 +14631,26 @@ function renderCloneTrades(data) {
   if (document.activeElement !== document.getElementById('clone-cfg-initial-sl')) {
     const el = document.getElementById('clone-cfg-initial-sl');
     if (el && curSubCfg.initial_stop_loss_pct != null) el.value = curSubCfg.initial_stop_loss_pct;
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-max-alert-price')) {
+    const el = document.getElementById('clone-cfg-max-alert-price');
+    if (el && curSubCfg.max_alert_price != null) el.value = curSubCfg.max_alert_price;
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-allowed-tickers')) {
+    const el = document.getElementById('clone-cfg-allowed-tickers');
+    if (el) el.value = Array.isArray(curSubCfg.allowed_tickers) ? curSubCfg.allowed_tickers.join(', ') : (curSubCfg.allowed_tickers || '');
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-roll-runner-enabled')) {
+    const el = document.getElementById('clone-cfg-roll-runner-enabled');
+    if (el) el.checked = Boolean(curSubCfg.roll_runner_enabled);
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-roll-runner-qty')) {
+    const el = document.getElementById('clone-cfg-roll-runner-qty');
+    if (el && curSubCfg.roll_runner_qty != null) el.value = curSubCfg.roll_runner_qty;
+  }
+  if (document.activeElement !== document.getElementById('clone-cfg-roll-runner-every-leg')) {
+    const el = document.getElementById('clone-cfg-roll-runner-every-leg');
+    if (el) el.checked = Boolean(curSubCfg.roll_runner_every_leg);
   }
 
   // 5. Render Ladder Rules Table
@@ -13303,15 +14725,41 @@ function renderCloneTrades(data) {
     trackedBadge.textContent = `${trackedSignals.length} TRACKING`;
   }
   if (trackedTbody) {
-    const filteredTracked = activeCloneSubStrategyFilter === 'ALL'
-      ? trackedSignals
-      : trackedSignals.filter(s => (s.sub_strategy || 'Others') === activeCloneSubStrategyFilter);
+    let list = trackedSignals.slice();
 
-    if (filteredTracked.length === 0) {
-      const note = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
+    // Filter by sub-strat if selected
+    if (cloneTrackedSubStratFilter && cloneTrackedSubStratFilter !== 'ALL') {
+      list = list.filter(s => matchCloneTrackedFilter(s, cloneTrackedSubStratFilter));
+    }
+
+    // Sort by column date (defaulted to descending - newest alert first)
+    list.sort((a, b) => {
+      const ta = new Date(a.received_at || 0).getTime() || 0;
+      const tb = new Date(b.received_at || 0).getTime() || 0;
+      return (cloneTrackedDateSortOrder === 'asc') ? (ta - tb) : (tb - ta);
+    });
+
+    // Update sort icon
+    const sortIcon = document.getElementById('icon-clone-tracked-time-sort');
+    if (sortIcon) {
+      sortIcon.className = (cloneTrackedDateSortOrder === 'asc') ? 'bi bi-arrow-up-short text-info' : 'bi bi-arrow-down-short text-info';
+    }
+
+    // Keep controls in sync
+    const filterSelect = document.getElementById('clone-tracked-substrat-filter');
+    if (filterSelect && document.activeElement !== filterSelect) {
+      filterSelect.value = cloneTrackedSubStratFilter;
+    }
+    const sortSelect = document.getElementById('clone-tracked-sort-order');
+    if (sortSelect && document.activeElement !== sortSelect) {
+      sortSelect.value = cloneTrackedDateSortOrder;
+    }
+
+    if (list.length === 0) {
+      const note = cloneTrackedSubStratFilter !== 'ALL' ? ` for sub-strategy [${cloneTrackedSubStratFilter}]` : '';
       trackedTbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">No alerts currently in Tracking Mode${note}</td></tr>`;
     } else {
-      trackedTbody.innerHTML = filteredTracked.map(s => {
+      trackedTbody.innerHTML = list.map(s => {
         const spec = s.spec || {};
         const und = spec.underlying || '—';
         const exp = spec.expiration || '';
@@ -13337,12 +14785,13 @@ function renderCloneTrades(data) {
         const botPct = (((botNum - alertNum) / alertNum) * 100).toFixed(1);
 
         const timeStr = s.received_at_cst || formatCST(s.received_at, false);
-        const subStrat = s.sub_strategy || (s.called_by === 'genie' || s.called_by === 'Genie' ? 'Genie' : (s.called_by && s.called_by !== 'PC' ? 'Others' : 'PC'));
-        let subCell = `<span class="badge bg-primary fw-bold">PC</span>`;
-        if (subStrat === 'Genie') {
-          subCell = `<span class="badge bg-info text-dark fw-bold">Genie</span>`;
-        } else if (subStrat === 'Others') {
-          subCell = `<span class="badge bg-secondary fw-bold">Others</span><small class="font-monospace d-block" style="font-size:0.68rem;color:#cbd5e1;">${s.called_by || 'Other'}</small>`;
+        const subCell = renderCloneSubBadge(s);
+
+        let altBadge = '';
+        if (s.is_flow_alt) {
+          altBadge = ` <span class="badge" style="background:#7c3aed;color:#ffffff;font-size:0.70rem;font-weight:700;"><i class="bi bi-tag-fill me-1"></i>BUDGET ALT</span>`;
+        } else if (s.alt_signal_id) {
+          altBadge = ` <span class="badge" style="background:#083344;color:#38bdf8;border:1px solid #0284c7;font-size:0.70rem;font-weight:600;"><i class="bi bi-arrow-left-right me-1"></i>Alt Avail</span>`;
         }
 
         const isGain = curNum >= alertNum;
@@ -13358,6 +14807,7 @@ function renderCloneTrades(data) {
                   <i class="bi ${otIcon} me-1"></i>${ot}
                 </span>
                 <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
+                ${altBadge}
               </div>
               <small class="font-monospace d-block mt-1" style="font-size:0.73rem;color:#94a3b8;">${exp} • ${spec.streamer_symbol || ''}</small>
             </td>
@@ -13393,9 +14843,7 @@ function renderCloneTrades(data) {
   // 7. Active Trades Table
   const trBody = document.getElementById('clone-trades-tbody');
   if (trBody) {
-    const filteredActiveTrades = activeCloneSubStrategyFilter === 'ALL'
-      ? activeTrades
-      : activeTrades.filter(t => (t.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+    const filteredActiveTrades = activeTrades;
 
     if (filteredActiveTrades.length === 0) {
       const filterNote = activeCloneSubStrategyFilter !== 'ALL' ? ` for sub-strategy [${activeCloneSubStrategyFilter}]` : '';
@@ -13456,16 +14904,18 @@ function renderCloneTrades(data) {
                <i class="bi bi-x-octagon me-1"></i>Flatten
              </button>`;
 
-        const subStrat = t.sub_strategy || (t.called_by === 'genie' || t.called_by === 'Genie' ? 'Genie' : (t.called_by && t.called_by !== 'PC' ? 'Others' : 'PC'));
-        const calledBy = t.called_by || 'PC';
-        const isPaper = t.paper_mode ?? (subStrat !== 'PC');
+        const isPaper = t.paper_mode ?? ((t.sub_strategy || 'PC') !== 'PC');
         const modeBadge = isPaper ? '<span class="badge bg-dark border border-secondary text-warning" style="font-size:0.65rem;">PAPER</span>' : '<span class="badge bg-danger" style="font-size:0.65rem;">LIVE</span>';
-        let subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-primary fw-bold">PC</span>${modeBadge}</div>`;
-        if (subStrat === 'Genie') {
-          subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-info text-dark fw-bold">Genie</span>${modeBadge}</div>`;
-        } else if (subStrat === 'Others') {
-          subCell = `<div class="d-flex flex-column align-items-start gap-1"><span class="badge bg-secondary fw-bold">Others</span><small class="text-muted font-monospace" style="font-size:0.65rem;">${calledBy}</small>${modeBadge}</div>`;
+        const subCell = renderCloneSubBadge(t, modeBadge);
+
+        let tradeAltBadge = '';
+        if (t.is_flow_alt) {
+          tradeAltBadge = ` <span class="badge ms-1" style="background:#7c3aed;color:#ffffff;font-size:0.65rem;font-weight:700;"><i class="bi bi-tag-fill me-1"></i>BUDGET ALT</span>`;
+        } else if (t.alt_signal_id) {
+          tradeAltBadge = ` <span class="badge ms-1" style="background:#083344;color:#38bdf8;border:1px solid #0284c7;font-size:0.65rem;font-weight:600;"><i class="bi bi-arrow-left-right me-1"></i>Alt Avail</span>`;
         }
+
+        let alertCell = `<span class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</span>`;
 
         const tierDist = t.tier_distribution || [];
         const curDist = tierDist[t.current_tier_index || 0] || {};
@@ -13487,6 +14937,7 @@ function renderCloneTrades(data) {
                   <i class="bi ${otIcon} me-1"></i>${ot}
                 </span>
                 <span class="font-monospace text-warning fw-bold">${k ? `$${k}` : ''}</span>
+                ${tradeAltBadge}
               </div>
               <div class="text-muted font-monospace mt-1" style="font-size:0.72rem;">
                 <i class="bi bi-calendar-event me-1"></i>Exp: ${exp} • <span class="text-secondary">${spec.streamer_symbol || spec.occ_symbol || ''}</span>
@@ -13500,7 +14951,7 @@ function renderCloneTrades(data) {
               <span class="badge bg-primary font-monospace fs-6">${remQty}</span>
               <small class="text-muted">/ ${initQty}</small>
             </td>
-            <td class="font-monospace fw-semibold" style="color:#f1f5f9;font-size:0.86rem;">$${alertPx}</td>
+            <td class="font-monospace fw-bold" style="color:#f1f5f9;font-size:0.88rem;">$${alertPx}</td>
             <td>${entryCell}</td>
             <td class="font-monospace text-light fw-bold">$${curPx}</td>
             <td>
@@ -13570,12 +15021,8 @@ function renderCloneTrades(data) {
   const todaySignalTradeIds = new Set(nonTrackedTodaySignals.map(s => s.trade_id).filter(Boolean));
   const unlinkedTodayClosed = todayClosed.filter(t => !todaySignalTradeIds.has(t.id));
 
-  const filteredTodaySignals = activeCloneSubStrategyFilter === 'ALL'
-    ? nonTrackedTodaySignals
-    : nonTrackedTodaySignals.filter(s => (s.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
-  const filteredTodayClosed = activeCloneSubStrategyFilter === 'ALL'
-    ? unlinkedTodayClosed
-    : unlinkedTodayClosed.filter(t => (t.sub_strategy || 'PC') === activeCloneSubStrategyFilter);
+  const filteredTodaySignals = nonTrackedTodaySignals;
+  const filteredTodayClosed = unlinkedTodayClosed;
   const totalTodayCount = filteredTodaySignals.length + filteredTodayClosed.length;
 
   if (todayBadge) {
@@ -13776,6 +15223,13 @@ async function saveCloneConfig() {
     if (initSlEl) initSlEl.value = initSl;
   }
 
+  const maxAlertPrice = parseFloat(document.getElementById('clone-cfg-max-alert-price')?.value || 0);
+  const rawTickers = document.getElementById('clone-cfg-allowed-tickers')?.value || '';
+  const allowedTickers = rawTickers.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  const rollEnabled = Boolean(document.getElementById('clone-cfg-roll-runner-enabled')?.checked);
+  const rollQty = parseInt(document.getElementById('clone-cfg-roll-runner-qty')?.value || 1);
+  const rollEveryLeg = Boolean(document.getElementById('clone-cfg-roll-runner-every-leg')?.checked);
+
   const payload = {
     paper_mode: paperMode,
     execution_mode: executionMode,
@@ -13785,6 +15239,11 @@ async function saveCloneConfig() {
     max_premium_pct: maxPrem,
     floor_guard_pct: floorGuard,
     initial_stop_loss_pct: initSl,
+    max_alert_price: maxAlertPrice,
+    allowed_tickers: allowedTickers,
+    roll_runner_enabled: rollEnabled,
+    roll_runner_qty: rollQty,
+    roll_runner_every_leg: rollEveryLeg,
     ladder_tiers: tiers
   };
 

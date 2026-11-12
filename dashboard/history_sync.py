@@ -111,7 +111,7 @@ def sync_history_from_disk(
         if row.get('date_opened') != target.isoformat():
             continue
         try:
-            upsert_trade(row)
+            upsert_trade(row, export_csv=False)
             synced += 1
             dates_touched.add(row['date_opened'])
         except Exception:
@@ -122,6 +122,12 @@ def sync_history_from_disk(
     synced += clone_synced
 
     purged = purge_stale_history_rows(root, for_date=target, spx_close=spx)
+    if synced and not purged:
+        try:
+            from dashboard.strategy_pnl_csv import export_strategy_daily_pnl_csv
+            export_strategy_daily_pnl_csv(root)
+        except Exception:
+            pass
 
     return {
         'date': target.isoformat(),
@@ -257,7 +263,7 @@ def sync_clone_trades_from_disk(
             "paper": paper,
         }
         try:
-            upsert_trade(row)
+            upsert_trade(row, export_csv=False)
             synced += 1
             if dates_touched is not None:
                 dates_touched.add(date_opened)
@@ -318,7 +324,7 @@ def sync_all_history_from_disk(
             skipped += 1
             continue
         try:
-            upsert_trade(row)
+            upsert_trade(row, export_csv=False)
             synced += 1
             d = row['date_opened']
             dates_touched.add(d)

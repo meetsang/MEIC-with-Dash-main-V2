@@ -19,6 +19,9 @@ import psutil
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LOCKS_DIR = os.path.join(ROOT, "runtime", "locks")
 
+_VENV_PYTHON = os.path.join(ROOT, '.venv', 'Scripts', 'python.exe') if os.name == 'nt' else os.path.join(ROOT, '.venv', 'bin', 'python')
+PYTHON_EXE = _VENV_PYTHON if os.path.isfile(_VENV_PYTHON) else sys.executable
+
 log = logging.getLogger("dashboard.process_manager")
 
 # Mapping of services to their primary scripts/commands
@@ -27,7 +30,7 @@ SERVICES = {
         "label": "Master Bot Launcher",
         "lock": "launcher",
         "command_hint": "run.py",
-        "launch_cmd": [sys.executable, os.path.join(ROOT, "run.py"), "--one-day"],
+        "launch_cmd": [PYTHON_EXE, os.path.join(ROOT, "run.py")],
         "default_log": "logs/launcher_*.log",
         "managed_by": "Task Scheduler / Dashboard",
     },
@@ -35,7 +38,7 @@ SERVICES = {
         "label": "Market Data Streamer",
         "lock": "streamer",
         "command_hint": "publish_tastytrade.py",
-        "launch_cmd": [sys.executable, os.path.join(ROOT, "streaming", "publish_tastytrade.py")],
+        "launch_cmd": [PYTHON_EXE, os.path.join(ROOT, "streaming", "publish_tastytrade.py")],
         "default_log": "logs/stream_pub_tt_*.log",
         "managed_by": "Launcher (Auto-restarts)",
     },
@@ -43,7 +46,7 @@ SERVICES = {
         "label": "Stop Monitor Supervisor",
         "lock": "stop_monitor",
         "command_hint": "blocks/stop/run.py",
-        "launch_cmd": [sys.executable, os.path.join(ROOT, "blocks", "stop", "run.py"), "--paper"],
+        "launch_cmd": [PYTHON_EXE, os.path.join(ROOT, "blocks", "stop", "run.py")],
         "default_log": "meic0dte/logs/stop_monitor.log",
         "managed_by": "Launcher (Auto-restarts)",
     },
@@ -51,7 +54,7 @@ SERVICES = {
         "label": "Market Data OHLC Recorder",
         "lock": "market_data",
         "command_hint": "market_data.run",
-        "launch_cmd": [sys.executable, "-m", "market_data.run"],
+        "launch_cmd": [PYTHON_EXE, "-m", "market_data.run"],
         "default_log": "logs/market_data_*.log",
         "managed_by": "Launcher (Auto-restarts)",
     },
@@ -59,7 +62,7 @@ SERVICES = {
         "label": "Discretionary Webhook Relay",
         "lock": "clone_relay",
         "command_hint": "relay.py",
-        "launch_cmd": [sys.executable, os.path.join(ROOT, "clone_trades", "relay.py"), "--ngrok"],
+        "launch_cmd": [PYTHON_EXE, "-u", os.path.join(ROOT, "clone_trades", "relay.py"), "--ngrok"],
         "default_log": "logs/clone_relay_*.log",
         "managed_by": "Standalone Daemon (Port 5005)",
     },
@@ -67,7 +70,7 @@ SERVICES = {
         "label": "Dashboard Web Server",
         "lock": "dashboard",
         "command_hint": "dashboard/server.py",
-        "launch_cmd": [sys.executable, os.path.join(ROOT, "dashboard", "server.py")],
+        "launch_cmd": [PYTHON_EXE, os.path.join(ROOT, "dashboard", "server.py")],
         "default_log": "logs/dashboard_*.log",
         "managed_by": "Standalone Daemon (Port 5002)",
     },
@@ -149,6 +152,7 @@ def get_service_status(svc_key: str) -> Dict[str, Any]:
     started_at = None
     memory_mb = 0.0
     cpu_pct = 0.0
+    is_inproc = False
 
     # 1. Try reading process lock
     if os.path.isfile(lock_file):
@@ -156,6 +160,7 @@ def get_service_status(svc_key: str) -> Dict[str, Any]:
             with open(lock_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 pid = int(data.get("pid") or 0)
+                is_inproc = bool(data.get("in_process") or (data.get("extra") or {}).get("in_process"))
                 if data.get("ts"):
                     started_at = datetime.datetime.fromtimestamp(data["ts"]).strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
@@ -180,23 +185,44 @@ def get_service_status(svc_key: str) -> Dict[str, Any]:
             pid = proc.pid
             alive = True
 
+    # 4. Fallback for in-process services running inside launcher
+    if not alive and svc_key in ("streamer", "stop_monitor", "market_data"):
+        try:
+            from common.in_process_services import is_in_process_mode
+            if is_in_process_mode():
+                launcher_status = get_service_status("launcher")
+                if launcher_status.get("alive") and launcher_status.get("pid"):
+                    proc = psutil.Process(launcher_status["pid"])
+                    if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                        pid = proc.pid
+                        alive = True
+                        is_inproc = True
+                        started_at = launcher_status.get("started_at")
+        except Exception:
+            pass
+
     if proc and alive:
         try:
             memory_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
             cpu_pct = round(proc.cpu_percent(interval=None), 1)
             create_ts = proc.create_time()
-            started_at = datetime.datetime.fromtimestamp(create_ts).strftime("%Y-%m-%d %H:%M:%S")
+            if not started_at:
+                started_at = datetime.datetime.fromtimestamp(create_ts).strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             pass
 
     log_path = _get_log_tail_path(meta.get("default_log", ""))
+    managed_by = meta.get("managed_by", "Process")
+    if is_inproc and alive:
+        managed_by = "Launcher (In-Process Thread)"
 
     return {
         "service": svc_key,
         "label": meta.get("label", svc_key),
         "pid": pid if alive else None,
         "alive": alive,
-        "managed_by": meta.get("managed_by", "Process"),
+        "managed_by": managed_by,
+        "in_process": is_inproc and alive,
         "command_hint": meta.get("command_hint", ""),
         "started_at": started_at,
         "memory_mb": memory_mb if alive else 0.0,
@@ -268,9 +294,38 @@ def get_strategies_inspect_status() -> Dict[str, Any]:
 
 def stop_service(service_name: str) -> Dict[str, Any]:
     """Gracefully terminate a service."""
+    from common.process_lock import release_lock
+
+    try:
+        from clone_trades.engine import get_engine
+        get_engine().flush_all(force=True)
+    except Exception:
+        pass
+
+    if service_name == "all":
+        results = {}
+        # 1. Stop master launcher (which stops in-process threads or child procs)
+        results["launcher"] = stop_service("launcher")
+        # 2. Stop clone relay
+        results["clone_relay"] = stop_service("clone_relay")
+        # 3. Clean up any remaining standalone daemons & locks
+        for daemon in ("streamer", "stop_monitor", "market_data"):
+            st = get_service_status(daemon)
+            if st.get("alive") and st.get("pid") and not st.get("in_process"):
+                results[daemon] = stop_service(daemon)
+            else:
+                release_lock(daemon)
+        return {
+            "status": "ok",
+            "message": "Stopped all trading services and daemons",
+            "details": results,
+        }
+
     status = get_service_status(service_name)
     pid = status.get("pid")
+    lock_name = SERVICES.get(service_name, {}).get("lock", service_name)
     if not pid or not status.get("alive"):
+        release_lock(lock_name)
         return {"status": "ok", "message": f"{service_name} is already stopped"}
 
     try:
@@ -286,22 +341,48 @@ def stop_service(service_name: str) -> Dict[str, Any]:
             proc.wait(timeout=3)
         except psutil.TimeoutExpired:
             proc.kill()
+        release_lock(lock_name)
+        if service_name == "launcher":
+            for ch in ("streamer", "stop_monitor", "market_data"):
+                release_lock(ch)
         return {"status": "ok", "message": f"Successfully stopped {service_name} (PID {pid})"}
     except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+        release_lock(lock_name)
         return {"status": "error", "error": str(exc)}
+
+
+def start_service(service_name: str) -> Dict[str, Any]:
+    """Start a service (or restart if already running)."""
+    return restart_service(service_name)
 
 
 def restart_service(service_name: str) -> Dict[str, Any]:
     """Restart a background service."""
     from common.process_lock import release_lock
 
+    try:
+        from clone_trades.engine import get_engine
+        get_engine().flush_all(force=True)
+    except Exception:
+        pass
+
     if service_name == "all":
-        # Restart launcher and clone relay
+        # Restart launcher
         r_launcher = restart_service("launcher")
-        r_relay = restart_service("clone_relay")
+        time.sleep(1.5)
+        # Check if launcher already spawned clone_relay cleanly
+        st_relay = get_service_status("clone_relay")
+        if not st_relay.get("alive"):
+            r_relay = restart_service("clone_relay")
+        else:
+            r_relay = {
+                "status": "ok",
+                "message": f"clone_relay online under launcher (PID {st_relay.get('pid')})",
+                "new_pid": st_relay.get("pid"),
+            }
         return {
             "status": "ok",
-            "message": "Restarted launcher and relay processes",
+            "message": "Restarted launcher and verified relay process",
             "launcher": r_launcher,
             "clone_relay": r_relay,
         }
@@ -357,12 +438,19 @@ def restart_service(service_name: str) -> Dict[str, Any]:
 
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
     try:
+        log_file = os.path.join(ROOT, "logs", f"{service_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S')}.log")
+        try:
+            stdout_dest = open(log_file, "a", encoding="utf-8")
+        except Exception:
+            stdout_dest = None
         new_proc = subprocess.Popen(
             cmd,
             cwd=ROOT,
+            stdout=stdout_dest,
+            stderr=subprocess.STDOUT if stdout_dest else None,
             creationflags=creationflags,
         )
         log.info("Spawned new %s with PID %s", service_name, new_proc.pid)

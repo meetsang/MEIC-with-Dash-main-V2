@@ -9,6 +9,7 @@ import time
 from datetime import datetime as dt
 from typing import Any, Dict, List, Optional
 
+import meic0dte.app.config as meic_config
 from blocks.entry.config import CreditEntryConfig
 from blocks.entry.credit_spread import CreditSpreadEntry
 from common.streamer_symbols import register_spread_symbols
@@ -24,6 +25,45 @@ from manual_spread.butterfly import (
 )
 
 log = logging.getLogger(__name__)
+
+DEBIT_STRUCTURE_TYPES = {
+    'debit_p': {'side': 'PDS', 'opt': 'P'},
+    'pds': {'side': 'PDS', 'opt': 'P'},
+    'debit_c': {'side': 'CDS', 'opt': 'C'},
+    'cds': {'side': 'CDS', 'opt': 'C'},
+}
+
+
+def is_debit_structure(structure_type: str) -> bool:
+    return (structure_type or '').strip().lower() in DEBIT_STRUCTURE_TYPES
+
+
+def is_debit_side(side: str) -> bool:
+    return (side or '').strip().upper() in ('PDS', 'CDS')
+
+
+def opt_type_for_side(side: str, structure_type: str = '') -> str:
+    st = (structure_type or '').strip().lower()
+    if st in DEBIT_STRUCTURE_TYPES:
+        return DEBIT_STRUCTURE_TYPES[st]['opt']
+    s = (side or '').strip().upper()
+    if s.startswith('P'):
+        return 'P'
+    return 'C'
+
+
+def validate_debit_spread_strikes(side: str, short_strike: int, long_strike: int) -> Optional[str]:
+    """Return error string if debit spread strikes are inverted, else None."""
+    opt = opt_type_for_side(side)
+    s_k = int(short_strike)
+    l_k = int(long_strike)
+    if s_k <= 0 or l_k <= 0:
+        return 'short_strike and long_strike must be > 0'
+    if opt == 'P' and l_k <= s_k:
+        return 'Put Debit Spread (PDS) requires Long Put strike > Short Put strike'
+    if opt == 'C' and l_k >= s_k:
+        return 'Call Debit Spread (CDS) requires Long Call strike < Short Call strike'
+    return None
 
 
 def _manual_entry(broker) -> CreditSpreadEntry:
@@ -86,6 +126,7 @@ def _candidate_dict(c: SpreadCandidate, rank: int) -> dict:
         'short_strike': c.short_strike,
         'long_strike': c.long_strike,
         'market_credit': c.market_credit,
+        'market_debit': c.market_credit,
         'distance_from_target': round(c.distance_from_target, 2),
         'short_mid': round(c.short_mid, 2),
         'long_mid': round(c.long_mid, 2),
@@ -157,6 +198,73 @@ def clear_chain(expiry: str) -> Dict[str, Any]:
     return {'status': 'ok', 'expiry': expiry_yymmdd, 'cleared': True}
 
 
+def _scan_debit_vertical_candidates(
+    broker,
+    *,
+    opt_type: str,
+    expiry_yymmdd: str,
+    spread_width: int,
+    target_debit: float,
+    max_results: int,
+    otm_min: int,
+    otm_max: int,
+    paper: bool | None = None,
+) -> List[SpreadCandidate]:
+    from common.chain_snapshot import lookup_mids_from_snapshot, require_loaded_chain
+
+    snap = require_loaded_chain(expiry_yymmdd, otm_max)
+    spx_price = int(snap.spx_price)
+    width = int(spread_width)
+    step = meic_config.STEP
+
+    pairs: List[tuple[int, int, str, str]] = []
+    start_otm = max(0, int(otm_min))
+    for otm in range(start_otm, int(otm_max) + 1, step):
+        if opt_type == 'C':
+            long_strike = int(spx_price + otm)
+            short_strike = int(long_strike + width)
+        else:
+            long_strike = int(spx_price - otm)
+            short_strike = int(long_strike - width)
+        short_sym = build_tastytrade_symbol(expiry_yymmdd, opt_type, short_strike)
+        long_sym = build_tastytrade_symbol(expiry_yymmdd, opt_type, long_strike)
+        pairs.append((short_strike, long_strike, short_sym, long_sym))
+
+    symbols = [s for _, _, ss, ls in pairs for s in (ss, ls)]
+    price_map = lookup_mids_from_snapshot(symbols, expiry_yymmdd, otm_max)
+
+    candidates: List[SpreadCandidate] = []
+    for short_strike, long_strike, short_sym, long_sym in pairs:
+        short_p = price_map.get(to_tastytrade(short_sym))
+        long_p = price_map.get(to_tastytrade(long_sym))
+        if short_p is None or long_p is None:
+            continue
+        raw_debit = float(long_p) - float(short_p)
+        if raw_debit < ms_config.MIN_MARKET_CREDIT:
+            continue
+        spread_debit = round(round(raw_debit / 0.05) * 0.05, 2)
+        if spread_debit < ms_config.MIN_MARKET_CREDIT or spread_debit > width:
+            continue
+        conflict = leg_overlap_conflict(short_sym, long_sym, opt_type, paper=paper)
+        distance = abs(spread_debit - float(target_debit))
+        candidates.append(
+            SpreadCandidate(
+                short_symbol=short_sym,
+                long_symbol=long_sym,
+                short_strike=short_strike,
+                long_strike=long_strike,
+                market_credit=spread_debit,
+                short_mid=float(short_p),
+                long_mid=float(long_p),
+                distance_from_target=distance,
+                overlap_warning=conflict,
+            )
+        )
+
+    candidates.sort(key=lambda c: (1 if c.overlap_warning else 0, c.distance_from_target))
+    return candidates[:max_results]
+
+
 def scan_spreads(
     broker,
     *,
@@ -217,9 +325,47 @@ def scan_spreads(
             'diagnostics': diag.to_dict(),
         }
 
+    if is_debit_structure(structure_type) or is_debit_side(side):
+        opt_type = opt_type_for_side(side, structure_type)
+        vert_otm_min = int(otm_min if otm_min is not None else 0)
+        vert_otm_max = effective_otm_max
+        candidates = _scan_debit_vertical_candidates(
+            broker,
+            opt_type=opt_type,
+            expiry_yymmdd=expiry_yymmdd,
+            spread_width=int(spread_width),
+            target_debit=float(target_credit),
+            max_results=max_results,
+            otm_min=vert_otm_min,
+            otm_max=vert_otm_max,
+            paper=paper,
+        )
+        snap = get_snapshot(expiry_yymmdd)
+        spx_rounded = snap.spx_price if snap else None
+        return {
+            'status': 'ok',
+            'scan_kind': 'debit_vertical',
+            'spread_type': 'debit',
+            'structure_type': f'debit_{opt_type.lower()}',
+            'spx': spx_rounded,
+            'target_credit': float(target_credit),
+            'target_debit': float(target_credit),
+            'otm_min': vert_otm_min,
+            'otm_max': vert_otm_max,
+            'candidates': [_candidate_dict(c, i + 1) for i, c in enumerate(candidates)],
+            'scan_ms': int((time.time() - t0) * 1000),
+            'diagnostics': {
+                'spx': spx_rounded,
+                'otm_min': vert_otm_min,
+                'otm_max': vert_otm_max,
+                'strikes_scanned': max(0, (vert_otm_max - vert_otm_min) // 5 + 1),
+                'candidates_found': len(candidates),
+            },
+        }
+
     side = side.upper()
     if side not in ('P', 'C'):
-        raise ValueError('side must be P or C')
+        raise ValueError('side must be P, C, PDS, or CDS')
     expiry_yymmdd = parse_expiry(expiry)
     lot = 'manual-scan'
     entry = _manual_entry(broker)
@@ -271,17 +417,18 @@ def _resolve_strikes_for_overlap(
     if paper is None:
         from common.broker_factory import is_strategy_paper
         paper = is_strategy_paper(ms_config.STRATEGY)
-    short_symbol = build_tastytrade_symbol(expiry_yymmdd, side, int(short_strike))
-    long_symbol = build_tastytrade_symbol(expiry_yymmdd, side, int(long_strike))
+    opt_type = opt_type_for_side(side)
+    short_symbol = build_tastytrade_symbol(expiry_yymmdd, opt_type, int(short_strike))
+    long_symbol = build_tastytrade_symbol(expiry_yymmdd, opt_type, int(long_strike))
     conflict = leg_overlap_conflict(
-        short_symbol, long_symbol, side, exclude_path=exclude_path, paper=paper,
+        short_symbol, long_symbol, opt_type, exclude_path=exclude_path, paper=paper,
     )
     if not conflict:
         return int(short_strike), int(long_strike), short_symbol, long_symbol, 0
 
     resolved = resolve_leg_overlap(
         expiry_yymmdd,
-        side,
+        opt_type,
         int(short_strike),
         int(long_strike),
         exclude_path=exclude_path,
@@ -427,26 +574,45 @@ def place_spread(
     long_strike: int,
     limit_credit: float,
     quantity: int,
+    structure_type: str = '',
 ) -> Dict[str, Any]:
-    side = side.upper()
+    is_debit = is_debit_structure(structure_type) or is_debit_side(side)
+    opt_type = opt_type_for_side(side, structure_type)
+    side_label = ('PDS' if opt_type == 'P' else 'CDS') if is_debit else opt_type
     expiry_yymmdd = parse_expiry(expiry)
+
+    if is_debit:
+        err = validate_debit_spread_strikes(opt_type, int(short_strike), int(long_strike))
+        if err:
+            return {'status': 'error', 'error': err}
 
     try:
         short_strike, long_strike, short_symbol, long_symbol, _shifts = _resolve_strikes_for_overlap(
-            expiry_yymmdd, side, int(short_strike), int(long_strike),
+            expiry_yymmdd, opt_type, int(short_strike), int(long_strike),
         )
     except ValueError as exc:
         return {'status': 'error', 'error': str(exc)}
 
     lot = next_lot()
-    result = broker.place_spread_order(short_symbol, long_symbol, int(quantity), float(limit_credit))
+    if is_debit:
+        if hasattr(broker, 'place_debit_spread_order'):
+            result = broker.place_debit_spread_order(long_symbol, short_symbol, int(quantity), float(limit_credit))
+        else:
+            from brokers.base import ComboLeg
+            legs = [
+                ComboLeg(symbol=long_symbol, action='BUY_TO_OPEN', quantity=int(quantity)),
+                ComboLeg(symbol=short_symbol, action='SELL_TO_OPEN', quantity=int(quantity)),
+            ]
+            result = broker.place_multi_leg_order(legs, price=-abs(float(limit_credit)))
+    else:
+        result = broker.place_spread_order(short_symbol, long_symbol, int(quantity), float(limit_credit))
     if not result.success:
         return {'status': 'error', 'error': result.message or 'Open order failed'}
 
     entry = _manual_entry(broker)
     path = entry.write_handshake(
         lot=lot,
-        side=side,
+        side=side_label,
         short_symbol=short_symbol,
         long_symbol=long_symbol,
         short_strike=int(short_strike),
@@ -458,6 +624,12 @@ def place_spread(
         active_directory=state_mod.manual_spread_active_dir(),
     )
     st = state_mod.load_state(path)
+    if is_debit:
+        st['spread_type'] = 'debit'
+        st['stop_profile'] = 'manual_debit_spread'
+        st['entry']['debit'] = float(limit_credit)
+        st['entry']['net_debit'] = float(limit_credit)
+        st['entry']['limit_debit'] = float(limit_credit)
     register_spread_symbols(st, lot, log)
     state_mod.save_state(path, st)
 
@@ -496,7 +668,9 @@ def modify_spread(
         if not cancel.success and cancel.status not in ('cancelled', 'filled'):
             return {'status': 'error', 'error': cancel.message or 'cancel failed'}
 
-    side = str(state.get('entry', {}).get('side', 'P')).upper()
+    raw_side = str(state.get('entry', {}).get('side', 'P')).upper()
+    is_debit = state.get('spread_type') == 'debit' or is_debit_side(raw_side)
+    opt_type = opt_type_for_side(raw_side)
     short_sym = state['short_leg']['symbol']
     long_sym = state['long_leg']['symbol']
     parsed = parse_canonical(short_sym)
@@ -506,7 +680,7 @@ def modify_spread(
     try:
         short_strike, long_strike, short_sym, long_sym, _shifts = _resolve_strikes_for_overlap(
             expiry_yymmdd,
-            side,
+            opt_type,
             int(state['short_leg']['strike']),
             int(state['long_leg']['strike']),
             exclude_path=path,
@@ -514,9 +688,22 @@ def modify_spread(
     except ValueError as exc:
         return {'status': 'error', 'error': str(exc)}
 
-    result = broker.place_spread_order(
-        short_sym, long_sym, remaining, float(new_limit_credit),
-    )
+    if is_debit:
+        if hasattr(broker, 'place_debit_spread_order'):
+            result = broker.place_debit_spread_order(
+                long_sym, short_sym, remaining, float(new_limit_credit),
+            )
+        else:
+            from brokers.base import ComboLeg
+            legs = [
+                ComboLeg(symbol=long_sym, action='BUY_TO_OPEN', quantity=remaining),
+                ComboLeg(symbol=short_sym, action='SELL_TO_OPEN', quantity=remaining),
+            ]
+            result = broker.place_multi_leg_order(legs, price=-abs(float(new_limit_credit)))
+    else:
+        result = broker.place_spread_order(
+            short_sym, long_sym, remaining, float(new_limit_credit),
+        )
     if not result.success:
         return {'status': 'error', 'error': result.message or 'replace order failed'}
 
@@ -524,6 +711,10 @@ def modify_spread(
     state['status'] = 'pending_fill'
     state['entry']['limit_credit'] = float(new_limit_credit)
     state['entry']['net_credit'] = float(new_limit_credit)
+    if is_debit:
+        state['entry']['limit_debit'] = float(new_limit_credit)
+        state['entry']['net_debit'] = float(new_limit_credit)
+        state['entry']['debit'] = float(new_limit_credit)
     state['short_leg']['symbol'] = to_tastytrade(short_sym)
     state['short_leg']['strike'] = short_strike
     state['long_leg']['symbol'] = to_tastytrade(long_sym)
@@ -536,7 +727,7 @@ def modify_spread(
     }
     state_mod.save_state(path, state)
     register_spread_symbols(state, state.get('lot', 'manual'), log)
-    if state.get('status') == 'open' and not (state.get('active_stop') or {}).get('order_id'):
+    if state.get('status') == 'open' and not (state.get('active_stop') or {}).get('order_id') and not is_debit:
         log.info(
             'Manual spread %s filled on modify — stop_monitor will place stop on next poll',
             state.get('lot'),
@@ -664,7 +855,6 @@ def _trade_recency_key(trade: Dict[str, Any]) -> tuple:
         mtime = os.path.getmtime(path) if path and os.path.isfile(path) else 0.0
     except OSError:
         mtime = 0.0
-    active_rank = 0 if str(trade.get('status') or '') in ('open', 'closing', 'pending_fill') else 1
     return (ts, mtime, str(trade.get('_filename') or ''))
 
 

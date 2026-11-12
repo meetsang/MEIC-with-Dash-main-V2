@@ -10,10 +10,11 @@ FUTURES_WATCH_SYMBOLS: Tuple[str, ...] = (
     'MES',
 )
 
-# --- Watch universe (single source of truth) ---
-WATCH_SYMBOLS: Tuple[str, ...] = (
+# Base symbols for core index, ETF, and futures tracking (single source of truth)
+BASE_WATCH_SYMBOLS: Tuple[str, ...] = (
     'SPX',
     'VIX',
+    'VIX1D',
     'VXN',
     'QQQ',
     'IWM',
@@ -23,26 +24,59 @@ WATCH_SYMBOLS: Tuple[str, ...] = (
     'MES',
 )
 
+def get_drma_stock_watch_symbols(root: Optional[str] = None) -> Tuple[str, ...]:
+    """Retrieve currently active/enabled DRMA stock symbols directly from the watchlist file (page)."""
+    try:
+        from strategies.drma_stocks.watchlist import get_active_symbols
+        # Returns only symbols currently enabled in config/drma_stocks_watchlist.json
+        return tuple(get_active_symbols(root))
+    except Exception:
+        return ()
+
+
+def get_all_watch_symbols(root: Optional[str] = None) -> Tuple[str, ...]:
+    """Dynamic union of core symbols and whatever is currently active on the DRMA stocks page."""
+    return tuple(dict.fromkeys(list(BASE_WATCH_SYMBOLS) + list(get_drma_stock_watch_symbols(root))))
+
+
+class _DynamicWatchSymbols(tuple):
+    """Tuple-compatible view that reflects dynamic watchlist additions/deletions from the dashboard page."""
+    def __iter__(self):
+        return iter(get_all_watch_symbols())
+    def __contains__(self, item):
+        return item in BASE_WATCH_SYMBOLS or item in get_drma_stock_watch_symbols()
+    def __len__(self):
+        return len(get_all_watch_symbols())
+    def __repr__(self):
+        return repr(get_all_watch_symbols())
+
+
+WATCH_SYMBOLS: Tuple[str, ...] = _DynamicWatchSymbols(BASE_WATCH_SYMBOLS)
+
 SPX_SYMBOL = 'SPX'
 SPX_NO_VOLUME: FrozenSet[str] = frozenset({SPX_SYMBOL})
+# CBOE cash indices stream ticks on DXLink Trade channel (last price) without bid/ask Quote mids.
+INDEX_TRADE_PRICE_SYMBOLS: FrozenSet[str] = frozenset({'SPX', 'VIX', 'VIX1D', 'VXN'})
 
 # MQTT topic suffix for cumulative day volume (float string); not consumed by stop monitor.
 VOLUME_TOPIC_SUFFIX = '__VOL'
 # Per-trade size increment for OHLCV bar volume (float string).
 TRADE_SIZE_TOPIC_SUFFIX = '__TSIZE'
 
-# DXLink Quote subscribe names (event_symbol on wire).
+# DXLink Quote/Trade subscribe names (event_symbol on wire).
+# On TastyTrade DXLink, CBOE indices are 'SPX', 'VIX', 'VIX1D', 'VXN' (no '$' prefix).
 DXLINK_QUOTE_SYMBOL: dict[str, str] = {
     'SPX': 'SPX',
-    'VIX': '$VIX',
-    'VXN': '$VXN',
+    'VIX': 'VIX',
+    'VIX1D': 'VIX1D',
+    'VXN': 'VXN',
     'QQQ': 'QQQ',
     'IWM': 'IWM',
     'TLT': 'TLT',
     'GLD': 'GLD',
 }
 
-# MQTT canonical topic names (aliases from DXLink event symbols).
+# MQTT canonical topic names (aliases from DXLink or Schwab event symbols).
 DXLINK_TO_MQTT: dict[str, str] = {
     'SPX': 'SPX',
     '$SPX': 'SPX',
@@ -50,6 +84,9 @@ DXLINK_TO_MQTT: dict[str, str] = {
     'VIX': 'VIX',
     '$VIX': 'VIX',
     '.$VIX': 'VIX',
+    'VIX1D': 'VIX1D',
+    '$VIX1D': 'VIX1D',
+    '.$VIX1D': 'VIX1D',
     'VXN': 'VXN',
     '$VXN': 'VXN',
     '.$VXN': 'VXN',
@@ -71,12 +108,26 @@ TRADE_WATCH_SYMBOLS: Tuple[str, ...] = tuple(
     s for s in WATCH_SYMBOLS if s not in SPX_NO_VOLUME and s not in FUTURES_WATCH_SYMBOLS
 )
 
-# --- Sidecar SPX ladder defaults (ON unless env disables) ---
+# --- Sidecar SPX ladder defaults (ON unless env disables or LOW_MEMORY_MODE) ---
 MARKET_DATA_OPTION_COLLECTION_ENABLED = True
 SPX_LADDER_ENABLED = True
 SPX_LADDER_QUOTES_ENABLED = True
 SPX_LADDER_VOLUME_ENABLED = False
-SPX_LADDER_MAX_ACTIVE_SYMBOLS = 500
+
+
+def _get_spx_ladder_max_symbols() -> int:
+    raw = os.environ.get('SPX_LADDER_MAX_ACTIVE_SYMBOLS')
+    if raw is not None:
+        try:
+            return max(0, int(raw.strip()))
+        except ValueError:
+            pass
+    if os.environ.get('LOW_MEMORY_MODE', '').strip().lower() in ('1', 'true', 'yes'):
+        return 50
+    return 500
+
+
+SPX_LADDER_MAX_ACTIVE_SYMBOLS = _get_spx_ladder_max_symbols()
 SPX_LADDER_REFRESH_SEC = 60
 
 # Regular session window for ladder refresh (US/Central, naive).
@@ -87,10 +138,14 @@ _SIDEcar_disabled_logged = False
 
 
 def sidecar_option_collection_enabled() -> bool:
-    """True unless MEIC_SIDE_OPTION_COLLECTION explicitly disables sidecar."""
-    raw = os.environ.get('MEIC_SIDE_OPTION_COLLECTION')
-    if raw is not None:
-        return raw.strip().lower() not in ('0', 'false', 'no', 'off')
+    """True unless MEIC_SIDE_OPTION_COLLECTION explicitly disables sidecar or LOW_MEMORY_MODE is set."""
+    raw = os.environ.get('MEIC_SIDE_OPTION_COLLECTION', '').strip().lower()
+    if raw in ('0', 'false', 'no', 'off'):
+        return False
+    if raw in ('1', 'true', 'yes', 'on'):
+        return True
+    if os.environ.get('LOW_MEMORY_MODE', '').strip().lower() in ('1', 'true', 'yes'):
+        return False
     return bool(MARKET_DATA_OPTION_COLLECTION_ENABLED)
 
 
@@ -107,7 +162,8 @@ def dxlink_quote_symbol(canonical: str) -> str:
 
 
 def dxlink_trade_symbols() -> list[str]:
-    return [dxlink_quote_symbol(s) for s in TRADE_WATCH_SYMBOLS]
+    combined = list(dict.fromkeys(list(TRADE_WATCH_SYMBOLS) + list(get_drma_stock_watch_symbols())))
+    return [dxlink_quote_symbol(s) for s in combined]
 
 
 def mqtt_topic_from_dxlink(event_symbol: str) -> str:
@@ -128,7 +184,7 @@ def mqtt_topic_from_dxlink(event_symbol: str) -> str:
 
 def canonical_watch_symbol(topic_or_dxlink: str) -> Optional[str]:
     mqtt = mqtt_topic_from_dxlink(topic_or_dxlink)
-    if mqtt in WATCH_SYMBOLS:
+    if mqtt in WATCH_SYMBOLS or mqtt in get_drma_stock_watch_symbols():
         return mqtt
     return None
 

@@ -334,6 +334,7 @@ class JournalBroker(BrokerBase):
         profit_price: float,
         stop_price: float,
         limit_price: float,
+        action: str = 'BUY_TO_CLOSE',
     ) -> OrderResult:
         with self._lock:
             self._load_orders()
@@ -346,7 +347,7 @@ class JournalBroker(BrokerBase):
                 'order_id': oid,
                 'status': 'working',
                 'kind': 'oco',
-                'action': 'BUY_TO_CLOSE',
+                'action': action,
                 'symbol': symbol,
                 'stop_price': stop_px,
                 'limit_price': limit_px,
@@ -691,7 +692,7 @@ class JournalBroker(BrokerBase):
         price = float(new_spec.get('price', 1.0))
         return self.place_limit_order(action, symbol, qty, price)
 
-    def cancel_order(self, order_id: str) -> OrderResult:
+    def cancel_order(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
         with self._lock:
             self._load_orders()
             oid = str(order_id)
@@ -701,6 +702,10 @@ class JournalBroker(BrokerBase):
                 self._save_orders()
             log.info('Journal paper: order %s cancelled', oid)
             return OrderResult(True, oid, 'cancelled', transmitted=False, message='journal:cancelled')
+
+    def cancel_order_and_confirm(self, order_id: str, *, timeout: float = 5.0) -> OrderResult:
+        """Confirmed cancel wrapper for JournalBroker."""
+        return self.cancel_order(order_id, timeout=timeout)
 
     def get_order_status(
         self,
@@ -761,38 +766,59 @@ class JournalBroker(BrokerBase):
                     if current_p is not None and current_p > 0:
                         stop_px = data.get('stop_price')
                         profit_px = data.get('profit_price')
-                        # Check stop breach: for short option, rising price >= stop_price triggers stop
-                        if stop_px is not None and current_p >= float(stop_px):
-                            data['status'] = 'filled'
-                            data['filled_price'] = float(data.get('limit_price') or current_p)
-                            data['filled_quantity'] = int(data.get('order_quantity') or 1)
-                            data['remaining_quantity'] = 0
-                            data['filled_at'] = time.time()
-                            data['message'] = f'journal:stop_triggered price={current_p} >= {stop_px}'
-                            self._save_orders()
-                            log.info(
-                                'Journal paper: stop %s triggered for %s at %.2f (stop=%.2f)',
-                                oid,
-                                sym,
-                                current_p,
-                                stop_px,
-                            )
-                        # Check profit target: for short option, falling price <= profit_price triggers profit target
-                        elif profit_px is not None and current_p <= float(profit_px):
-                            data['status'] = 'filled'
-                            data['filled_price'] = float(profit_px)
-                            data['filled_quantity'] = int(data.get('order_quantity') or 1)
-                            data['remaining_quantity'] = 0
-                            data['filled_at'] = time.time()
-                            data['message'] = f'journal:oco_profit_triggered price={current_p} <= {profit_px}'
-                            self._save_orders()
-                            log.info(
-                                'Journal paper: OCO profit %s triggered for %s at %.2f (target=%.2f)',
-                                oid,
-                                sym,
-                                current_p,
-                                profit_px,
-                            )
+                        ord_action = data.get('action', 'BUY_TO_CLOSE')
+                        if ord_action == 'SELL_TO_CLOSE':
+                            # Long option: profit target when price rises >= profit_px
+                            if profit_px is not None and float(profit_px) > 0 and current_p >= float(profit_px):
+                                data['status'] = 'filled'
+                                data['filled_price'] = float(profit_px)
+                                data['filled_quantity'] = int(data.get('order_quantity') or 1)
+                                data['remaining_quantity'] = 0
+                                data['filled_at'] = time.time()
+                                data['message'] = f'journal:oco_profit_triggered price={current_p} >= {profit_px}'
+                                self._save_orders()
+                                log.info('Journal paper: OCO long profit %s triggered for %s at %.2f >= %.2f', oid, sym, current_p, profit_px)
+                            elif stop_px is not None and float(stop_px) > 0 and current_p <= float(stop_px):
+                                data['status'] = 'filled'
+                                data['filled_price'] = float(data.get('limit_price') or stop_px)
+                                data['filled_quantity'] = int(data.get('order_quantity') or 1)
+                                data['remaining_quantity'] = 0
+                                data['filled_at'] = time.time()
+                                data['message'] = f'journal:stop_triggered price={current_p} <= {stop_px}'
+                                self._save_orders()
+                                log.info('Journal paper: OCO long stop %s triggered for %s at %.2f <= %.2f', oid, sym, current_p, stop_px)
+                        else:
+                            # Short option
+                            if stop_px is not None and current_p >= float(stop_px):
+                                data['status'] = 'filled'
+                                data['filled_price'] = float(data.get('limit_price') or current_p)
+                                data['filled_quantity'] = int(data.get('order_quantity') or 1)
+                                data['remaining_quantity'] = 0
+                                data['filled_at'] = time.time()
+                                data['message'] = f'journal:stop_triggered price={current_p} >= {stop_px}'
+                                self._save_orders()
+                                log.info(
+                                    'Journal paper: stop %s triggered for %s at %.2f (stop=%.2f)',
+                                    oid,
+                                    sym,
+                                    current_p,
+                                    stop_px,
+                                )
+                            elif profit_px is not None and current_p <= float(profit_px):
+                                data['status'] = 'filled'
+                                data['filled_price'] = float(profit_px)
+                                data['filled_quantity'] = int(data.get('order_quantity') or 1)
+                                data['remaining_quantity'] = 0
+                                data['filled_at'] = time.time()
+                                data['message'] = f'journal:oco_profit_triggered price={current_p} <= {profit_px}'
+                                self._save_orders()
+                                log.info(
+                                    'Journal paper: OCO profit %s triggered for %s at %.2f (target=%.2f)',
+                                    oid,
+                                    sym,
+                                    current_p,
+                                    profit_px,
+                                )
 
             return _dict_to_order_result(data)
 
@@ -943,4 +969,9 @@ class JournalBroker(BrokerBase):
                 if p is not None and p > 0:
                     return round(float(p), 2)
         return None
+
+    def _run(self, coro, *args, **kwargs):
+        if hasattr(self._inner, '_run'):
+            return self._inner._run(coro, *args, **kwargs)
+        raise NotImplementedError('Underlying broker does not support _run')
 

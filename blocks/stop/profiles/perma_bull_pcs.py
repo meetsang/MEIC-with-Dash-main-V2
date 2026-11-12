@@ -13,6 +13,8 @@ def perma_bull_pcs_profile() -> StopProfile:
         spread_type='credit',
         phases=[PhaseSpreadDebitProfitTarget()],
         long_close_delay_sec=0,
+        use_oco_short_stop=True,
+        profit_target_short=0.15,
     )
 
 

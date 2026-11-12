@@ -17,6 +17,12 @@ _strategy_brokers: Dict[Tuple[Any, ...], Any] = {}
 _shared_lock = threading.Lock()
 _shared_created_at: Optional[float] = None
 _shared_use_count = 0
+_broker_reset_generation = 0
+
+
+def get_broker_reset_generation() -> int:
+    """Monotonic counter incremented whenever reset_shared_broker() is called."""
+    return _broker_reset_generation
 
 
 def _live_broker_blocked_in_tests() -> bool:
@@ -225,13 +231,14 @@ def get_shared_broker_bounded(
 
 
 def reset_shared_broker() -> None:
-    global _shared_broker, _shared_key, _shared_created_at, _shared_use_count, _strategy_brokers
+    global _shared_broker, _shared_key, _shared_created_at, _shared_use_count, _strategy_brokers, _broker_reset_generation
     with _shared_lock:
         _shared_broker = None
         _shared_key = None
         _shared_created_at = None
         _shared_use_count = 0
         _strategy_brokers = {}
+        _broker_reset_generation += 1
 
 
 def shared_broker_stats() -> dict:
@@ -241,6 +248,7 @@ def shared_broker_stats() -> dict:
             'created_at': _shared_created_at,
             'reuse_count': _shared_use_count,
             'key': _shared_key,
+            'reset_generation': _broker_reset_generation,
         }
 
 

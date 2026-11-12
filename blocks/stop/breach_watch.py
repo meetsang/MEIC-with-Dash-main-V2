@@ -56,11 +56,16 @@ def build_breach_watch_snapshot(
 
     short_mqtt = short_p is not None
     long_mqtt = long_p is not None
+    spread_type = str(state.get('spread_type') or 'credit')
     spread_mid = None
     gap = None
     if short_mqtt and long_mqtt:
-        spread_mid = spread_mark_price(float(short_p), float(long_p))
-        gap = round(threshold - spread_mid, 2)
+        spread_mid = spread_mark_price(float(short_p), float(long_p), spread_type=spread_type)
+        gap = (
+            round(spread_mid - threshold, 2)
+            if spread_type == 'debit'
+            else round(threshold - spread_mid, 2)
+        )
 
     status = resolve_breach_status(
         streamer_stale=streamer_stale,
@@ -97,7 +102,11 @@ def build_breach_watch_snapshot(
         watch.update(readiness)
         if readiness.get('spread_mid') is not None and watch.get('spread_mid') is None:
             watch['spread_mid'] = readiness['spread_mid']
-            watch['gap_to_breach'] = round(threshold - float(readiness['spread_mid']), 2)
+            watch['gap_to_breach'] = (
+                round(float(readiness['spread_mid']) - threshold, 2)
+                if spread_type == 'debit'
+                else round(threshold - float(readiness['spread_mid']), 2)
+            )
     return watch
 
 
@@ -178,13 +187,22 @@ def _breach_fields_from_snapshot(trade: Dict[str, Any]) -> Dict[str, Any]:
 
     gap = watch.get('gap_to_breach')
     spread_mid = watch.get('spread_mid')
+    spread_type = str(trade.get('spread_type') or 'credit')
     if gap is None and spread_mid is not None:
-        gap = round(float(threshold) - float(spread_mid), 2)
+        gap = (
+            round(float(spread_mid) - float(threshold), 2)
+            if spread_type == 'debit'
+            else round(float(threshold) - float(spread_mid), 2)
+        )
     if gap is None and trade.get('status') == 'closed':
         exit_debit = brokerage_spread_exit_debit(trade)
         if exit_debit is not None:
             spread_mid = exit_debit
-            gap = round(float(threshold) - float(exit_debit), 2)
+            gap = (
+                round(float(exit_debit) - float(threshold), 2)
+                if spread_type == 'debit'
+                else round(float(threshold) - float(exit_debit), 2)
+            )
 
     if gap is None and spread_mid is None and not watch:
         return empty
@@ -235,8 +253,9 @@ def breach_display_fields(
         threshold = spread_breach_threshold(trade)
 
     streamer_stale = bool(watch.get('streamer_stale'))
+    spread_type = str(trade.get('spread_type') or 'credit')
     if live_short is not None and live_long is not None:
-        spread_mid = spread_mark_price(float(live_short), float(live_long))
+        spread_mid = spread_mark_price(float(live_short), float(live_long), spread_type=spread_type)
         short_mqtt = True
         long_mqtt = True
     else:
@@ -245,7 +264,11 @@ def breach_display_fields(
         long_mqtt = bool(watch.get('long_mqtt'))
 
     gap = (
-        round(float(threshold) - float(spread_mid), 2)
+        (
+            round(float(spread_mid) - float(threshold), 2)
+            if spread_type == 'debit'
+            else round(float(threshold) - float(spread_mid), 2)
+        )
         if spread_mid is not None
         else watch.get('gap_to_breach')
     )

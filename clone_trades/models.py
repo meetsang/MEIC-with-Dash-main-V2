@@ -87,15 +87,23 @@ class OptionSpec:
             except Exception:
                 raise ValueError(f"Cannot parse expiration date: {exp_str}")
 
+        # Root symbol determination for OCC and streamer:
+        # In US options exchanges (CBOE, TastyTrade), 0DTE/daily/weekly SPX contracts
+        # trade under root symbol 'SPXW' (PM-settled). 'SPX' is strictly reserved for monthly AM-settled.
+        # If underlying is SPX (or SPXW), route to SPXW for broker OCC & streamer symbols.
+        root = und
+        if und in ("SPX", "SPXW"):
+            root = "SPXW"
+
         # OCC format: Root (6 characters padded with spaces) + YYMMDD + Type + Strike (8 digits, *1000)
-        root_padded = und.ljust(6)
+        root_padded = root.ljust(6)
         strike_val = float(strike)
         strike_int = int(round(strike_val * 1000))
         occ_symbol = f"{root_padded}{yymmdd}{ot_char}{strike_int:08d}"
 
         # Streamer symbol: .ROOTYYMMDD[C|P]STRIKE
         strike_disp = f"{strike_val:.1f}" if strike_val % 1 else f"{int(strike_val)}"
-        streamer_symbol = f".{und}{yymmdd}{ot_char}{strike_disp}"
+        streamer_symbol = f".{root}{yymmdd}{ot_char}{strike_disp}"
 
         return cls(
             underlying=und,
@@ -267,20 +275,33 @@ def extract_called_by(payload: Dict[str, Any]) -> str:
 
 
 def classify_sub_strategy(called_by: Optional[str]) -> str:
-    """Classify incoming called_by string into sub-strategy bucket: 'PC', 'Genie', or 'Others'.
-
-    Only exact 'pc' (case-insensitive, trimmed) routes to 'PC'.
-    Variants of PC (e.g. 'pc2', 'pc3', 'pc_2', 'pc-2', etc.) route to 'Others'.
-    Only exact 'genie' (case-insensitive, trimmed) routes to 'Genie'.
-    Missing key, empty string, or any other value routes to 'Others'.
+    """Classify incoming called_by string into sub-strategy bucket:
+    - 'TG': TG (case-insensitive, trimmed)
+    - 'PC': PC (case-insensitive, trimmed)
+    - 'PC2': PC2 (case-insensitive, trimmed)
+    - 'Genie': Genie (case-insensitive, trimmed)
+    - 'Cowboy': Cowboy (case-insensitive, trimmed)
+    - 'Others': Missing key, empty string, or any other value
     """
     if not called_by:
         return "Others"
-    clean = str(called_by).strip().lower()
+    clean = str(called_by).strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+    if clean == "tg":
+        return "TG"
     if clean == "pc":
         return "PC"
+    if clean == "pc2":
+        return "PC2"
     if clean == "genie":
         return "Genie"
+    if clean == "cowboy":
+        return "Cowboy"
+    if clean in ("aiflowalgos", "aiflowalgo"):
+        return "Genie"
+    if clean in ("humanalerters", "humanalerter"):
+        return "PC"
+    if clean == "others":
+        return "Others"
     return "Others"
 
 
@@ -319,10 +340,29 @@ class CloneTrade:
     paper_mode: bool = False
     ladder_tiers: List[Dict[str, Any]] = field(default_factory=list)
     lowest_price: float = 0.0  # Lowest market price seen (Bottom)
+    entry_placed_time: float = 0.0
+    last_chase_time: float = 0.0
+    chase_count: int = 0
+    max_chase_attempts: int = 3
+    is_flow_alt: bool = False
+    parent_signal_id: Optional[str] = None
+    is_roll_runner: bool = False
+    roll_count: int = 0
+    parent_trade_id: Optional[str] = None
+    original_entry_price: float = 0.0
+    roll_runner_enabled: bool = False
+    roll_runner_qty: int = 1
+    roll_runner_every_leg: bool = False
 
     def __post_init__(self):
         if self.lowest_price <= 0.0 and self.entry_price > 0.0:
             self.lowest_price = self.entry_price
+        if getattr(self, "original_entry_price", 0.0) <= 0.0 and self.entry_price > 0.0:
+            self.original_entry_price = self.entry_price
+        if getattr(self, "realized_pnl_usd", 0.0) == 0.0 and self.closed_legs:
+            sum_legs = sum(getattr(l, "pnl_usd", 0.0) for l in self.closed_legs)
+            if sum_legs != 0.0:
+                self.realized_pnl_usd = round(sum_legs, 2)
 
     @property
     def created_at_cst(self) -> Optional[str]:
@@ -347,6 +387,15 @@ class CloneTrade:
         d["paper_mode"] = self.paper_mode
         d["ladder_tiers"] = self.ladder_tiers
         d["lowest_price"] = self.lowest_price
+        d["is_flow_alt"] = self.is_flow_alt
+        d["parent_signal_id"] = self.parent_signal_id
+        d["is_roll_runner"] = self.is_roll_runner
+        d["roll_count"] = self.roll_count
+        d["parent_trade_id"] = self.parent_trade_id
+        d["original_entry_price"] = self.original_entry_price
+        d["roll_runner_enabled"] = self.roll_runner_enabled
+        d["roll_runner_qty"] = self.roll_runner_qty
+        d["roll_runner_every_leg"] = self.roll_runner_every_leg
         return d
 
     @classmethod
@@ -362,15 +411,29 @@ class CloneTrade:
 
         called_by = raw.pop("called_by", None)
         sub_strategy = raw.pop("sub_strategy", None)
-        # Requirement 4: Historical trades without sub_strategy default to PC
-        if not sub_strategy:
+        if called_by:
+            caller_bucket = classify_sub_strategy(called_by)
+            if caller_bucket in ("TG", "PC", "PC2", "Cowboy", "Genie", "AI FlowAlgos"):
+                sub_strategy = caller_bucket
+        if not sub_strategy or sub_strategy == "Human Alerters":
             sub_strategy = "PC"
+        elif sub_strategy == "AI FlowAlgos":
+            sub_strategy = "Cowboy" if (called_by and "cowboy" in str(called_by).lower()) else "Genie"
         if not called_by:
-            called_by = "PC" if sub_strategy == "PC" else ""
+            called_by = sub_strategy if sub_strategy in ("TG", "PC", "PC2", "Cowboy", "Genie") else "Others"
 
         paper_mode = bool(raw.pop("paper_mode", False))
         ladder_tiers = raw.pop("ladder_tiers", [])
         lowest_price = float(raw.pop("lowest_price", raw.get("entry_price", 0.0)))
+        is_flow_alt = bool(raw.pop("is_flow_alt", False))
+        parent_signal_id = raw.pop("parent_signal_id", None)
+        is_roll_runner = bool(raw.pop("is_roll_runner", False))
+        roll_count = int(raw.pop("roll_count", 0))
+        parent_trade_id = raw.pop("parent_trade_id", None)
+        original_entry_price = float(raw.pop("original_entry_price", raw.get("entry_price", 0.0)))
+        roll_runner_enabled = bool(raw.pop("roll_runner_enabled", False))
+        roll_runner_qty = int(raw.pop("roll_runner_qty", 1))
+        roll_runner_every_leg = bool(raw.pop("roll_runner_every_leg", False))
 
         return cls(
             spec=spec,
@@ -380,6 +443,15 @@ class CloneTrade:
             paper_mode=paper_mode,
             ladder_tiers=ladder_tiers,
             lowest_price=lowest_price,
+            is_flow_alt=is_flow_alt,
+            parent_signal_id=parent_signal_id,
+            is_roll_runner=is_roll_runner,
+            roll_count=roll_count,
+            parent_trade_id=parent_trade_id,
+            original_entry_price=original_entry_price,
+            roll_runner_enabled=roll_runner_enabled,
+            roll_runner_qty=roll_runner_qty,
+            roll_runner_every_leg=roll_runner_every_leg,
             **raw
         )
 
@@ -403,6 +475,9 @@ class CloneSignal:
     peak_price: Optional[float] = None
     bottom_price: Optional[float] = None
     last_quote_time: Optional[str] = None
+    parent_signal_id: Optional[str] = None
+    is_flow_alt: bool = False
+    alt_signal_id: Optional[str] = None
 
     @property
     def received_at_cst(self) -> Optional[str]:
@@ -422,6 +497,9 @@ class CloneSignal:
         d["peak_price"] = self.peak_price
         d["bottom_price"] = self.bottom_price
         d["last_quote_time"] = self.last_quote_time
+        d["parent_signal_id"] = self.parent_signal_id
+        d["is_flow_alt"] = self.is_flow_alt
+        d["alt_signal_id"] = self.alt_signal_id
         return d
 
     @classmethod
@@ -442,18 +520,32 @@ class CloneSignal:
                     called_by = caller
                     sub_strategy = classify_sub_strategy(caller)
                 else:
-                    called_by = "PC"
-                    sub_strategy = "PC"
+                    called_by = "Others"
+                    sub_strategy = "Others"
             else:
-                called_by = "PC"
+                called_by = "Others"
+                sub_strategy = "Others"
+        elif called_by:
+            caller_bucket = classify_sub_strategy(called_by)
+            if caller_bucket in ("TG", "PC", "PC2", "Cowboy", "Genie", "AI FlowAlgos"):
+                sub_strategy = caller_bucket
+            elif sub_strategy == "Human Alerters":
                 sub_strategy = "PC"
+        elif sub_strategy == "Human Alerters":
+            sub_strategy = "PC"
+        elif sub_strategy == "AI FlowAlgos":
+            sub_strategy = "Cowboy" if (called_by and "cowboy" in str(called_by).lower()) else "Genie"
+
         if not called_by:
-            called_by = "PC" if sub_strategy == "PC" else ""
+            called_by = sub_strategy if sub_strategy in ("TG", "PC", "PC2", "Cowboy", "Genie") else "Others"
 
         current_price = raw.pop("current_price", None)
         peak_price = raw.pop("peak_price", None)
         bottom_price = raw.pop("bottom_price", None)
         last_quote_time = raw.pop("last_quote_time", None)
+        parent_signal_id = raw.pop("parent_signal_id", None)
+        is_flow_alt = bool(raw.pop("is_flow_alt", False))
+        alt_signal_id = raw.pop("alt_signal_id", None)
 
         return cls(
             spec=spec,
@@ -463,6 +555,9 @@ class CloneSignal:
             peak_price=peak_price,
             bottom_price=bottom_price,
             last_quote_time=last_quote_time,
+            parent_signal_id=parent_signal_id,
+            is_flow_alt=is_flow_alt,
+            alt_signal_id=alt_signal_id,
             **raw
         )
 

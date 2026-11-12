@@ -69,10 +69,17 @@ class OptionQuoteService:
     def clear_mock_price(self, symbol: str) -> None:
         self._mock_prices.pop(symbol, None)
 
-    def get_quote(self, spec: OptionSpec) -> OptionQuote:
+    def get_quote(self, spec: Any) -> OptionQuote:
         now = time.time()
-        sym = spec.streamer_symbol
-        occ = spec.occ_symbol
+        if isinstance(spec, str):
+            sym = spec
+            occ = spec
+        elif hasattr(spec, 'streamer_symbol'):
+            sym = spec.streamer_symbol
+            occ = getattr(spec, 'occ_symbol', spec.streamer_symbol)
+        else:
+            sym = str(spec)
+            occ = str(spec)
 
         # Check mock prices first (useful for tests or manual testing)
         if sym in self._mock_prices or occ in self._mock_prices:
@@ -94,6 +101,31 @@ class OptionQuoteService:
         cached = self._cache.get(sym)
         if cached and (now - cached.updated_at) < self._cache_ttl_sec:
             return cached
+
+        # Check shared MQTT price cache
+        try:
+            from common.mqtt_prices import get_shared_cache
+            m_cache = get_shared_cache()
+            if m_cache and m_cache.is_running():
+                mid = m_cache.get_option_mid(sym) or m_cache.get_option_mid(occ)
+                if mid is None and ("SPX" in sym or "SPXW" in sym):
+                    alt_sym = sym.replace(".SPX", ".SPXW") if ".SPX" in sym and ".SPXW" not in sym else sym.replace(".SPXW", ".SPX")
+                    alt_occ = occ.replace("SPX   ", "SPXW  ") if "SPX   " in occ else occ.replace("SPXW  ", "SPX   ")
+                    mid = m_cache.get_option_mid(alt_sym) or m_cache.get_option_mid(alt_occ)
+                if mid is not None and mid > 0:
+                    q = OptionQuote(
+                        streamer_symbol=sym,
+                        occ_symbol=occ,
+                        bid=mid,
+                        ask=mid,
+                        last=mid,
+                        mid=mid,
+                        updated_at=now,
+                    )
+                    self._cache[sym] = q
+                    return q
+        except Exception:
+            pass
 
         # Attempt to fetch quote via broker
         quote = self._fetch_from_broker(spec)
@@ -133,24 +165,58 @@ class OptionQuoteService:
         if not session:
             return None
 
+        coro = None
         try:
             from tastytrade.market_data import get_market_data_by_type
 
             # TastyTrade REST /market-data/by-type requires the OCC symbol format (e.g. 'SPY   260921C00765000')
             coro = get_market_data_by_type(session, options=[spec.occ_symbol])
-            if hasattr(self.broker, "_run"):
-                results = self.broker._run(coro)
+            runner = getattr(self.broker, "_run", None)
+            if runner is None and hasattr(self.broker, "underlying"):
+                runner = getattr(self.broker.underlying, "_run", None)
+            if runner is None and hasattr(self.broker, "_inner"):
+                runner = getattr(self.broker._inner, "_run", None)
+
+            if runner is not None:
+                results = runner(coro)
             else:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         import concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as pool:
-                            results = pool.submit(lambda: asyncio.run(coro)).result(timeout=4)
+                            results = pool.submit(lambda: asyncio.run(get_market_data_by_type(session, options=[spec.occ_symbol]))).result(timeout=6)
                     else:
                         results = loop.run_until_complete(coro)
                 except Exception:
                     results = asyncio.run(coro)
+
+            if not results and ("SPX   " in spec.occ_symbol or "SPXW  " in spec.occ_symbol):
+                # Fallback check between SPX and SPXW if one has no market data
+                alt_occ = spec.occ_symbol.replace("SPX   ", "SPXW  ") if "SPX   " in spec.occ_symbol else spec.occ_symbol.replace("SPXW  ", "SPX   ")
+                try:
+                    coro_alt = get_market_data_by_type(session, options=[alt_occ])
+                    if runner is not None:
+                        alt_res = runner(coro_alt)
+                    else:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                alt_res = pool.submit(lambda: asyncio.run(get_market_data_by_type(session, options=[alt_occ]))).result(timeout=6)
+                        else:
+                            alt_res = loop.run_until_complete(coro_alt)
+                    if alt_res:
+                        results = alt_res
+                        alt_streamer = (
+                            spec.streamer_symbol.replace(".SPX", ".SPXW")
+                            if ".SPX" in spec.streamer_symbol and ".SPXW" not in spec.streamer_symbol
+                            else spec.streamer_symbol.replace(".SPXW", ".SPX")
+                        )
+                        spec.occ_symbol = alt_occ
+                        spec.streamer_symbol = alt_streamer
+                except Exception as exc:
+                    log.debug("SPX/SPXW fallback quote fetch error: %s", exc)
 
             if not results:
                 return None
@@ -173,5 +239,10 @@ class OptionQuoteService:
                 updated_at=time.time(),
             )
         except Exception as exc:
-            log.debug("REST quote fetch failed for %s: %s", spec.streamer_symbol, exc)
+            if coro is not None:
+                try:
+                    coro.close()
+                except Exception:
+                    pass
+            log.warning("REST quote fetch failed for %s: %s", spec.streamer_symbol, exc)
             return None

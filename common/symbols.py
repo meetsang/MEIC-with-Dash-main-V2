@@ -4,13 +4,13 @@ from __future__ import annotations
 import re
 from typing import Optional, Tuple
 
-# Schwab:  SPXW  260619P05550000  or SPXW 240426P5060
+# Schwab:  SPXW  260619P05550000  or SPXW 240426P5060 or SPX   260619P05550000
 _SCHWAB_RE = re.compile(
-    r'^SPXW\s+(\d{6})([CP])(\d+)\s*$', re.IGNORECASE
+    r'^SPXW?\s+(\d{6})([CP])(\d+)\s*$', re.IGNORECASE
 )
-# TastyTrade: .SPXW260619P5550
+# TastyTrade: .SPXW260619P5550 or .SPX260619P5550
 _TT_RE = re.compile(
-    r'^\.?SPXW(\d{6})([CP])(\d+)$', re.IGNORECASE
+    r'^\.?SPXW?(\d{6})([CP])(\d+)$', re.IGNORECASE
 )
 
 

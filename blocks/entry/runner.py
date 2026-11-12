@@ -109,7 +109,7 @@ class EntryMonitorRunner:
             )
         elif not manual and tranche_id:
             reason = str(decision.reason or '')
-            if reason in ('rest_probe_pending', 'rest_probe_missing'):
+            if reason in ('rest_probe_pending', 'rest_probe_missing', 'rest_unknown', 'rest_stale'):
                 self._ensure_tranche_probe(tranche_id=tranche_id, strategy=strategy or trades_layout.STRATEGY_MEIC)
         now = time.time()
         if now - _GATE_WARN_AT >= _GATE_WARN_COOLDOWN_SEC:
@@ -125,11 +125,17 @@ class EntryMonitorRunner:
         coord = get_coordinator()
         if coord is not None:
             coord.schedule_tranche_probe(strategy=strategy, tranche_id=tranche_id, source='pre_tranche')
+        else:
+            self.log.warning(
+                'No ProbeCoordinator — cannot schedule pre_tranche REST probe for %s (strategy=%s)',
+                tranche_id,
+                strategy,
+            )
 
     def _update_manual_gate_state(self, *, plan_path, slot_key, strategy, decision) -> None:
         reason = str(decision.reason or '')
         detail = str(decision.detail or '')
-        if reason in ('rest_probe_pending', 'rest_probe_missing'):
+        if reason in ('rest_probe_pending', 'rest_probe_missing', 'rest_unknown', 'rest_stale'):
             # Ensure exactly one async probe is scheduled for this manual slot.
             self._ensure_manual_probe(slot_key=slot_key, strategy=strategy)
             try:

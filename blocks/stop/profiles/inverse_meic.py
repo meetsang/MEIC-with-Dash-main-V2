@@ -98,15 +98,13 @@ class PhaseDebitMultipleProfitTarget(PhaseBase):
         if current_mark >= target_price:
             reason = 'profit_target_multiple_hit'
         else:
-            # Check 14:50 CT EOD settlement square-off
-            eod_time_str = exit_cfg.get('eod_exit_time_cst', '14:50')
-            try:
-                parts = eod_time_str.split(':')
-                eod_time = time(int(parts[0]), int(parts[1]))
-            except Exception:
-                eod_time = time(14, 50)
+            # Check 14:50 CT EOD settlement square-off (11:50 CT on NYSE early-close half-days)
+            from common.market_hours import effective_session_time_ct
 
-            now_ct = central_time().time()
+            eod_time_str = exit_cfg.get('eod_exit_time_cst', '14:50')
+            now_dt = central_time()
+            eod_time = effective_session_time_ct(eod_time_str, now_dt.date(), default=time(14, 50))
+            now_ct = now_dt.time()
             if now_ct >= eod_time:
                 if current_mark > 0.10:
                     reason = 'eod_square_off'

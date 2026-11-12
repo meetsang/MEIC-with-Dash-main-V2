@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime, time as dt_time
 from typing import Any, Dict, List, Optional
 
+from blocks.stop.stop_math import sl_pct_from_stop_multiplier
 from common import trades_layout
 from common.session_cleanup import central_today
 
@@ -163,9 +164,13 @@ class SessionRow:
             elif f.name in ('credit_min', 'credit_max'):
                 out[f.name] = f'{float(val):.2f}'
             elif f.name == 'stop_multiplier':
-                out[f.name] = '' if not val else f'{float(val):g}'
+                out[f.name] = '' if val is None or val == '' else f'{float(val):g}'
             elif f.name == 'profit_target_pct':
-                out[f.name] = '' if val is None else f'{float(val):.2f}'
+                if val is None:
+                    out[f.name] = ''
+                else:
+                    vf = float(val)
+                    out[f.name] = f'{vf:.2f}' if round(vf, 2) == round(vf, 6) else f'{round(vf, 6):g}'
             else:
                 out[f.name] = '' if val is None else str(val)
         return out
@@ -174,6 +179,12 @@ class SessionRow:
         d = asdict(self)
         d['entry_window_start'] = self.entry_window_start
         d['entry_window_end'] = self.entry_window_end
+        spread_type = 'debit' if (self.side or '').upper() in ('PDS', 'CDS') else 'credit'
+        d['spread_type'] = spread_type
+        d['stop_loss_pct'] = sl_pct_from_stop_multiplier(
+            float(self.stop_multiplier or 0.0),
+            spread_type=spread_type,
+        )
         return d
 
     def window_start_time(self) -> dt_time:

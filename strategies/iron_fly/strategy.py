@@ -416,10 +416,11 @@ class IronFlyStrategy(BaseStrategy):
                 today_d = now_dt.date()
 
                 # 1. Skip day check
+                from common.market_hours import is_early_close_day_ct
                 reason = skip_reason(
                     today_d,
                     fomc_days=self.config.fomc_days,
-                    is_half_day=False,
+                    is_half_day=is_early_close_day_ct(today_d),
                     skip_third_wednesday=self.config.skip_third_wednesday,
                     skip_last_weekday=self.config.skip_last_weekday,
                 )

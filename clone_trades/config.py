@@ -19,19 +19,31 @@ DEFAULT_LADDER_TIERS = [
     LadderTier(tier_id=3, target_profit_pct=100.0, stop_loss_pct=50.0, exit_pct=33.4, description="Tier 3: +100% PT (34% exit) / +50% Profit Lock SL (100%)"),
 ]
 
-DEFAULT_PC_LADDER_TIERS = [
-    LadderTier(tier_id=1, target_profit_pct=20.0, stop_loss_pct=-50.0, exit_pct=50.0, description="Step 1: +20% PT (50% exit) / -50% SL (100%)"),
-    LadderTier(tier_id=2, target_profit_pct=100.0, stop_loss_pct=-25.0, exit_pct=20.0, description="Step 2: +100% PT (20% exit) / -25% SL (100%)"),
-    LadderTier(tier_id=3, target_profit_pct=200.0, stop_loss_pct=50.0, exit_pct=10.0, description="Step 3: +200% PT (10% exit) / +50% Profit Lock SL (100%)"),
-    LadderTier(tier_id=4, target_profit_pct=300.0, stop_loss_pct=150.0, exit_pct=10.0, description="Step 4: +300% PT (10% exit) / +150% Profit Lock SL (100%)"),
-    LadderTier(tier_id=5, target_profit_pct=400.0, stop_loss_pct=250.0, exit_pct=10.0, description="Step 5: +400% PT (10% exit) / +250% Profit Lock SL (100%)"),
+DEFAULT_TG_LADDER_TIERS = [
+    LadderTier(tier_id=1, target_profit_pct=35.0, stop_loss_pct=-50.0, exit_pct=50.0, description="TG Rung 1: +35% PT (50% exit) / -50% SL"),
+    LadderTier(tier_id=2, target_profit_pct=90.0, stop_loss_pct=-10.0, exit_pct=30.0, description="TG Rung 2: +90% PT (30% exit) / -10% SL"),
+    LadderTier(tier_id=3, target_profit_pct=120.0, stop_loss_pct=50.0, exit_pct=20.0, description="TG Rung 3: +120% PT (20% exit) / +50% SL"),
 ]
 
-DEFAULT_GENIE_LADDER_TIERS = [
-    LadderTier(tier_id=1, target_profit_pct=30.0, stop_loss_pct=-40.0, exit_pct=33.3, description="Genie Step 1: +30% PT (33% exit) / -40% SL (100%)"),
-    LadderTier(tier_id=2, target_profit_pct=60.0, stop_loss_pct=0.0, exit_pct=33.3, description="Genie Step 2: +60% PT (33% exit) / 0% Breakeven SL (100%)"),
-    LadderTier(tier_id=3, target_profit_pct=120.0, stop_loss_pct=50.0, exit_pct=33.4, description="Genie Step 3: +120% PT (34% exit) / +50% Profit Lock SL (100%)"),
+DEFAULT_PC_LADDER_TIERS = [
+    LadderTier(tier_id=1, target_profit_pct=75.0, stop_loss_pct=-50.0, exit_pct=50.0, description="PC Rung 1: +75% PT (50% exit) / -50% SL"),
+    LadderTier(tier_id=2, target_profit_pct=300.0, stop_loss_pct=0.0, exit_pct=50.0, description="PC Rung 2: +300% PT (50% exit) / 0% Breakeven SL"),
 ]
+
+DEFAULT_PC2_LADDER_TIERS = [
+    LadderTier(tier_id=1, target_profit_pct=75.0, stop_loss_pct=-50.0, exit_pct=50.0, description="PC2 Rung 1: +75% PT (50% exit) / -50% SL"),
+    LadderTier(tier_id=2, target_profit_pct=300.0, stop_loss_pct=0.0, exit_pct=50.0, description="PC2 Rung 2: +300% PT (50% exit) / 0% Breakeven SL"),
+]
+
+DEFAULT_HUMAN_ALERTERS_LADDER_TIERS = DEFAULT_PC_LADDER_TIERS
+
+DEFAULT_AI_FLOWALGOS_LADDER_TIERS = [
+    LadderTier(tier_id=1, target_profit_pct=50.0, stop_loss_pct=-40.0, exit_pct=50.0, description="Flow Step 1: +50% PT (50% exit) / -40% SL (100%)"),
+    LadderTier(tier_id=2, target_profit_pct=100.0, stop_loss_pct=0.0, exit_pct=50.0, description="Flow Step 2: +100% PT (50% exit) / 0% Breakeven SL (100%)"),
+]
+
+DEFAULT_GENIE_LADDER_TIERS = DEFAULT_AI_FLOWALGOS_LADDER_TIERS
+DEFAULT_COWBOY_LADDER_TIERS = DEFAULT_AI_FLOWALGOS_LADDER_TIERS
 
 DEFAULT_OTHERS_LADDER_TIERS = [
     LadderTier(tier_id=1, target_profit_pct=25.0, stop_loss_pct=-50.0, exit_pct=33.3, description="Others Step 1: +25% PT (33% exit) / -50% SL (100%)"),
@@ -42,19 +54,25 @@ DEFAULT_OTHERS_LADDER_TIERS = [
 
 @dataclass
 class SubStrategyConfig:
-    name: str  # "PC", "Genie", "Others"
+    name: str  # "TG", "PC", "PC2", "AI FlowAlgos", "Others"
     display_name: str = ""
     enabled: bool = True
     paper_mode: bool = False
     execution_mode: str = "live"  # "tracking", "paper", "live"
     entry_limit_mode: str = "dollar"  # "dollar" or "contracts"
     allocation_amount: float = 500.0  # Dollar budget limit
-    allocation_contracts: int = 1  # Contract quantity limit
+    allocation_contracts: int = 2  # Contract quantity limit
     auto_take_trades: bool = True
-    max_premium_pct: float = 25.0
-    floor_guard_pct: float = 75.0
+    max_premium_pct: float = 25.0  # Chase guard 25%
+    floor_guard_pct: float = 75.0  # Floor guard 75%
     initial_stop_loss_pct: float = -50.0
+    max_alert_price: float = 0.0
+    allowed_tickers: List[str] = field(default_factory=list)
     ladder_tiers: List[LadderTier] = field(default_factory=list)
+    roll_runner_enabled: bool = False
+    roll_runner_qty: int = 1
+    roll_runner_tolerance_pct: float = 25.0
+    roll_runner_every_leg: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -70,52 +88,163 @@ class SubStrategyConfig:
             "max_premium_pct": self.max_premium_pct,
             "floor_guard_pct": self.floor_guard_pct,
             "initial_stop_loss_pct": self.initial_stop_loss_pct,
+            "max_alert_price": self.max_alert_price,
+            "allowed_tickers": list(self.allowed_tickers),
             "ladder_tiers": [t.to_dict() for t in self.ladder_tiers],
+            "roll_runner_enabled": self.roll_runner_enabled,
+            "roll_runner_qty": self.roll_runner_qty,
+            "roll_runner_tolerance_pct": self.roll_runner_tolerance_pct,
+            "roll_runner_every_leg": self.roll_runner_every_leg,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], default_name: str = "PC") -> SubStrategyConfig:
-        name = str(data.get("name", default_name))
+    def from_dict(cls, data: Dict[str, Any], default_name: str = "TG") -> SubStrategyConfig:
+        raw_name = str(data.get("name", default_name))
+        name = classify_sub_strategy(raw_name)
+        if name == "Others" and raw_name in ("TG", "PC", "PC2", "Cowboy", "Genie", "AI FlowAlgos", "Human Alerters"):
+            name = raw_name
         raw_tiers = data.get("ladder_tiers", [])
         tiers = [LadderTier.from_dict(t) for t in raw_tiers] if raw_tiers else []
         paper_mode = bool(data.get("paper_mode", False))
         exec_mode = str(data.get("execution_mode", "")).strip().lower()
 
         if name == "Others":
-            # Requirement: Others cannot be Live: Tracking or Paper
             if exec_mode == "live" or not exec_mode:
                 exec_mode = "tracking"
             paper_mode = True
-        elif name == "Genie":
+        elif name in ("Genie", "Cowboy", "AI FlowAlgos"):
             if not exec_mode:
                 exec_mode = "tracking"
             paper_mode = (exec_mode != "live")
         elif not exec_mode:
             exec_mode = "paper" if paper_mode else "live"
 
-        entry_limit_mode = str(data.get("entry_limit_mode", "contracts" if name == "Genie" else "dollar")).strip().lower()
-        if entry_limit_mode not in ("dollar", "contracts"):
-            entry_limit_mode = "contracts" if name == "Genie" else "dollar"
-        allocation_contracts = max(1, int(data.get("allocation_contracts", 1)))
+        if name == "TG":
+            default_mode = "contracts"
+            default_contracts = 2
+            default_alloc = 500.0
+            default_sl = -50.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_TG_LADDER_TIERS)
+        elif name == "PC":
+            default_mode = "dollar"
+            default_contracts = 1
+            default_alloc = 200.0  # Requirement: $200 all trades
+            default_sl = -50.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_PC_LADDER_TIERS)
+        elif name == "PC2":
+            default_mode = "contracts"
+            default_contracts = 2
+            default_alloc = 500.0
+            default_sl = -50.0
+            default_max_alert = 1.50
+            default_tickers = ["SPY", "NVDA", "TSLA", "QQQ"]  # Filtered using list already out there
+            if not tiers:
+                tiers = list(DEFAULT_PC2_LADDER_TIERS)
+        elif name == "Genie":
+            default_mode = "contracts"
+            default_contracts = 1
+            default_alloc = 500.0
+            default_sl = -40.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_GENIE_LADDER_TIERS)
+        elif name == "Cowboy":
+            default_mode = "contracts"
+            default_contracts = 1
+            default_alloc = 500.0
+            default_sl = -40.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_COWBOY_LADDER_TIERS)
+        elif name == "AI FlowAlgos":
+            default_mode = "contracts"
+            default_contracts = 1
+            default_alloc = 500.0
+            default_sl = -40.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_AI_FLOWALGOS_LADDER_TIERS)
+        else:
+            default_mode = "dollar"
+            default_contracts = 1
+            default_alloc = 500.0
+            default_sl = -50.0
+            default_max_alert = 0.0
+            default_tickers = []
+            if not tiers:
+                tiers = list(DEFAULT_OTHERS_LADDER_TIERS)
 
-        initial_sl = float(data.get("initial_stop_loss_pct", -50.0))
+        entry_limit_mode = str(data.get("entry_limit_mode", default_mode)).strip().lower()
+        if entry_limit_mode not in ("dollar", "contracts"):
+            entry_limit_mode = default_mode
+
+        allocation_contracts = max(1, int(data.get("allocation_contracts", default_contracts)))
+        allocation_amount = float(data.get("allocation_amount", default_alloc))
+
+        initial_sl = float(data.get("initial_stop_loss_pct", default_sl))
         if tiers and len(tiers) > 0:
             initial_sl = tiers[0].stop_loss_pct
 
+        raw_tickers = data.get("allowed_tickers")
+        if raw_tickers is None:
+            allowed_tickers = list(default_tickers)
+        elif isinstance(raw_tickers, str):
+            allowed_tickers = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
+        elif isinstance(raw_tickers, list):
+            allowed_tickers = [str(t).strip().upper() for t in raw_tickers if str(t).strip()]
+        else:
+            allowed_tickers = []
+
+        max_alert_px = float(data.get("max_alert_price", default_max_alert))
+
+        display_name = str(data.get("display_name", ""))
+        if not display_name or display_name in ("PC", "PC Discretionary", "Genie", "Genie Discretionary", "Human Alerters (TG / PC / PC2)"):
+            if name == "TG":
+                display_name = "TG"
+            elif name == "PC":
+                display_name = "PC"
+            elif name == "PC2":
+                display_name = "PC2"
+            elif name == "Cowboy":
+                display_name = "Cowboy"
+            elif name == "Genie":
+                display_name = "Genie"
+            elif name == "AI FlowAlgos":
+                display_name = "AI FlowAlgos"
+            elif name == "Human Alerters":
+                display_name = "Human Alerters (TG / PC / PC2)"
+            else:
+                display_name = "Others Bucket (Tracking)"
+
         return cls(
             name=name,
-            display_name=str(data.get("display_name", name)),
+            display_name=display_name,
             enabled=bool(data.get("enabled", True)),
             paper_mode=paper_mode,
             execution_mode=exec_mode,
             entry_limit_mode=entry_limit_mode,
-            allocation_amount=float(data.get("allocation_amount", 500.0)),
+            allocation_amount=allocation_amount,
             allocation_contracts=allocation_contracts,
             auto_take_trades=bool(data.get("auto_take_trades", True if exec_mode != "tracking" else False)),
             max_premium_pct=float(data.get("max_premium_pct", 25.0)),
             floor_guard_pct=float(data.get("floor_guard_pct", 75.0)),
             initial_stop_loss_pct=initial_sl,
+            max_alert_price=max_alert_px,
+            allowed_tickers=allowed_tickers,
             ladder_tiers=tiers,
+            roll_runner_enabled=bool(data.get("roll_runner_enabled", False)),
+            roll_runner_qty=max(1, int(data.get("roll_runner_qty", 1))),
+            roll_runner_tolerance_pct=float(data.get("roll_runner_tolerance_pct", 25.0)),
+            roll_runner_every_leg=bool(data.get("roll_runner_every_leg", False)),
         )
 
 
@@ -217,6 +346,8 @@ class CloneTradeConfigManager:
             if isinstance(raw_sub, dict) and raw_sub:
                 for k, v in raw_sub.items():
                     norm_k = classify_sub_strategy(k)
+                    if norm_k == "Others" and k in ("TG", "PC", "PC2", "AI FlowAlgos", "Human Alerters"):
+                        norm_k = k
                     if isinstance(v, dict):
                         self.sub_strategies[norm_k] = SubStrategyConfig.from_dict(v, default_name=norm_k)
 
@@ -230,28 +361,64 @@ class CloneTradeConfigManager:
             self._save_config_unlocked()
 
     def _init_default_sub_strategies(self) -> None:
-        """Initialize PC, Genie, and Others default sub-strategy configs."""
+        """Initialize TG, PC, PC2, AI FlowAlgos, and Others default sub-strategy configs."""
         self.sub_strategies = {
+            "TG": SubStrategyConfig(
+                name="TG",
+                display_name="TG",
+                enabled=True,
+                paper_mode=self.paper_mode,
+                execution_mode="paper" if self.paper_mode else "live",
+                entry_limit_mode="contracts",
+                allocation_amount=500.0,
+                allocation_contracts=2,
+                auto_take_trades=self.auto_take_trades if self.auto_take_trades is not None else True,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_TG_LADDER_TIERS),
+            ),
             "PC": SubStrategyConfig(
                 name="PC",
-                display_name="PC Discretionary",
+                display_name="PC",
                 enabled=True,
                 paper_mode=self.paper_mode,
                 execution_mode="paper" if self.paper_mode else "live",
                 entry_limit_mode="dollar",
-                allocation_amount=self.allocation_amount,
+                allocation_amount=200.0,  # Requirement: $200 all trades
                 allocation_contracts=1,
                 auto_take_trades=self.auto_take_trades if self.auto_take_trades is not None else True,
                 max_premium_pct=self.max_premium_pct,
                 floor_guard_pct=self.floor_guard_pct,
-                initial_stop_loss_pct=self.initial_stop_loss_pct,
-                ladder_tiers=list(self.ladder_tiers) if self.ladder_tiers else list(DEFAULT_PC_LADDER_TIERS),
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_PC_LADDER_TIERS),
             ),
-            "Genie": SubStrategyConfig(
-                name="Genie",
-                display_name="Genie Discretionary",
+            "PC2": SubStrategyConfig(
+                name="PC2",
+                display_name="PC2",
                 enabled=True,
-                paper_mode=True,  # Default to tracking/paper
+                paper_mode=self.paper_mode,
+                execution_mode="paper" if self.paper_mode else "live",
+                entry_limit_mode="contracts",
+                allocation_amount=500.0,
+                allocation_contracts=2,
+                auto_take_trades=self.auto_take_trades if self.auto_take_trades is not None else True,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=1.50,
+                allowed_tickers=["SPY", "NVDA", "TSLA", "QQQ"],
+                ladder_tiers=list(DEFAULT_PC2_LADDER_TIERS),
+            ),
+            "Cowboy": SubStrategyConfig(
+                name="Cowboy",
+                display_name="Cowboy",
+                enabled=True,
+                paper_mode=True,
                 execution_mode="tracking",
                 entry_limit_mode="contracts",
                 allocation_contracts=1,
@@ -260,7 +427,43 @@ class CloneTradeConfigManager:
                 max_premium_pct=self.max_premium_pct,
                 floor_guard_pct=self.floor_guard_pct,
                 initial_stop_loss_pct=-40.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_COWBOY_LADDER_TIERS),
+            ),
+            "Genie": SubStrategyConfig(
+                name="Genie",
+                display_name="Genie",
+                enabled=True,
+                paper_mode=True,
+                execution_mode="tracking",
+                entry_limit_mode="contracts",
+                allocation_contracts=1,
+                auto_take_trades=False,
+                allocation_amount=self.allocation_amount,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-40.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
                 ladder_tiers=list(DEFAULT_GENIE_LADDER_TIERS),
+            ),
+            "AI FlowAlgos": SubStrategyConfig(
+                name="AI FlowAlgos",
+                display_name="AI FlowAlgos",
+                enabled=True,
+                paper_mode=True,
+                execution_mode="tracking",
+                entry_limit_mode="contracts",
+                allocation_contracts=1,
+                auto_take_trades=False,
+                allocation_amount=self.allocation_amount,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-40.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_AI_FLOWALGOS_LADDER_TIERS),
             ),
             "Others": SubStrategyConfig(
                 name="Others",
@@ -275,57 +478,174 @@ class CloneTradeConfigManager:
                 max_premium_pct=self.max_premium_pct,
                 floor_guard_pct=self.floor_guard_pct,
                 initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
                 ladder_tiers=list(DEFAULT_OTHERS_LADDER_TIERS),
             ),
         }
+        # Backward-compatibility aliases
+        self.sub_strategies["Human Alerters"] = self.sub_strategies["PC"]
+        self.sub_strategies["AI FlowAlgos"] = self.sub_strategies["Genie"]
 
     def _ensure_standard_sub_strategies(self) -> None:
-        """Ensure PC, Genie, and Others exist in sub_strategies."""
-        if "PC" not in self.sub_strategies:
+        """Ensure TG, PC, PC2, AI FlowAlgos, and Others exist in sub_strategies."""
+        if "TG" not in self.sub_strategies:
+            self.sub_strategies["TG"] = SubStrategyConfig(
+                name="TG",
+                display_name="TG",
+                enabled=True,
+                paper_mode=self.paper_mode,
+                execution_mode="paper" if self.paper_mode else "live",
+                entry_limit_mode="contracts",
+                allocation_contracts=2,
+                allocation_amount=500.0,
+                auto_take_trades=self.auto_take_trades,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_TG_LADDER_TIERS),
+            )
+        tg = self.sub_strategies["TG"]
+        if not tg.ladder_tiers:
+            tg.ladder_tiers = list(DEFAULT_TG_LADDER_TIERS)
+        if tg.allocation_contracts < 2 and tg.entry_limit_mode == "contracts":
+            tg.allocation_contracts = 2
+
+        # Migrate or create PC
+        if "PC" not in self.sub_strategies or (
+            "Human Alerters" in self.sub_strategies and self.sub_strategies["PC"] is self.sub_strategies["Human Alerters"]
+        ):
             self.sub_strategies["PC"] = SubStrategyConfig(
                 name="PC",
-                display_name="PC Discretionary",
+                display_name="PC",
                 enabled=True,
                 paper_mode=self.paper_mode,
                 execution_mode="paper" if self.paper_mode else "live",
                 entry_limit_mode="dollar",
+                allocation_amount=200.0,  # Requirement: $200 all trades
                 allocation_contracts=1,
                 auto_take_trades=self.auto_take_trades,
-                allocation_amount=self.allocation_amount,
                 max_premium_pct=self.max_premium_pct,
                 floor_guard_pct=self.floor_guard_pct,
-                initial_stop_loss_pct=self.initial_stop_loss_pct,
-                ladder_tiers=list(self.ladder_tiers) if self.ladder_tiers else list(DEFAULT_PC_LADDER_TIERS),
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
+                ladder_tiers=list(DEFAULT_PC_LADDER_TIERS),
             )
-        else:
-            # Sync PC settings with root
-            pc = self.sub_strategies["PC"]
-            if not pc.ladder_tiers:
-                pc.ladder_tiers = list(self.ladder_tiers)
-            self.paper_mode = pc.paper_mode
-            self.auto_take_trades = pc.auto_take_trades
+        pc = self.sub_strategies["PC"]
+        if not pc.ladder_tiers:
+            pc.ladder_tiers = list(DEFAULT_PC_LADDER_TIERS)
+
+        # Migrate or create PC2
+        if "PC2" not in self.sub_strategies:
+            self.sub_strategies["PC2"] = SubStrategyConfig(
+                name="PC2",
+                display_name="PC2",
+                enabled=True,
+                paper_mode=self.paper_mode,
+                execution_mode="paper" if self.paper_mode else "live",
+                entry_limit_mode="contracts",
+                allocation_contracts=2,
+                allocation_amount=500.0,
+                auto_take_trades=self.auto_take_trades,
+                max_premium_pct=self.max_premium_pct,
+                floor_guard_pct=self.floor_guard_pct,
+                initial_stop_loss_pct=-50.0,
+                max_alert_price=1.50,
+                allowed_tickers=["SPY", "NVDA", "TSLA", "QQQ"],
+                ladder_tiers=list(DEFAULT_PC2_LADDER_TIERS),
+            )
+        pc2 = self.sub_strategies["PC2"]
+        if not pc2.ladder_tiers:
+            pc2.ladder_tiers = list(DEFAULT_PC2_LADDER_TIERS)
+        if getattr(pc2, "allowed_tickers", None) is None:
+            pc2.allowed_tickers = ["SPY", "NVDA", "TSLA", "QQQ"]
+        if pc2.max_alert_price <= 0:
+            pc2.max_alert_price = 1.50
+
+        # Ensure Cowboy and Genie both exist
+        if "Cowboy" not in self.sub_strategies:
+            if "AI FlowAlgos" in self.sub_strategies:
+                orig = self.sub_strategies["AI FlowAlgos"]
+                self.sub_strategies["Cowboy"] = SubStrategyConfig(
+                    name="Cowboy",
+                    display_name="Cowboy",
+                    enabled=orig.enabled,
+                    paper_mode=orig.paper_mode,
+                    execution_mode=orig.execution_mode,
+                    entry_limit_mode=orig.entry_limit_mode,
+                    allocation_contracts=orig.allocation_contracts,
+                    auto_take_trades=orig.auto_take_trades,
+                    allocation_amount=orig.allocation_amount,
+                    max_premium_pct=orig.max_premium_pct,
+                    floor_guard_pct=orig.floor_guard_pct,
+                    initial_stop_loss_pct=orig.initial_stop_loss_pct,
+                    max_alert_price=orig.max_alert_price,
+                    allowed_tickers=list(orig.allowed_tickers),
+                    ladder_tiers=[LadderTier.from_dict(t.to_dict()) for t in orig.ladder_tiers],
+                )
+            else:
+                self.sub_strategies["Cowboy"] = SubStrategyConfig(
+                    name="Cowboy",
+                    display_name="Cowboy",
+                    enabled=True,
+                    paper_mode=True,
+                    execution_mode="tracking",
+                    entry_limit_mode="contracts",
+                    allocation_contracts=1,
+                    auto_take_trades=False,
+                    allocation_amount=self.allocation_amount,
+                    max_premium_pct=self.max_premium_pct,
+                    floor_guard_pct=self.floor_guard_pct,
+                    initial_stop_loss_pct=-40.0,
+                    max_alert_price=0.0,
+                    allowed_tickers=[],
+                    ladder_tiers=list(DEFAULT_COWBOY_LADDER_TIERS),
+                )
 
         if "Genie" not in self.sub_strategies:
-            self.sub_strategies["Genie"] = SubStrategyConfig(
-                name="Genie",
-                display_name="Genie Discretionary",
-                enabled=True,
-                paper_mode=True,
-                execution_mode="tracking",
-                entry_limit_mode="contracts",
-                allocation_contracts=1,
-                auto_take_trades=False,
-                allocation_amount=self.allocation_amount,
-                max_premium_pct=self.max_premium_pct,
-                floor_guard_pct=self.floor_guard_pct,
-                initial_stop_loss_pct=-40.0,
-                ladder_tiers=list(DEFAULT_GENIE_LADDER_TIERS),
-            )
-        else:
-            genie = self.sub_strategies["Genie"]
-            if not getattr(genie, "execution_mode", ""):
-                genie.execution_mode = "tracking"
-                genie.paper_mode = True
+            if "AI FlowAlgos" in self.sub_strategies:
+                orig = self.sub_strategies["AI FlowAlgos"]
+                self.sub_strategies["Genie"] = SubStrategyConfig(
+                    name="Genie",
+                    display_name="Genie",
+                    enabled=orig.enabled,
+                    paper_mode=orig.paper_mode,
+                    execution_mode=orig.execution_mode,
+                    entry_limit_mode=orig.entry_limit_mode,
+                    allocation_contracts=orig.allocation_contracts,
+                    auto_take_trades=orig.auto_take_trades,
+                    allocation_amount=orig.allocation_amount,
+                    max_premium_pct=orig.max_premium_pct,
+                    floor_guard_pct=orig.floor_guard_pct,
+                    initial_stop_loss_pct=orig.initial_stop_loss_pct,
+                    max_alert_price=orig.max_alert_price,
+                    allowed_tickers=list(orig.allowed_tickers),
+                    ladder_tiers=[LadderTier.from_dict(t.to_dict()) for t in orig.ladder_tiers],
+                )
+            else:
+                self.sub_strategies["Genie"] = SubStrategyConfig(
+                    name="Genie",
+                    display_name="Genie",
+                    enabled=True,
+                    paper_mode=True,
+                    execution_mode="tracking",
+                    entry_limit_mode="contracts",
+                    allocation_contracts=1,
+                    auto_take_trades=False,
+                    allocation_amount=self.allocation_amount,
+                    max_premium_pct=self.max_premium_pct,
+                    floor_guard_pct=self.floor_guard_pct,
+                    initial_stop_loss_pct=-40.0,
+                    max_alert_price=0.0,
+                    allowed_tickers=[],
+                    ladder_tiers=list(DEFAULT_GENIE_LADDER_TIERS),
+                )
+
+        if "AI FlowAlgos" not in self.sub_strategies:
+            self.sub_strategies["AI FlowAlgos"] = self.sub_strategies["Genie"]
 
         if "Others" not in self.sub_strategies:
             self.sub_strategies["Others"] = SubStrategyConfig(
@@ -341,32 +661,38 @@ class CloneTradeConfigManager:
                 max_premium_pct=self.max_premium_pct,
                 floor_guard_pct=self.floor_guard_pct,
                 initial_stop_loss_pct=-50.0,
+                max_alert_price=0.0,
+                allowed_tickers=[],
                 ladder_tiers=list(DEFAULT_OTHERS_LADDER_TIERS),
             )
         else:
-            # Enforce paper/tracking mode on Others
             others = self.sub_strategies["Others"]
             others.paper_mode = True
             if getattr(others, "execution_mode", "") == "live" or not getattr(others, "execution_mode", ""):
                 others.execution_mode = "tracking"
 
+        # Aliases for backward compatibility
+        self.sub_strategies["Human Alerters"] = self.sub_strategies.get("PC", self.sub_strategies["TG"])
+        self.sub_strategies["AI FlowAlgos"] = self.sub_strategies["Genie"]
+
     def get_sub_strategy_config(self, sub_strat: str) -> SubStrategyConfig:
         with self._lock:
             bucket = classify_sub_strategy(sub_strat)
-            if bucket == "PC" and "PC" in self.sub_strategies:
-                pc = self.sub_strategies["PC"]
-                pc.paper_mode = self.paper_mode
-                pc.auto_take_trades = self.auto_take_trades
-                pc.max_premium_pct = self.max_premium_pct
-                pc.floor_guard_pct = self.floor_guard_pct
-                pc.allocation_amount = self.allocation_amount
-                pc.initial_stop_loss_pct = self.initial_stop_loss_pct
-                if self.ladder_tiers:
-                    pc.ladder_tiers = list(self.ladder_tiers)
-                return pc
-            if bucket in self.sub_strategies:
-                return self.sub_strategies[bucket]
-            return self.sub_strategies.get("Others") or self.sub_strategies["PC"]
+            if bucket not in self.sub_strategies and sub_strat not in self.sub_strategies:
+                self._ensure_standard_sub_strategies()
+            cfg = self.sub_strategies.get(bucket) or self.sub_strategies.get(sub_strat)
+            if not cfg:
+                cfg = self.sub_strategies.get("Others") or self.sub_strategies.get("TG") or self.sub_strategies["PC"]
+            if bucket in ("TG", "PC", "PC2", "Human Alerters"):
+                if self.auto_take_trades and cfg.execution_mode != "tracking":
+                    cfg.auto_take_trades = True
+                if self.paper_mode and cfg.execution_mode != "tracking":
+                    cfg.paper_mode = True
+            if self.floor_guard_pct != 75.0 and getattr(cfg, "floor_guard_pct", 75.0) == 75.0:
+                cfg.floor_guard_pct = self.floor_guard_pct
+            if self.max_premium_pct != 25.0 and getattr(cfg, "max_premium_pct", 25.0) == 25.0:
+                cfg.max_premium_pct = self.max_premium_pct
+            return cfg
 
     def update_sub_strategy(self, name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -411,6 +737,23 @@ class CloneTradeConfigManager:
                 cfg.floor_guard_pct = max(0.0, float(updates["floor_guard_pct"]))
             if "initial_stop_loss_pct" in updates:
                 cfg.initial_stop_loss_pct = float(updates["initial_stop_loss_pct"])
+            if "max_alert_price" in updates:
+                cfg.max_alert_price = max(0.0, float(updates["max_alert_price"]))
+            if "roll_runner_enabled" in updates:
+                cfg.roll_runner_enabled = bool(updates["roll_runner_enabled"])
+            if "roll_runner_qty" in updates:
+                cfg.roll_runner_qty = max(1, int(updates["roll_runner_qty"]))
+            if "roll_runner_tolerance_pct" in updates:
+                cfg.roll_runner_tolerance_pct = max(1.0, float(updates["roll_runner_tolerance_pct"]))
+            if "roll_runner_every_leg" in updates:
+                cfg.roll_runner_every_leg = bool(updates["roll_runner_every_leg"])
+
+            if "allowed_tickers" in updates:
+                raw_tickers = updates["allowed_tickers"]
+                if isinstance(raw_tickers, str):
+                    cfg.allowed_tickers = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
+                elif isinstance(raw_tickers, list):
+                    cfg.allowed_tickers = [str(t).strip().upper() for t in raw_tickers if str(t).strip()]
 
             if "ladder_tiers" in updates and isinstance(updates["ladder_tiers"], list):
                 tiers = []
@@ -438,15 +781,16 @@ class CloneTradeConfigManager:
             elif "initial_stop_loss_pct" in updates and cfg.ladder_tiers:
                 cfg.ladder_tiers[0].stop_loss_pct = cfg.initial_stop_loss_pct
 
-            # If updating PC, also keep root config synchronized
-            if bucket == "PC":
-                self.auto_take_trades = cfg.auto_take_trades
-                self.max_premium_pct = cfg.max_premium_pct
-                self.floor_guard_pct = cfg.floor_guard_pct
-                self.allocation_amount = cfg.allocation_amount
-                self.initial_stop_loss_pct = cfg.initial_stop_loss_pct
-                self.paper_mode = cfg.paper_mode
-                self.ladder_tiers = list(cfg.ladder_tiers)
+            # Ensure backward-compatibility aliases stay in sync
+            if "PC" in self.sub_strategies:
+                self.sub_strategies["Human Alerters"] = self.sub_strategies["PC"]
+            if bucket == "AI FlowAlgos" or str(name).strip().lower() in ("aiflowalgos", "ai flowalgos"):
+                if "Genie" in self.sub_strategies:
+                    self.sub_strategies["Genie"] = cfg
+                if "Cowboy" in self.sub_strategies:
+                    self.sub_strategies["Cowboy"] = cfg
+            elif "Genie" in self.sub_strategies:
+                self.sub_strategies["AI FlowAlgos"] = self.sub_strategies["Genie"]
 
             self._save_config_unlocked()
             return cfg.to_dict()

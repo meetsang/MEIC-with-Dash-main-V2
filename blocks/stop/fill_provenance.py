@@ -104,7 +104,12 @@ def spread_width_points(state: Dict[str, Any]) -> float:
 
 def limit_credit(state: Dict[str, Any]) -> Optional[float]:
     entry = state_mod.section(state, 'entry')
-    for key in ('limit_credit', 'net_credit'):
+    keys = (
+        ('limit_debit', 'net_debit', 'limit_credit', 'net_credit')
+        if state.get('spread_type') == 'debit'
+        else ('limit_credit', 'net_credit')
+    )
+    for key in keys:
         val = entry.get(key)
         if val is not None:
             try:
@@ -141,6 +146,9 @@ def _set_fill_credit(
     entry['fill_credit_source'] = source
     entry['fill_confidence'] = confidence
     entry['net_credit'] = rounded
+    if state.get('spread_type') == 'debit':
+        entry['fill_debit'] = rounded
+        entry['net_debit'] = rounded
 
 
 def _broker_leg_count(result: OrderResult) -> int:
@@ -211,6 +219,7 @@ def apply_broker_leg_updates(state: Dict[str, Any], result: OrderResult) -> None
         order_qty and filled_qty >= order_qty and status == 'filled'
     )
 
+    is_debit = state.get('spread_type') == 'debit'
     if (
         short_fill is not None
         and long_fill is not None
@@ -220,7 +229,11 @@ def apply_broker_leg_updates(state: Dict[str, Any], result: OrderResult) -> None
             or result.filled_price_source is None
         )
     ):
-        credit = round(float(short_fill) - float(long_fill), 2)
+        credit = (
+            round(float(long_fill) - float(short_fill), 2)
+            if is_debit
+            else round(float(short_fill) - float(long_fill), 2)
+        )
         source = result.filled_price_source or 'broker_leg_math'
         _set_fill_credit(
             state,
@@ -235,20 +248,21 @@ def apply_broker_leg_updates(state: Dict[str, Any], result: OrderResult) -> None
     ):
         _set_fill_credit(
             state,
-            float(result.filled_price),
+            abs(float(result.filled_price)) if is_debit else float(result.filled_price),
             source=result.filled_price_source,
             confidence=CONFIDENCE_EXACT,
         )
 
 
 def try_exact_resolution(state: Dict[str, Any], result: OrderResult) -> bool:
+    is_debit = state.get('spread_type') == 'debit'
     short_px = state_mod.section(state, 'short_leg').get('fill_price')
     long_px = state_mod.section(state, 'long_leg').get('fill_price')
     if short_px is not None and long_px is not None:
         s = float(short_px)
         l = float(long_px)
         if s > 0 and l > 0:
-            credit = round(s - l, 2)
+            credit = round(l - s, 2) if is_debit else round(s - l, 2)
             _set_fill_credit(
                 state,
                 credit,
@@ -257,23 +271,31 @@ def try_exact_resolution(state: Dict[str, Any], result: OrderResult) -> bool:
             )
             return True
 
-    limit = limit_credit(state)
     agg = result.broker_aggregate_fill_price
     if agg is not None and _is_genuine_aggregate(result):
-        agg_f = float(agg)
+        agg_f = abs(float(agg)) if is_debit else float(agg)
         if result.short_fill_price is not None and result.long_fill_price is None:
-            inferred_long = _quantize_leg(float(result.short_fill_price) - agg_f)
+            inferred_long = (
+                _quantize_leg(float(result.short_fill_price) + agg_f)
+                if is_debit
+                else _quantize_leg(float(result.short_fill_price) - agg_f)
+            )
             if inferred_long >= FILL_INFERENCE_MIN_PRICE:
                 state['long_leg']['fill_price'] = inferred_long
                 state['long_leg']['fill_price_source'] = SOURCE_BROKER_LEG
                 _set_fill_credit(state, agg_f, source='broker_aggregate_execution', confidence=CONFIDENCE_EXACT)
                 return True
         if result.long_fill_price is not None and result.short_fill_price is None:
-            inferred_short = _quantize_leg(float(result.long_fill_price) + agg_f)
-            state['short_leg']['fill_price'] = inferred_short
-            state['short_leg']['fill_price_source'] = SOURCE_BROKER_LEG
-            _set_fill_credit(state, agg_f, source='broker_aggregate_execution', confidence=CONFIDENCE_EXACT)
-            return True
+            inferred_short = (
+                _quantize_leg(float(result.long_fill_price) - agg_f)
+                if is_debit
+                else _quantize_leg(float(result.long_fill_price) + agg_f)
+            )
+            if inferred_short >= FILL_INFERENCE_MIN_PRICE:
+                state['short_leg']['fill_price'] = inferred_short
+                state['short_leg']['fill_price_source'] = SOURCE_BROKER_LEG
+                _set_fill_credit(state, agg_f, source='broker_aggregate_execution', confidence=CONFIDENCE_EXACT)
+                return True
 
     if (
         result.filled_price is not None
@@ -282,7 +304,7 @@ def try_exact_resolution(state: Dict[str, Any], result: OrderResult) -> bool:
     ):
         _set_fill_credit(
             state,
-            float(result.filled_price),
+            abs(float(result.filled_price)) if is_debit else float(result.filled_price),
             source='broker_leg_math',
             confidence=CONFIDENCE_EXACT,
         )
@@ -297,11 +319,12 @@ def _validate_inferred_spread(
     credit: float,
     state: Dict[str, Any],
 ) -> bool:
-    if long_px < FILL_INFERENCE_MIN_PRICE:
+    if long_px < FILL_INFERENCE_MIN_PRICE or short_px < FILL_INFERENCE_MIN_PRICE:
         return False
     if credit < -FILL_IDENTITY_TOLERANCE:
         return False
-    spread = round(short_px - long_px, 2)
+    is_debit = state.get('spread_type') == 'debit'
+    spread = round(long_px - short_px, 2) if is_debit else round(short_px - long_px, 2)
     if spread < -FILL_IDENTITY_TOLERANCE:
         return False
     width = spread_width_points(state)
@@ -341,24 +364,33 @@ def try_protective_estimate(state: Dict[str, Any], result: OrderResult) -> bool:
     if has_short == has_long:
         return False
 
+    is_debit = state.get('spread_type') == 'debit'
     inferred_field = None
     inferred_px = None
     basis: Dict[str, Any] = {'limit_credit': limit}
 
     if has_short:
-        raw_long = Decimal(str(short_px)) - Decimal(str(limit))
+        raw_long = (
+            Decimal(str(short_px)) + Decimal(str(limit))
+            if is_debit
+            else Decimal(str(short_px)) - Decimal(str(limit))
+        )
         inferred_px = _quantize_leg(float(raw_long))
         inferred_field = 'long_leg.fill_price'
         basis['short_fill'] = short_px
         final_short, final_long = short_px, inferred_px
     else:
-        raw_short = Decimal(str(long_px)) + Decimal(str(limit))
+        raw_short = (
+            Decimal(str(long_px)) - Decimal(str(limit))
+            if is_debit
+            else Decimal(str(long_px)) + Decimal(str(limit))
+        )
         inferred_px = _quantize_leg(float(raw_short))
         inferred_field = 'short_leg.fill_price'
         basis['long_fill'] = long_px
         final_short, final_long = inferred_px, long_px
 
-    credit = round(final_short - final_long, 2)
+    credit = round(final_long - final_short, 2) if is_debit else round(final_short - final_long, 2)
 
     if not _validate_inferred_spread(final_short, final_long, credit, state):
         log.warning(

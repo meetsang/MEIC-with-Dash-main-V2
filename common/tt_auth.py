@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Union
+from typing import Any, Optional, Tuple
 
 from common import tt_config
 
@@ -55,6 +55,9 @@ def bootstrap_account(session: Any, account_number: Optional[str] = None) -> Any
         raise ValueError('TT_ACCOUNT_NUMBER must be set in .env')
 
     async def _bootstrap() -> Any:
+        # Refresh OAuth access token before validate() so /sessions/validate does not 401
+        if hasattr(session, 'refresh') and not hasattr(session, 'api_key'):
+            await session.refresh()
         await session.validate()
         if hasattr(session, 'api_key'):
             accounts = await Account.a_get(session)
@@ -92,3 +95,26 @@ def get_account(session: Any, account_number: Optional[str] = None) -> Any:
         return asyncio.run(_get())
 
     return asyncio.run(Account.get(session, acct_num))
+
+
+def verify_tastytrade_oauth() -> Tuple[bool, str]:
+    """Force-refresh TastyTrade OAuth session and verify account access (for 8:20 AM health check)."""
+    import asyncio
+
+    if tt_config.BROKER != 'tastytrade':
+        return True, f'broker={tt_config.BROKER}'
+    try:
+        session = create_tastytrade_session(paper=False)
+
+        async def _verify() -> str:
+            await session.refresh(force=True)
+            valid = await session.validate()
+            if not valid:
+                raise RuntimeError('Session validation returned False after token refresh')
+            return f'TastyTrade OAuth OK (acct={tt_config.TT_ACCOUNT_NUMBER or "unset"})'
+
+        detail = asyncio.run(_verify())
+        return True, detail
+    except Exception as exc:
+        log.error('TastyTrade OAuth verification failed: %s', exc)
+        return False, f'TastyTrade OAuth FAILED: {exc}'

@@ -143,6 +143,26 @@ class TestBuildSummaryMeicPnl(unittest.TestCase):
         grid_total = self._grid_pnl_total(summary)
         self.assertEqual(summary['meic_pnl'], grid_total)
 
+    def test_pending_fill_cancelled_order_is_unfilled_and_no_live_pnl(self):
+        rows = [
+            _row(slot_key='11-00_P', state='entered'),
+            _row(slot_key='01-15_C', lot='01-15', side='C', state='entering'),
+        ]
+        trades = [
+            _trade(status='open', filled_quantity=1, net_credit=0.9, lot='11-00', side='P'),
+            {
+                **_trade(status='pending_fill', filled_quantity=0, net_credit=0.65, lot='01-15', side='C'),
+                'open_order': {'status': 'cancelled'},
+            },
+        ]
+        summary = self._summary(rows, trades)
+        self.assertEqual(summary['meic_pnl'], 90.0)
+        unfilled_slot = next(s for s in summary['grid'] if s['slot_key'] == '01-15_C')
+        self.assertEqual(unfilled_slot['state'], 'unfilled')
+        self.assertIsNone(unfilled_slot.get('live_pnl'))
+        grid_total = sum(float(s['live_pnl']) for s in summary['grid'] if s.get('live_pnl') is not None)
+        self.assertEqual(summary['meic_pnl'], grid_total)
+
 
 def _trade_has_position_from_slot(slot):
     """Grid only shows live_pnl when spreadRowHasData is true."""

@@ -19,6 +19,15 @@ _CLOSED_STATUSES = frozenset({
 OVERLAP_SHIFT_STEP = 5
 
 
+def _opt_type_for_side(side: str) -> str:
+    s = (side or '').strip().upper()
+    if s in ('P', 'PDS', 'PUT'):
+        return 'P'
+    if s in ('C', 'CDS', 'CALL'):
+        return 'C'
+    return s
+
+
 def shift_spread_strikes(
     side: str,
     short_strike: int,
@@ -31,13 +40,13 @@ def shift_spread_strikes(
     direction='default': CCS $5 down (toward ATM), PCS $5 up (toward ATM).
     direction='reverse': CCS $5 up (further OTM), PCS $5 down (further OTM).
     """
-    side = side.upper()
+    opt_side = _opt_type_for_side(side)
     if direction == 'reverse':
-        if side == 'C':
+        if opt_side == 'C':
             return short_strike + step, long_strike + step
         return short_strike - step, long_strike - step
 
-    if side == 'C':
+    if opt_side == 'C':
         return short_strike - step, long_strike - step
     return short_strike + step, long_strike + step
 
@@ -76,21 +85,8 @@ def leg_overlap_conflict(
     Return a human-readable reason if an active trade would flip an existing leg.
     Duplicate vertical spreads (same short and long strikes in the same roles)
     are permitted by default unless allow_same_spread=False is explicitly specified.
-
-    When paper is specified (True or False), only active trades with matching
-    execution mode (paper vs live) are checked. A paper trade never conflicts with
-    a live trade, and a live trade never conflicts with a paper trade.
-
-    Legacy flip conflict rule:
-    - new long must not equal an existing short on the same side (P or C)
-      (e.g., if open PCS is 7700/7675, a new PCS 7725/7700 has debit 7700 reversing credit 7700)
-    - new short must not equal an existing long on the same side
-      (e.g., if open PCS is 7700/7675, a new PCS 7675/7650 has credit 7675 reversing debit 7675)
-
-    Closed or terminal trades (status closed/cancelled/expired/settled, close block present,
-    zero holding quantity, or past expiry date) are strictly ignored.
     """
-    side = side.upper()
+    opt_side = _opt_type_for_side(side)
     new_short = to_tastytrade(short_symbol)
     new_long = to_tastytrade(long_symbol)
 
@@ -103,7 +99,6 @@ def leg_overlap_conflict(
             continue
 
         # 0. Paper vs Live isolation:
-        # Paper trades only block paper trades; Live trades only block live trades.
         if paper is not None:
             trade_is_paper = is_trade_paper(st, path)
             if trade_is_paper != paper:
@@ -151,7 +146,8 @@ def leg_overlap_conflict(
             pass
 
         # 6. Side check: puts and calls are independent
-        if str(st.get('entry', {}).get('side', '')).upper() != side:
+        st_side = _opt_type_for_side(str(st.get('entry', {}).get('side', '')))
+        if st_side != opt_side:
             continue
 
         short_leg = st.get('short_leg') or {}
@@ -203,23 +199,24 @@ def resolve_leg_overlap(
     Returns (short_strike, long_strike, short_symbol, long_symbol, shift_count)
     or None if no collision-free strike found within max_shifts.
     """
-    side = side.upper()
+    opt_side = _opt_type_for_side(side)
     ss, ls = int(short_strike), int(long_strike)
+    orig_diff = ls - ss
+    if orig_diff == 0:
+        return None
     shifts = 0
 
     while shifts <= max_shifts:
-        short_sym = build_tastytrade_symbol(expiry, side, ss)
-        long_sym = build_tastytrade_symbol(expiry, side, ls)
-        if leg_overlap_conflict(short_sym, long_sym, side, exclude_path=exclude_path, allow_same_spread=allow_same_spread, paper=paper) is None:
+        short_sym = build_tastytrade_symbol(expiry, opt_side, ss)
+        long_sym = build_tastytrade_symbol(expiry, opt_side, ls)
+        if leg_overlap_conflict(short_sym, long_sym, opt_side, exclude_path=exclude_path, allow_same_spread=allow_same_spread, paper=paper) is None:
             return ss, ls, short_sym, long_sym, shifts
 
-        ss, ls = shift_spread_strikes(side, ss, ls, step, direction=direction)
+        ss, ls = shift_spread_strikes(opt_side, ss, ls, step, direction=direction)
         shifts += 1
         if ss <= 0 or ls <= 0:
             return None
-        if side == 'P' and ls >= ss:
-            return None
-        if side == 'C' and ls <= ss:
+        if (ls - ss) * orig_diff <= 0:
             return None
 
     return None

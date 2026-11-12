@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Optional
 
-from common.market_hours import MARKET_CLOSE_HOUR_CT, MARKET_CLOSE_MINUTE_CT
+from common.market_hours import (
+    MARKET_CLOSE_HOUR_CT,
+    MARKET_CLOSE_MINUTE_CT,
+    market_close_time_ct,
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,13 @@ def runtime_should_stop_for_session(
         from meic0dte.app.utilities import central_now
         now = central_now()
 
-    close = time(profile.close_hour, profile.close_minute)
+    if (
+        profile.close_hour == MARKET_CLOSE_HOUR_CT
+        and profile.close_minute == MARKET_CLOSE_MINUTE_CT
+    ):
+        close = market_close_time_ct(now.date())
+    else:
+        close = time(profile.close_hour, profile.close_minute)
 
     if session_start.time() >= close:
         return True

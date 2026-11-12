@@ -18,8 +18,6 @@ log = logging.getLogger(__name__)
 _CLOSE_ACTION_MAP = {
     'BUY_TO_OPEN': 'SELL_TO_CLOSE',
     'SELL_TO_OPEN': 'BUY_TO_CLOSE',
-    'BUY_TO_CLOSE': 'SELL_TO_OPEN',
-    'SELL_TO_CLOSE': 'BUY_TO_OPEN',
 }
 
 
@@ -101,6 +99,41 @@ def close_structure(
         paper = is_strategy_paper(strategy_name, default=True)
 
     structures = trade.get('structures') or []
+    if not structures and trade.get('short_leg') and trade.get('long_leg'):
+        if trade.get('status') in ('closed', 'closing'):
+            return CloseResult(structure_id, False, 'already closed')
+        filename = os.path.basename(path)
+        trades_root = os.path.abspath(os.path.join(os.path.dirname(path), '..', '..'))
+        cmd_dir = os.path.join(trades_root, 'commands')
+        os.makedirs(cmd_dir, exist_ok=True)
+        cmd_path = os.path.join(cmd_dir, f'{filename}.close.json')
+        try:
+            with open(cmd_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'action': 'close',
+                    'close_mechanism': 'manual_close',
+                    'ts': datetime.now().isoformat(),
+                    'source': 'manual_close_structure',
+                }, f)
+        except Exception as exc:
+            log.warning('Could not write close command for %s: %s', filename, exc)
+
+        qty = int(trade.get('quantity') or trade.get('filled_quantity') or 1)
+        short_sym = trade['short_leg']['symbol']
+        long_sym = trade['long_leg']['symbol']
+        target = {
+            'structure_id': structure_id,
+            'name': 'PCS',
+            'status': 'open',
+            'quantity': qty,
+            'legs': [
+                {'symbol': short_sym, 'action': 'SELL_TO_OPEN', 'qty': qty},
+                {'symbol': long_sym, 'action': 'BUY_TO_OPEN', 'qty': qty},
+            ],
+        }
+        structures = [target]
+        trade['structures'] = structures
+
     target = next((
         s for s in structures
         if s.get('structure_id') == structure_id or s.get('name') == structure_id or structure_id in ('all', trade.get('trade_id'))

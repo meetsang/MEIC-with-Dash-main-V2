@@ -7,11 +7,18 @@ Usage:
   python run.py --integration-tranche   # off-hours: dashboard + streamer + one tranche, no stop_monitor
 """
 import os
+import signal
 import sys
+
+if __name__ == '__main__':
+    sys.modules.setdefault('run', sys.modules['__main__'])
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+_VENV_PYTHON = os.path.join(ROOT, '.venv', 'Scripts', 'python.exe') if os.name == 'nt' else os.path.join(ROOT, '.venv', 'bin', 'python')
+PYTHON_EXE = _VENV_PYTHON if os.path.isfile(_VENV_PYTHON) else sys.executable
 
 import common.win_ssl_env  # noqa: F401 — before any HTTPS/ssl usage
 
@@ -211,10 +218,13 @@ def wait_until(hour, minute, second=0):
 
 
 def start_streamer():
+    from common.in_process_services import is_in_process_mode, start_in_process_streamer
+    if is_in_process_mode():
+        return start_in_process_streamer()
     script = get_streamer_script()
     log.info("Starting %s ...", script)
     proc = subprocess.Popen(
-        [sys.executable, os.path.join(ROOT, script)],
+        [PYTHON_EXE, os.path.join(ROOT, script)],
         cwd=ROOT,
         **_SUBPROCESS_QUIET,
     )
@@ -226,7 +236,10 @@ def start_stop_monitor(paper: bool = False):
     """Start centralized stop_monitor supervisor (TastyTrade mode)."""
     if not use_thin_tranches():
         return None
-    cmd = [sys.executable, os.path.join(ROOT, 'blocks', 'stop', 'run.py')]
+    from common.in_process_services import is_in_process_mode, start_in_process_stop_monitor
+    if is_in_process_mode():
+        return start_in_process_stop_monitor(paper=paper)
+    cmd = [PYTHON_EXE, os.path.join(ROOT, 'blocks', 'stop', 'run.py')]
     if paper or tt_config.PAPER_MODE:
         cmd.append('--paper')
     log.info('Starting stop_monitor: %s', ' '.join(cmd))
@@ -237,9 +250,12 @@ def start_stop_monitor(paper: bool = False):
 
 def start_market_data_recorder():
     """MQTT index/equity OHLC recorder — runs alongside streamer."""
+    from common.in_process_services import is_in_process_mode, start_in_process_market_data
+    if is_in_process_mode():
+        return start_in_process_market_data()
     log.info('Starting market_data recorder ...')
     proc = subprocess.Popen(
-        [sys.executable, '-m', 'market_data.run'],
+        [PYTHON_EXE, '-m', 'market_data.run'],
         cwd=ROOT,
         **_SUBPROCESS_QUIET,
     )
@@ -256,7 +272,7 @@ def run_tranche(wait: bool = False, lot: str | None = None, extra_env: dict | No
         if extra_env:
             env.update(extra_env)
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(ROOT, "meic0dte", "app_main.py")],
+            [PYTHON_EXE, os.path.join(ROOT, "meic0dte", "app_main.py")],
             cwd=ROOT,
             env=env,
             **_SUBPROCESS_QUIET,
@@ -348,43 +364,28 @@ def integration_session(
 
 def is_market_closed_today() -> bool:
     """True only for a real NYSE holiday. FOMC days are open — not included."""
-    today = _central_now()
-    today_str = today.strftime('%y%m%d')
-    market_closed = set(common_config._get_nyse_holidays(today.year))
-    return today_str in market_closed
+    return common_config.is_market_closed_today(now=_central_now())
 
 
 def check_trading_day():
-    """Returns (should_trade, reason). Fetches fresh FOMC dates from the Fed site."""
-    today     = _central_now()
-    yesterday = today - timedelta(days=1)
-
-    today_str     = today.strftime('%y%m%d')
-    yesterday_str = yesterday.strftime('%y%m%d')
-    today_fmt     = today.strftime('%Y-%m-%d')
-
-    log.info(f"Checking if {today_fmt} is a trading day ...")
-
-    # Re-fetch FOMC dates fresh each morning (also fetch prior year in case Jan 1)
-    fomc_days     = set(common_config._fetch_fomc_dates(today.year))
-    fomc_days    |= set(common_config._fetch_fomc_dates(yesterday.year))
-    market_closed = set(common_config._get_nyse_holidays(today.year))
-
-    if today_str in market_closed:
-        return False, f"NYSE is CLOSED today ({today_fmt}). No trading."
-    if today_str in fomc_days:
-        return False, f"Today ({today_fmt}) is a FOMC day. Skipping trading."
-    return True, f"{today_fmt} is a normal trading day. Proceeding."
+    """Returns (should_trade, reason). Uses daily in-memory cache in common.config."""
+    return common_config.check_trading_day(now=_central_now(), logger=log)
 
 
 def _run_eod_cleanup_if_due(logger) -> None:
-    """After 3:00 PM session end, wait until 3:30 for EOD sync (no active/ archive)."""
+    """After session close (15:00 CT normal, 12:00 CT on NYSE half-days), wait +30m for EOD sync."""
+    from common.market_hours import market_close_time_ct
     now = _central_now()
-    if now.time() < t(STREAM_STOP_HOUR, 0):
+    if now.weekday() >= 5:
         return
-    if now.time() < t(CLEANUP_EOD_HOUR, CLEANUP_EOD_MIN):
-        logger.info('Waiting until %02d:%02d for end-of-day sync ...', CLEANUP_EOD_HOUR, CLEANUP_EOD_MIN)
-        wait_until(CLEANUP_EOD_HOUR, CLEANUP_EOD_MIN)
+    close_t = market_close_time_ct(now.date())
+    if now.time() < close_t:
+        return
+    cleanup_dt = dt.combine(now.date(), close_t) + timedelta(minutes=30)
+    cleanup_t = cleanup_dt.time()
+    if now.time() < cleanup_t:
+        logger.info('Waiting until %02d:%02d for end-of-day sync ...', cleanup_t.hour, cleanup_t.minute)
+        wait_until(cleanup_t.hour, cleanup_t.minute)
     try:
         run_session_cleanup('eod', logger)
     except Exception:
@@ -470,10 +471,20 @@ def main(
 
     overnight_active = has_active_overnight_strategy(ROOT)
 
-    # Wait for stream start time if we're early (unless force + tranche_now)
-    if not force and now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
-        log.info(f"Waiting until {STREAM_START_HOUR:02d}:{STREAM_START_MIN:02d} to start streamer ...")
-        wait_until(STREAM_START_HOUR, STREAM_START_MIN)
+    # Wait for stream start time if we're early (unless force + tranche_now, or active overnight futures strategy)
+    if not force:
+        if overnight_active:
+            # During pre-market prep (07:00 - 08:30 CST), overnight futures are flattened; wait for daytime 08:30 open
+            if t(7, 0) <= now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
+                log.info(
+                    f"Pre-market prep (07:00-08:30 CST) reached — waiting until "
+                    f"{STREAM_START_HOUR:02d}:{STREAM_START_MIN:02d} to start daytime streamer ..."
+                )
+                wait_until(STREAM_START_HOUR, STREAM_START_MIN)
+        else:
+            if now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
+                log.info(f"Waiting until {STREAM_START_HOUR:02d}:{STREAM_START_MIN:02d} to start streamer ...")
+                wait_until(STREAM_START_HOUR, STREAM_START_MIN)
 
     session_started = _central_now()
     meic_closed = False
@@ -486,21 +497,30 @@ def main(
             profile=MEIC_SPX_0DTE,
         )
     ):
+        if not overnight_active or session_started.weekday() == 4:
+            log.info(
+                'MEIC session already closed before service start — '
+                'skipping streamer, stop_monitor, and market_data recorder.'
+            )
+            stop_coordinator()
+            _run_eod_cleanup_if_due(log)
+            _write_status('stopped', 'Session already closed before service start.')
+            return
         log.info(
-            'MEIC session already closed before service start — '
-            'skipping streamer, stop_monitor, and market_data recorder.'
+            'MEIC daytime session already closed before service start — '
+            'running overnight futures services (skipping daytime stop_monitor and entry_runner).'
         )
+        meic_closed = True
         stop_coordinator()
-        _run_eod_cleanup_if_due(log)
-        _write_status('stopped', 'Session already closed before service start.')
-        return
 
     streamer = start_streamer()
     market_data = start_market_data_recorder()
-    stop_mon = None if no_stop_monitor else start_stop_monitor(paper=paper)
+    stop_mon = None if (no_stop_monitor or meic_closed) else start_stop_monitor(paper=paper)
     services_started_mono = time.monotonic()
     if no_stop_monitor:
         log.info('stop_monitor disabled for this session.')
+    elif meic_closed:
+        log.info('stop_monitor disabled because daytime MEIC session is already closed.')
     time.sleep(10)  # give streamer time to connect before first tranche
 
     standalone_runners = []
@@ -511,6 +531,10 @@ def main(
             if cfg.name in ('MANUAL_SPREAD',):
                 continue  # manual uses dashboard, not standalone runner
             runner = StandaloneStrategyRunner(strat, root=ROOT, logger=log)
+            if meic_closed and not _is_overnight_runner(runner):
+                standalone_runners.append(runner)
+                log.info('Registered daytime standalone runner %s (standby until 08:30 open)', cfg.name)
+                continue
             runner.start()
             standalone_runners.append(runner)
             log.info('Started standalone strategy runner: %s (paper=%s)', cfg.name, cfg.paper)
@@ -531,7 +555,7 @@ def main(
     entry_runner = None
     entry_coord = None
 
-    if should_trade:
+    if should_trade and not meic_closed:
         bootstrap_meic_session_if_missing(ROOT)
         # Prefer session CSV pause/skip eligibility when available
         try:
@@ -573,7 +597,7 @@ def main(
         stop_entry_coordinator,
     )
 
-    if should_trade and entry_runner is not None:
+    if should_trade and not meic_closed and entry_runner is not None:
         entry_coord = start_entry_coordinator(entry_runner, root=ROOT, logger=log)
 
     # Token refresh is handled by the global thread started in __main__
@@ -606,12 +630,13 @@ def main(
                 if entry_runner is not None:
                     entry_runner = None
                 stop_coordinator()
+                is_friday = (now.weekday() == 4)
                 for s_runner in standalone_runners:
-                    if not _is_overnight_runner(s_runner):
+                    if is_friday or not _is_overnight_runner(s_runner):
                         try:
                             s_runner.stop()
                         except Exception:
-                            log.exception('Failed to stop daytime standalone runner %s', s_runner.strategy.config.name)
+                            log.exception('Failed to stop standalone runner %s', s_runner.strategy.config.name)
                 if stop_mon is not None:
                     try:
                         stop_mon.terminate()
@@ -620,7 +645,8 @@ def main(
                         pass
                     stop_mon = None
                 keep_overnight_stream = (
-                    any(s.is_alive() and _is_overnight_runner(s) for s in standalone_runners)
+                    not is_friday
+                    and any(s.is_alive() and _is_overnight_runner(s) for s in standalone_runners)
                     and not once
                     and not tranche_now
                 )
@@ -656,14 +682,55 @@ def main(
                     break
 
             # Morning transition for overnight runtime (at 08:20 CST before 08:30 open)
-            if meic_closed and now.time() >= t(8, 20) and now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
-                log.info("08:20 CST morning preparation reached — running morning cleanup and waiting until 08:30 CST...")
+            if meic_closed and now.weekday() < 5 and now.time() >= t(8, 20) and now.time() < t(STREAM_START_HOUR, STREAM_START_MIN):
+                log.info("08:20 CST morning preparation reached — running morning cleanup, OAuth check, and streamer refresh...")
                 try:
                     run_session_cleanup('morning', log)
                 except Exception:
                     log.exception('Morning session cleanup failed')
+                try:
+                    from common.broker_factory import reset_shared_broker
+                    reset_shared_broker()
+                    log.info('Shared broker reset for morning session')
+                except Exception:
+                    log.exception('Failed to reset shared broker for morning transition')
+                try:
+                    from common.notifications import run_morning_readiness_check
+                    run_morning_readiness_check(ROOT, log, session_label='08:20 CST Morning Transition')
+                except Exception:
+                    log.exception('Morning readiness check / SMS alert failed')
+                # Recycle streamer at 08:20 CST so DXLink acquires a fresh 24h quote token before 08:30 open
+                if streamer is not None:
+                    try:
+                        log.info('Recycling streamer at 08:20 CST for fresh 24h DXLink quote token ...')
+                        streamer.terminate()
+                        streamer.wait(timeout=5)
+                    except Exception:
+                        pass
+                    streamer = start_streamer()
                 wait_until(STREAM_START_HOUR, STREAM_START_MIN)
                 now = _central_now()
+                session_date_ct = now.strftime('%Y-%m-%d')
+                if not force:
+                    if is_market_closed_today():
+                        should_trade = False
+                        log.info('Market is closed today (%s) — daytime trading disabled.', session_date_ct)
+                    else:
+                        should_trade, skip_reason = check_trading_day()
+                        if not should_trade:
+                            log.info('Trading disabled today (%s: %s).', session_date_ct, skip_reason)
+                        else:
+                            log.info(skip_reason)
+                initialize_for_session_date(session_date_ct)
+                try:
+                    start_coordinator(
+                        session_date_ct=session_date_ct,
+                        tranches=meic_tranches_from_slots(MEIC_TRANCHE_SLOTS),
+                        paper=bool(paper or tt_config.PAPER_MODE),
+                        logger=log,
+                    )
+                except Exception:
+                    log.exception('Failed to start REST probe coordinator for morning session')
                 if should_trade:
                     if streamer is None or streamer.poll() is not None:
                         streamer = start_streamer()
@@ -793,11 +860,21 @@ if __name__ == "__main__":
     parser.add_argument('--once', action='store_true', help='Exit after tranche-now or first scheduled tranche')
     parser.add_argument('--no-stop-monitor', action='store_true', help='Do not start stop_monitor subprocess')
     parser.add_argument('--one-day', action='store_true', help='Run one trading day then exit (Task Scheduler mode)')
+    parser.add_argument('--in-process', action='store_true', help='Run subsystems as in-process threads instead of subprocesses (saves ~300 MB RAM on e2-micro)')
+    parser.add_argument('--low-memory', action='store_true', help='Enable all low-memory optimizations for 1 GB RAM e2-micro (in-process + lean ladder + 7-day log retention)')
     parser.add_argument('--no-clone-relay', action='store_true', help='Do not start the clone trades relay / ngrok tunnel')
     parser.add_argument('--ngrok-domain', default=None, help='Static ngrok domain for clone trades relay')
     parser.add_argument('--lot', default=None, help='Tranche lot label (sets MEIC_LOT for app_main)')
     args = parser.parse_args()
     one_day = args.one_day or os.environ.get('RUN_ONE_DAY_DEFAULT', 'false').lower() in ('1', 'true', 'yes')
+    if args.in_process:
+        os.environ['IN_PROCESS_SERVICES'] = 'true'
+    if args.low_memory:
+        os.environ['LOW_MEMORY_MODE'] = 'true'
+        os.environ['IN_PROCESS_SERVICES'] = 'true'
+        os.environ['MEIC_SIDE_OPTION_COLLECTION'] = 'false'
+        os.environ['SPX_LADDER_MAX_ACTIVE_SYMBOLS'] = '50'
+        os.environ.setdefault('LOG_RETENTION_DAYS', '7')
 
     if args.real:
         os.environ['PAPER_MODE'] = 'false'
@@ -836,11 +913,20 @@ if __name__ == "__main__":
             args.lot = 'test-offhours'
 
     import atexit
-    from common.process_lock import acquire_lock, release_lock
+    from common.process_lock import acquire_lock, release_lock, active_lock_pid
 
     if not acquire_lock('launcher', paper=tt_config.PAPER_MODE, command='run.py'):
         raise SystemExit('Launcher already running — exit to avoid duplicate broker traffic')
     atexit.register(release_lock, 'launcher')
+
+    def _sigterm_handler(signum, frame):
+        log.info('Received SIGTERM (signal %s) — initiating graceful shutdown ...', signum)
+        raise KeyboardInterrupt('SIGTERM received')
+
+    try:
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+    except Exception:
+        pass
 
     # Daily fresh start: archive all prior-day closed/expired trades before starting any services
     try:
@@ -849,15 +935,23 @@ if __name__ == "__main__":
         log.exception('Morning session cleanup failed on launcher startup')
 
     # Start dashboard server once — stays running all week
-    dash_log = os.path.join(ROOT, 'logs', f'dashboard_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
-    dash_log_fh = open(dash_log, 'w', encoding='utf-8')
-    dash = subprocess.Popen(
-        [sys.executable, os.path.join(ROOT, 'dashboard', 'server.py')],
-        cwd=ROOT,
-        stdout=dash_log_fh,
-        stderr=subprocess.STDOUT,
-    )
-    log.info("Dashboard started (PID %s) at http://localhost:5002 log=%s", dash.pid, dash_log)
+    dash = None
+    dash_log_fh = None
+    dash_pid = active_lock_pid('dashboard')
+    no_window_flag = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if sys.platform == 'win32' else 0
+    if dash_pid:
+        log.info("Dashboard already running (PID %s) at http://localhost:5002", dash_pid)
+    else:
+        dash_log = os.path.join(ROOT, 'logs', f'dashboard_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
+        dash_log_fh = open(dash_log, 'w', encoding='utf-8')
+        dash = subprocess.Popen(
+            [PYTHON_EXE, os.path.join(ROOT, 'dashboard', 'server.py')],
+            cwd=ROOT,
+            stdout=dash_log_fh,
+            stderr=subprocess.STDOUT,
+            creationflags=no_window_flag,
+        )
+        log.info("Dashboard started (PID %s) at http://localhost:5002 log=%s", dash.pid, dash_log)
 
     # Start clone trades secure relay (port 5005) + ngrok if enabled
     relay_proc = None
@@ -867,7 +961,7 @@ if __name__ == "__main__":
         try:
             relay_log = os.path.join(ROOT, 'logs', f'clone_relay_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
             relay_log_fh = open(relay_log, 'w', encoding='utf-8')
-            relay_cmd = [sys.executable, os.path.join(ROOT, 'clone_trades', 'relay.py'), '--ngrok']
+            relay_cmd = [PYTHON_EXE, '-u', os.path.join(ROOT, 'clone_trades', 'relay.py'), '--ngrok']
             ngrok_domain = args.ngrok_domain or os.environ.get('NGROK_DOMAIN', '').strip()
             if ngrok_domain:
                 relay_cmd.extend(['--domain', ngrok_domain])
@@ -879,10 +973,44 @@ if __name__ == "__main__":
                 cwd=ROOT,
                 stdout=relay_log_fh,
                 stderr=subprocess.STDOUT,
+                creationflags=no_window_flag,
             )
             log.info("Clone trades secure relay started (PID %s) on port 5005 with ngrok log=%s", relay_proc.pid, relay_log)
         except Exception as exc:
             log.warning("Could not start clone trades relay: %s", exc)
+
+    _relay_stop_event = threading.Event()
+    def _relay_watchdog_loop():
+        nonlocal relay_proc, relay_log_fh
+        while not _relay_stop_event.is_set():
+            _relay_stop_event.wait(5.0)
+            if _relay_stop_event.is_set():
+                break
+            if clone_relay_enabled and relay_proc is not None and relay_proc.poll() is not None:
+                exit_code = relay_proc.poll()
+                log.warning("Clone trades relay (PID %s) died with code %s — watchdog auto-restarting...", relay_proc.pid, exit_code)
+                try:
+                    if relay_log_fh:
+                        try:
+                            relay_log_fh.close()
+                        except Exception:
+                            pass
+                    new_log = os.path.join(ROOT, 'logs', f'clone_relay_{_central_now().strftime("%Y-%m-%d_%H%M%S")}.log')
+                    relay_log_fh = open(new_log, 'w', encoding='utf-8')
+                    relay_proc = subprocess.Popen(
+                        relay_cmd,
+                        cwd=ROOT,
+                        stdout=relay_log_fh,
+                        stderr=subprocess.STDOUT,
+                        creationflags=no_window_flag,
+                    )
+                    log.info("Watchdog successfully restarted clone trades relay (PID %s) on port 5005", relay_proc.pid)
+                except Exception as _re_exc:
+                    log.error("Watchdog failed to restart clone trades relay: %s", _re_exc)
+
+    if clone_relay_enabled and relay_proc is not None:
+        _t_relay_wd = threading.Thread(target=_relay_watchdog_loop, daemon=True, name="relay-watchdog")
+        _t_relay_wd.start()
 
     time.sleep(1.5)
     try:
@@ -893,9 +1021,10 @@ if __name__ == "__main__":
         log.info('Trading gate reconciled for session %s', session_date_ct)
     except Exception:
         log.exception('Trading gate reconcile failed on launcher start')
-    if dash.poll() is not None:
+    if dash is not None and dash.poll() is not None:
         try:
-            dash_log_fh.flush()
+            if dash_log_fh:
+                dash_log_fh.flush()
             with open(dash_log, encoding='utf-8') as fh:
                 tail = fh.read().strip()
         except OSError:
@@ -950,25 +1079,75 @@ if __name__ == "__main__":
                 lot=args.lot,
             )
         else:
+            weekend_cleanup_done_date = None
             while True:
                 now = _central_now()
-                # Skip weekends — sleep until Monday 8:20 AM
-                if now.weekday() >= 5 and not args.force:  # 5=Sat, 6=Sun
-                    days_until_monday = 7 - now.weekday()
-                    next_monday = (now + timedelta(days=days_until_monday)).replace(
-                        hour=8, minute=20, second=0, microsecond=0)
-                    secs = (_central_to_utc(next_monday) - dt.now(timezone.utc).replace(tzinfo=None)).total_seconds()
-                    log.info(f"Weekend — sleeping until Monday {next_monday.strftime('%Y-%m-%d %H:%M')} ({secs/3600:.1f}h)")
-                    _write_status('stopped', 'Weekend — bot resumes Monday.')
-                    wait_until_central(next_monday)
+                # Weekend schedule (Sat & Sun):
+                #  - Sat 08:20 CST: run morning cleanup & log pruning, keep MEIC shut
+                #  - Sun 08:20 CST: run morning cleanup & log pruning, keep MEIC shut
+                #  - Sun 16:30 CST (4:30 PM CST): launch overnight futures (streamer + market_data + DRMA_HM_SPX)
+                if now.weekday() == 5 and not args.force:  # Saturday
+                    if now.time() < t(8, 20):
+                        sat_morning = now.replace(hour=8, minute=20, second=0, microsecond=0)
+                        _write_status('stopped', 'Weekend — waiting for Saturday 08:20 CST cleanup.')
+                        wait_until_central(sat_morning)
+                        now = _central_now()
+                    if weekend_cleanup_done_date != now.date():
+                        log.info('Saturday morning maintenance — running cleanup & log pruning (MEIC stays shut) ...')
+                        try:
+                            run_session_cleanup('morning', log)
+                        except Exception:
+                            log.exception('Saturday morning cleanup failed')
+                        weekend_cleanup_done_date = now.date()
+                    sun_morning = (now + timedelta(days=1)).replace(hour=8, minute=20, second=0, microsecond=0)
+                    secs = (_central_to_utc(sun_morning) - dt.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                    log.info(f"Saturday maintenance complete — sleeping until Sunday {sun_morning.strftime('%Y-%m-%d %H:%M')} ({secs/3600:.1f}h)")
+                    _write_status('stopped', 'Weekend — MEIC shut (resumes Sun 16:30 CST for overnight futures / Mon 08:20 CST).')
+                    wait_until_central(sun_morning)
                     continue
 
-                # Run today's trading session
+                if now.weekday() == 6 and not args.force:  # Sunday
+                    if now.time() < t(8, 20):
+                        sun_morning = now.replace(hour=8, minute=20, second=0, microsecond=0)
+                        _write_status('stopped', 'Weekend — waiting for Sunday 08:20 CST cleanup.')
+                        wait_until_central(sun_morning)
+                        now = _central_now()
+                    if weekend_cleanup_done_date != now.date():
+                        log.info('Sunday morning maintenance — running cleanup & log pruning (MEIC stays shut) ...')
+                        try:
+                            run_session_cleanup('morning', log)
+                        except Exception:
+                            log.exception('Sunday morning cleanup failed')
+                        weekend_cleanup_done_date = now.date()
+                    if has_active_overnight_strategy(ROOT):
+                        if now.time() < t(16, 30):
+                            sun_reopen = now.replace(hour=16, minute=30, second=0, microsecond=0)
+                            secs = (_central_to_utc(sun_reopen) - dt.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                            log.info(f"Sunday — sleeping until 16:30 CST ({secs/3600:.1f}h) to launch overnight futures before 17:00 Globex open")
+                            _write_status('stopped', 'Weekend — launching overnight futures at Sun 16:30 CST.')
+                            wait_until_central(sun_reopen)
+                            now = _central_now()
+                        log.info('Sunday 16:30 CST reached — launching overnight futures session ...')
+                    else:
+                        next_monday = (now + timedelta(days=1)).replace(hour=8, minute=20, second=0, microsecond=0)
+                        secs = (_central_to_utc(next_monday) - dt.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                        log.info(f"Sunday — no overnight strategy enabled; sleeping until Monday {next_monday.strftime('%Y-%m-%d %H:%M')} ({secs/3600:.1f}h)")
+                        _write_status('stopped', 'Weekend — bot resumes Monday 08:20 CST.')
+                        wait_until_central(next_monday)
+                        continue
+
+                # Run today's trading session (or Sunday 16:30 CST overnight futures launch)
                 try:
                     run_session_cleanup('morning', log)
                 except Exception:
                     log.exception('Morning session cleanup failed')
-                if dash.poll() is not None:
+                try:
+                    from common.notifications import run_morning_readiness_check
+                    lbl = 'Sun 16:30 CST Futures Launch' if now.weekday() == 6 else '08:20 CST Morning Check'
+                    run_morning_readiness_check(ROOT, log, session_label=lbl)
+                except Exception:
+                    log.exception('Morning readiness check / SMS alert failed')
+                if dash is not None and dash.poll() is not None:
                     log.critical(
                         'DASHBOARD exited unexpectedly (code %s)',
                         dash.returncode,
@@ -985,21 +1164,20 @@ if __name__ == "__main__":
                 if args.once or args.tranche_now:
                     break
 
-                # After 3PM, sleep until 8:20 AM next weekday
+                # Sleep until 8:20 AM tomorrow (includes Sat/Sun morning maintenance wakeup)
                 now = _central_now()
                 tomorrow = now + timedelta(days=1)
-                # Skip to Monday if tomorrow is weekend
-                while tomorrow.weekday() >= 5:
-                    tomorrow = tomorrow + timedelta(days=1)
                 next_start = tomorrow.replace(hour=8, minute=20, second=0, microsecond=0)
                 secs = (_central_to_utc(next_start) - dt.now(timezone.utc).replace(tzinfo=None)).total_seconds()
-                log.info(f"Sleeping until next trading day {next_start.strftime('%Y-%m-%d %H:%M')} ({secs/3600:.1f}h)")
-                _write_status('stopped', f"Done for today. Resuming {next_start.strftime('%a %b %d at %H:%M')}.")
+                log.info(f"Sleeping until next morning wakeup {next_start.strftime('%Y-%m-%d %H:%M')} ({secs/3600:.1f}h)")
+                _write_status('stopped', f"Done for today. Next wakeup {next_start.strftime('%a %b %d at %H:%M')}.")
                 wait_until_central(next_start)
 
     except KeyboardInterrupt:
         log.info("Launcher interrupted by user.")
     finally:
+        if '_relay_stop_event' in locals():
+            _relay_stop_event.set()
         if relay_proc is not None:
             try:
                 relay_proc.terminate()
@@ -1015,6 +1193,19 @@ if __name__ == "__main__":
                 relay_log_fh.close()
             except Exception:
                 pass
-        dash.terminate()
-        dash.wait()
-        log.info("Dashboard stopped.")
+        if dash is not None:
+            dash.terminate()
+            dash.wait()
+            log.info("Dashboard stopped.")
+            try:
+                from common.process_lock import active_lock_pid, release_lock
+                running_dash_pid = active_lock_pid('dashboard')
+                if running_dash_pid:
+                    import psutil
+                    p = psutil.Process(running_dash_pid)
+                    p.terminate()
+                    p.wait(timeout=3)
+                    log.info("Terminated background dashboard PID %s.", running_dash_pid)
+                release_lock('dashboard')
+            except Exception:
+                pass

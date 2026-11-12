@@ -138,3 +138,57 @@ def test_sub_strategy_independent_control_and_overrides(client):
     assert today_reverted['futures_paper'] is True
     assert today_reverted['non_dir_paper'] is True
 
+
+def test_api_drma_hm_today_includes_overnight_futures_trades(client, tmp_path):
+    import os, json, datetime
+    from common.session_cleanup import central_today
+
+    today = central_today()
+    prev_date = today - datetime.timedelta(days=1)
+
+    hist_dir = tmp_path / 'trades' / 'history' / 'DRMA_HM_SPX'
+    os.makedirs(hist_dir, exist_ok=True)
+
+    # 1. Overnight futures trade from previous evening (e.g. 21:40 CST)
+    overnight_trade = {
+        'trade_id': 'fut_bear_test1',
+        'strategy': 'DRMA_HM_SPX',
+        'sub_strategy': 'DRMA_HM_FUT',
+        'trade_type': 'DIRECTIONAL_FUTURES',
+        'structure_type': 'futures',
+        'status': 'closed',
+        'session_phase': 'overnight',
+        'entered_at': f'{prev_date.isoformat()}T21:40:00.000000',
+        'realized_pnl_dollars': 250.0,
+        'paper': True,
+    }
+    with open(hist_dir / f'drma_hm_{prev_date.isoformat()}_fut_bear_test1.json', 'w') as f:
+        json.dump(overnight_trade, f)
+
+    # 2. Daytime trade from previous day (e.g. 11:30 CST) - should NOT be included in today
+    prev_daytime_trade = {
+        'trade_id': 'credit_bull_test2',
+        'strategy': 'DRMA_HM_SPX',
+        'sub_strategy': 'DRMA_HM_NONDIR',
+        'trade_type': 'NON_DIRECTIONAL',
+        'structure_type': 'credit_spread',
+        'status': 'closed',
+        'session_phase': 'regular',
+        'entered_at': f'{prev_date.isoformat()}T11:30:00.000000',
+        'realized_pnl_dollars': 150.0,
+        'paper': True,
+    }
+    with open(hist_dir / f'drma_hm_{prev_date.isoformat()}_credit_bull_test2.json', 'w') as f:
+        json.dump(prev_daytime_trade, f)
+
+    res = client.get('/api/drma_hm/today')
+    assert res.status_code == 200
+    data = res.get_json()
+    hist = data['history']
+
+    trade_ids = [h['trade_id'] for h in hist]
+    assert 'fut_bear_test1' in trade_ids
+    assert 'credit_bull_test2' not in trade_ids
+    assert float(data['paper_realized_pnl']) == 250.0
+
+

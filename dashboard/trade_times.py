@@ -31,15 +31,21 @@ def _iso_or_epoch_to_iso(ts: Any) -> str:
 def trade_entry_time_iso(trade: Dict[str, Any]) -> str:
     """ISO timestamp for spread entry (fill or order placement)."""
     entry = trade.get('entry') or {}
-    return _iso_or_epoch_to_iso(entry.get('timestamp') or trade.get('time_opened'))
+    ts = entry.get('timestamp') or trade.get('time_opened') or trade.get('entry_time')
+    return _iso_or_epoch_to_iso(ts)
 
 
 def trade_exit_time_iso(trade: Dict[str, Any]) -> str:
     """ISO timestamp for spread exit — full close preferred, else short-leg close start."""
     close = trade.get('close') or {}
-    ts = close.get('timestamp')
+    ts = close.get('timestamp') or trade.get('time_closed') or trade.get('exit_time')
     if ts:
         return _iso_or_epoch_to_iso(ts)
     if trade.get('short_closed_at') is not None:
         return _iso_or_epoch_to_iso(trade.get('short_closed_at'))
+    stop_hist = trade.get('stop_history')
+    if isinstance(stop_hist, list) and stop_hist:
+        first_item = stop_hist[0]
+        if isinstance(first_item, dict) and first_item.get('timestamp'):
+            return _iso_or_epoch_to_iso(first_item.get('timestamp'))
     return ''

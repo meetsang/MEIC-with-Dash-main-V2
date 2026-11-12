@@ -47,7 +47,7 @@ from common.rest_operations import (
     PRIORITY_LOW,
 )
 from blocks.stop.expiry_gate import try_settle_or_freeze_trade
-from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, spread_breach_threshold, stop_multiplier_for_state
+from blocks.stop.stop_math import apply_two_x_thresholds, exchange_stop_limit_prices, exchange_stop_price, sl_pct_from_stop_multiplier, spread_breach_threshold, stop_multiplier_for_state, stop_multiplier_from_sl_pct
 from blocks.stop.stop_ownership import has_ownership_conflict
 from blocks.stop.v3.quotes import LegQuoteResult, resolve_leg_mid
 from common.mqtt_prices import mqtt_cache_is_stale
@@ -148,6 +148,8 @@ class StopMonitor:
 
     def _protection_incomplete(self) -> bool:
         if self.state.get('status') != 'open':
+            return False
+        if self.state.get('structure_type') == 'butterfly' or self.state.get('spread_type') == 'debit' or getattr(self.stop_profile, 'spread_type', '') == 'debit':
             return False
         if stop_qty_for_state(self.state) <= 0:
             return False
@@ -296,6 +298,24 @@ class StopMonitor:
 
         self._maybe_rearm_after_window_open()
 
+        if self.state.get('manual_management'):
+
+            self._refresh_breach_watch_display_only()
+
+            self._maybe_merge_disk_stop_state()
+
+            state_mod.save_state(self.json_path, self.state)
+
+            return
+
+
+
+        if self.state.get('manual_management'):
+            self._refresh_breach_watch_display_only()
+            self._maybe_merge_disk_stop_state()
+            state_mod.save_state(self.json_path, self.state)
+            return
+
         if self.state.get('close_only_mode'):
             self._recover_closing_on_load()
             state_mod.save_state(self.json_path, self.state)
@@ -382,7 +402,9 @@ class StopMonitor:
             return
         if state_mod.section(self.state, 'active_stop').get('skip_initial'):
             return
-        if self.state.get('structure_type') == 'butterfly':
+        if self.state.get('structure_type') == 'butterfly' or self.state.get('spread_type') == 'debit' or getattr(self.stop_profile, 'spread_type', '') == 'debit':
+            return
+        if not self.phases:
             return
         if not self.phases:
             return
@@ -407,12 +429,19 @@ class StopMonitor:
             return
 
         active = self.state.get('active_stop') or {}
+        if self.state.get('manual_management'):
+            return
+
         strategy_name = self.state.get('strategy') or ''
         is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
-        if is_meic and active.get('order_id') and str(active.get('status', '')).lower() in ('working', 'live', 'open'):
-            from common.meic_settings import is_15c_oco_enabled
-            trades_root = _trades_root_for_path(self.json_path)
-            desired_oco = is_15c_oco_enabled(root=trades_root)
+        is_perma_bull = (strategy_name == 'PERMA_BULL_PCS' or getattr(self.stop_profile, 'name', '') == 'perma_bull_pcs')
+        if (is_meic or is_perma_bull) and active.get('order_id') and str(active.get('status', '')).lower() in ('working', 'live', 'open'):
+            if is_meic:
+                from common.meic_settings import is_15c_oco_enabled
+                trades_root = _trades_root_for_path(self.json_path)
+                desired_oco = is_15c_oco_enabled(root=trades_root)
+            else:
+                desired_oco = getattr(self.stop_profile, 'use_oco_short_stop', True)
             current_is_oco = (active.get('type') == 'OCO')
             if current_is_oco != desired_oco:
                 log.info(
@@ -471,15 +500,17 @@ class StopMonitor:
 
         self.broker.cancel_order(str(old_oid))
         if desired_oco:
+            exit_cfg = self.state.get('exit_config') or {}
+            pt_target = float(exit_cfg.get('profit_target_debit') or getattr(self.stop_profile, 'profit_target_short', 0.15) or 0.15)
             res = self.broker.place_oco_order(
                 short_sym,
                 qty,
-                profit_price=0.15,
+                profit_price=pt_target,
                 stop_price=stop_price,
                 limit_price=limit_price,
             )
             new_type = 'OCO'
-            pt_price = 0.15
+            pt_price = pt_target
         else:
             res = self.broker.place_stop_order(
                 short_sym,
@@ -635,8 +666,13 @@ class StopMonitor:
             if short_p is None or long_p is None:
                 log.error('Spread close: missing MQTT quotes for %s / %s', short_sym, long_sym)
                 return
-            raw_debit = max(float(short_p) - float(long_p), 0.05)
-            debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
+            is_debit_close = (getattr(getattr(self, 'stop_profile', None), 'spread_type', '') == 'debit' or self.state.get('spread_type') == 'debit')
+            if is_debit_close:
+                raw_debit = max(float(long_p) - float(short_p) - app_config.OPEN_PRICE_ADJ, 0.05)
+                debit = round_spx_option_price(raw_debit)
+            else:
+                raw_debit = max(float(short_p) - float(long_p), 0.05)
+                debit = round_spx_option_price(raw_debit + app_config.OPEN_PRICE_ADJ)
 
         is_debit = (getattr(getattr(self, 'stop_profile', None), 'spread_type', '') == 'debit' or self.state.get('spread_type') == 'debit')
         if is_debit:
@@ -706,6 +742,18 @@ class StopMonitor:
             if isinstance(self.state.get('plan'), dict):
                 self.state['plan']['profit_target_pct'] = pt
 
+        spread_type = str(self.state.get('spread_type') or getattr(getattr(self, 'stop_profile', None), 'spread_type', 'credit') or 'credit')
+        if 'stop_loss_pct' in cmd and cmd['stop_loss_pct'] is not None:
+            sl_pct = float(cmd['stop_loss_pct'])
+            self.state['stop_loss_pct'] = sl_pct
+            if 'exit_config' not in self.state or not isinstance(self.state['exit_config'], dict):
+                self.state['exit_config'] = {}
+            self.state['exit_config']['stop_loss_pct'] = sl_pct
+            if isinstance(self.state.get('plan'), dict):
+                self.state['plan']['stop_loss_pct'] = sl_pct
+            if 'stop_multiplier' not in cmd:
+                cmd['stop_multiplier'] = stop_multiplier_from_sl_pct(sl_pct, spread_type=spread_type)
+
         if 'stop_multiplier' not in cmd:
             state_mod.save_state(self.json_path, self.state)
             try:
@@ -716,10 +764,25 @@ class StopMonitor:
             return True
 
         mult = float(cmd.get('stop_multiplier', 2))
+        if mult > 10.0:
+            mult = stop_multiplier_from_sl_pct(mult / 100.0, spread_type=spread_type)
         self.state['stop_multiplier'] = mult
         if isinstance(self.state.get('plan'), dict):
             self.state['plan']['stop_multiplier'] = mult
+        if 'stop_loss_pct' not in cmd:
+            sl_pct = sl_pct_from_stop_multiplier(mult, spread_type=spread_type)
+            self.state['stop_loss_pct'] = sl_pct
+            if isinstance(self.state.get('plan'), dict):
+                self.state['plan']['stop_loss_pct'] = sl_pct
         apply_two_x_thresholds(self.state, mult)
+        if self.state.get('structure_type') == 'butterfly' or spread_type == 'debit':
+            state_mod.save_state(self.json_path, self.state)
+            try:
+                os.unlink(cmd_path)
+            except Exception:
+                pass
+            log.info('Software stop update applied mult=%sx sl_pct=%s for %s', mult, self.state.get('stop_loss_pct'), self.json_path)
+            return True
 
         active = self.state.get('active_stop') or {}
         oid = active.get('order_id')
@@ -817,6 +880,53 @@ class StopMonitor:
                 pass
             return True
 
+        # 3. Per-trade manage manually command (disarm OCO/stop for manual operator control)
+        man_cmd_path = os.path.join(trades_root, 'commands', f'{filename}.manage_manually.json')
+        if os.path.exists(man_cmd_path):
+            log.info('Dashboard manage_manually command detected for %s', filename)
+            try:
+                with open(man_cmd_path, 'r', encoding='utf-8') as f:
+                    mcmd = json.load(f)
+                enabled = mcmd.get('enabled', True)
+            except Exception:
+                enabled = True
+
+            active = self.state.get('active_stop') or {}
+            old_oid = active.get('order_id')
+            if enabled:
+                if old_oid and hasattr(self.broker, 'cancel_order'):
+                    try:
+                        self.broker.cancel_order(str(old_oid))
+                        log.info('Cancelled stop/OCO order %s for manual management of %s', old_oid, filename)
+                    except Exception as exc:
+                        log.warning('Could not cancel stop/OCO %s: %s', old_oid, exc)
+                self._reregister_alert(old_oid, None)
+                self.state['active_stop'] = None
+                self.state['stop_quantity'] = 0
+                self.state['manual_management'] = True
+                self.state['status_reason'] = 'Managed manually by user (stop/OCO disarmed)'
+                stop_px = float(active.get('stop_price') or 0.0)
+                phase_num = int(active.get('phase', 1))
+                state_mod.append_stop_history(
+                    self.state,
+                    action='cancelled',
+                    order_id=old_oid,
+                    price=stop_px,
+                    phase=phase_num,
+                    reason='manage_manually',
+                )
+            else:
+                self.state['manual_management'] = False
+                self.state['status_reason'] = 'Automated management re-armed'
+                log.info('Manual management disabled for %s — re-arming automated management', filename)
+
+            state_mod.save_state(self.json_path, self.state)
+            try:
+                os.unlink(man_cmd_path)
+            except Exception:
+                pass
+            return True
+
         return False
 
     def _check_scale_out_command(self) -> bool:
@@ -884,6 +994,24 @@ class StopMonitor:
             return
 
         if self._poll_spread_close():
+            return
+
+        if self.state.get('manual_management'):
+
+            self._refresh_breach_watch_display_only()
+
+            self._maybe_merge_disk_stop_state()
+
+            state_mod.save_state(self.json_path, self.state)
+
+            return
+
+
+
+        if self.state.get('manual_management'):
+            self._refresh_breach_watch_display_only()
+            self._maybe_merge_disk_stop_state()
+            state_mod.save_state(self.json_path, self.state)
             return
 
         if self.state.get('close_only_mode'):
@@ -1093,7 +1221,7 @@ class StopMonitor:
         )
         if evaluate_transitions and readiness.software_breach_ready and readiness.spread_mid is not None:
             threshold = spread_breach_threshold(self.state)
-            spread_breached = spread_breach_triggered(readiness.spread_mid, threshold)
+            spread_breached = spread_breach_triggered(readiness.spread_mid, threshold, spread_type=str(self.state.get('spread_type') or 'credit'))
             confirmation = update_breach_confirmation(
                 self.state,
                 readiness,
@@ -1123,6 +1251,8 @@ class StopMonitor:
         log_breach_watch(self, watch)
 
     def setup_initial_stop(self, stop_multiplier: Optional[float] = None) -> None:
+        if self.state.get('manual_management'):
+            return
         qty = stop_qty_for_state(self.state)
         if qty <= 0:
             return
@@ -1256,6 +1386,21 @@ class StopMonitor:
                     self.state['short_closed_at'] = time.time()
                 if not self.state.get('close_mechanism'):
                     self.state['close_mechanism'] = 'broker_position_flat'
+                if self.state.get('short_close_price') is None:
+                    active = self.state.get('active_stop') or {}
+                    oid = active.get('order_id')
+                    if oid:
+                        try:
+                            status_res = self.broker.get_order_status(str(oid))
+                            if status_res.success and status_res.filled_price is not None:
+                                self.state['short_close_price'] = float(status_res.filled_price)
+                        except Exception as exc:
+                            log.warning('Could not get fill price for closing order %s: %s', oid, exc)
+                    if self.state.get('short_close_price') is None:
+                        for ev in reversed(self.state.get('stop_history') or []):
+                            if ev.get('action') == 'replaced_limit' and ev.get('price'):
+                                self.state['short_close_price'] = float(ev['price'])
+                                break
                 self.state['status'] = 'closing'
                 self.state['active_stop'] = None
                 self.state['stop_quantity'] = 0
@@ -1272,13 +1417,21 @@ class StopMonitor:
         stop_price = round_spx_option_price(stop_price)
         limit_price = round_spx_option_price(limit_price)
 
+        if self.state.get('manual_management'):
+            return False
+
         strategy_name = self.state.get('strategy') or ''
         is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
+        is_perma_bull = (strategy_name == 'PERMA_BULL_PCS' or getattr(self.stop_profile, 'name', '') == 'perma_bull_pcs')
         if is_meic:
             from common.meic_settings import is_15c_oco_enabled
             trades_root = _trades_root_for_path(self.json_path)
             use_oco = is_15c_oco_enabled(root=trades_root)
             pt_price = 0.15 if use_oco else None
+        elif is_perma_bull:
+            exit_cfg = self.state.get('exit_config') or {}
+            pt_price = float(exit_cfg.get('profit_target_debit') or getattr(self.stop_profile, 'profit_target_short', 0.15) or 0.15)
+            use_oco = getattr(self.stop_profile, 'use_oco_short_stop', True)
         else:
             use_oco = (
                 getattr(self.stop_profile, 'use_oco_short_stop', False)
@@ -1409,13 +1562,21 @@ class StopMonitor:
         if qty <= 0:
             return False
 
+        if self.state.get('manual_management'):
+            return False
+
         strategy_name = self.state.get('strategy') or ''
         is_meic = (strategy_name == 'MEIC_IC' or getattr(self.stop_profile, 'name', '') in ('meic_credit_spread', 'meic_2x_short'))
+        is_perma_bull = (strategy_name == 'PERMA_BULL_PCS' or getattr(self.stop_profile, 'name', '') == 'perma_bull_pcs')
         if is_meic:
             from common.meic_settings import is_15c_oco_enabled
             trades_root = _trades_root_for_path(self.json_path)
             use_oco = is_15c_oco_enabled(root=trades_root)
             pt_price = 0.15 if use_oco else None
+        elif is_perma_bull:
+            exit_cfg = self.state.get('exit_config') or {}
+            pt_price = float(exit_cfg.get('profit_target_debit') or getattr(self.stop_profile, 'profit_target_short', 0.15) or 0.15)
+            use_oco = getattr(self.stop_profile, 'use_oco_short_stop', True)
         else:
             use_oco = (
                 getattr(self.stop_profile, 'use_oco_short_stop', False)
@@ -2295,6 +2456,41 @@ class StopMonitor:
             fill_px = self._calculate_blended_short_close_price(
                 fill_px, final_qty=int(active.get('quantity') or self.state.get('stop_quantity') or 1)
             )
+
+        is_spread_order = (
+            active.get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT')
+            or bool(self.state.get('is_scale_out_split'))
+        )
+        if is_spread_order:
+            actual_px = fill_px if fill_px is not None else float(
+                active.get('profit_price') or active.get('profit_debit') or stop.get('limit_price') or 0.0
+            )
+            self.state['status'] = 'closed'
+            self.state['holding_quantity'] = 0
+            self.state['closed_quantity'] = int(self.state.get('quantity') or 1)
+            self.state['short_remaining_qty'] = 0
+            self.state['long_remaining_qty'] = 0
+            if not self.state.get('close_mechanism'):
+                self.state['close_mechanism'] = 'scale_out_oco' if 'oco' in str(active.get('type', '')).lower() else 'scale_out_limit'
+            self.state['close'] = {
+                'reason': reason,
+                'timestamp': state_mod.now_iso(),
+                'entry_credit': (self.state.get('entry') or {}).get('net_credit'),
+                'close_price': actual_px,
+                'close_mechanism': self.state['close_mechanism'],
+                'quantity': self.state['closed_quantity'],
+            }
+            if active.get('status') != 'filled':
+                active['status'] = 'filled'
+            self.state['active_stop'] = active
+            state_mod.move_to_closed(self.json_path, self.state)
+            log.info(
+                'Spread scale-out filled (%s) @ %.2f - trade fully closed and moved to history',
+                self.json_path,
+                actual_px,
+            )
+            return
+
         self.state['short_close_price'] = (
             fill_px
             if fill_px is not None
@@ -2371,6 +2567,14 @@ class StopMonitor:
                 quote.source,
             )
             return False
+        if self.state.get('is_scale_out_split') or (self.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+            log.warning(
+                'Cannot place long close: trade %s is a spread order (both legs closed together) - finalizing close',
+                self.json_path,
+            )
+            self._finalize_close(reason=self.state.get('close_mechanism') or 'spread_order_closed')
+            return False
+
         long_sym = self.state['long_leg']['symbol']
         held_qty = None
         try:
@@ -2456,6 +2660,7 @@ class StopMonitor:
             'long_fill': long_fill,
             'short_close_price': self.state.get('short_close_price'),
             'long_close_price': self.state.get('long_close_price'),
+            'close_price': self.state.get('close_price') or self.state.get('short_close_price'),
             'short_close_limit_price': self.state.get('short_close_limit_price'),
             'long_close_limit_price': self.state.get('long_close_limit_price'),
             'close_mechanism': self.state.get('close_mechanism'),
@@ -2470,6 +2675,10 @@ class StopMonitor:
 
     def _chase_long_close(self) -> None:
         """Check long close order and reprice if needed."""
+        if self.state.get('is_scale_out_split') or (self.state.get('active_stop') or {}).get('type') in ('SPREAD_OCO', 'SPREAD_LIMIT'):
+            self._finalize_close(reason=self.state.get('close_mechanism') or 'spread_order_closed')
+            return
+
         retry_at = self.state.get('long_close_next_retry_at')
         if retry_at and time.time() < float(retry_at):
             return

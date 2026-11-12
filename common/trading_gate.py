@@ -49,7 +49,7 @@ def _require_operator_resume() -> bool:
 
 
 def _rest_ready_max_age_sec() -> float:
-    return float(os.environ.get('REST_READY_MAX_AGE_SEC', '60'))
+    return float(os.environ.get('REST_READY_MAX_AGE_SEC', '900'))
 
 
 def _default_state(session_date_ct: str) -> Dict[str, Any]:
@@ -255,9 +255,21 @@ def _tranche_rest_readiness(
     strategy: str,
     tranche_id: str,
 ) -> GateDecision:
+    # Unified broker session health: all strategies and tranches share the same TastyTrade session.
+    # If the broker REST connection is healthy, never block entries due to missing internal probe records.
+    rest = str(state.get('rest_status') or 'unknown')
+    if rest == REST_HEALTHY or rest in REST_STATUSES_THROTTLE_ONLY:
+        return GateDecision(blocked=False)
+
     probes = state.get('probes_by_tranche') or {}
     rec = probes.get(tranche_id)
     if not isinstance(rec, dict):
+        if _rest_status_blocks_entries(rest):
+            return GateDecision(
+                blocked=True,
+                reason=f'rest_{rest}',
+                detail=str(state.get('rest_detail') or ''),
+            )
         return GateDecision(
             blocked=True,
             reason='rest_probe_missing',
@@ -477,7 +489,8 @@ def resume_new_risk(cleared_by: str = 'operator') -> GateDecision:
             detail=str(state.get('rest_detail') or ''),
         )
     last_ok = float(state.get('last_successful_probe_epoch') or 0)
-    if time.time() - last_ok > _rest_ready_max_age_sec():
+    resume_max_age = float(os.environ.get('REST_RESUME_PROBE_MAX_AGE_SEC', '60'))
+    if time.time() - last_ok > resume_max_age:
         return GateDecision(blocked=True, reason='stale_probe', detail='re-check REST before resume')
     if has_unresolved_visibility_unknown():
         return GateDecision(

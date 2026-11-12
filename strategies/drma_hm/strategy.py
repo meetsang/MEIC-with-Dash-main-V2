@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from brokers.base import ComboLeg
-from common.broker_factory import get_shared_broker_for_strategy
+from common.broker_factory import get_broker_reset_generation, get_shared_broker_for_strategy
+from common.market_hours import effective_session_time_ct, is_early_close_day_ct, market_close_time_ct
 from common.streamer_symbols import register_option_symbols
 from common.symbols import build_tastytrade_symbol, symbols_equivalent
 from common.trades_layout import active_dir_for_strategy, history_dir_for_strategy
@@ -71,6 +72,7 @@ class DRMAHMStrategy(BaseStrategy):
         self._daily_non_dir_signals = 0
         self._daily_futures_signals = 0
         self._last_signal_bar = -999
+        self._last_phase: Optional[str] = None
         self._dir_options_position_state = 0   # 0 = Flat, 1 = Long CDS/Call, -1 = Long PDS/Put
         self._credit_options_position_state = 0 # 0 = Flat, 1 = Bull PCS, -1 = Bear CCS, 2 = Neutral IC
         self._options_position_state = 0       # 0 = Flat, 1 = Any Options Open
@@ -84,9 +86,15 @@ class DRMAHMStrategy(BaseStrategy):
         self._morning_levels_fetched_date: Optional[date] = None
         self._paper_broker = None
         self._live_broker = None
+        self._broker_gen: int = get_broker_reset_generation()
 
     def _get_broker(self, is_paper: bool):
         """Return the appropriate broker instance (paper JournalBroker vs live TastyTradeBroker)."""
+        curr_gen = get_broker_reset_generation()
+        if self._broker_gen != curr_gen:
+            self._paper_broker = None
+            self._live_broker = None
+            self._broker_gen = curr_gen
         if is_paper:
             if self._paper_broker is not None:
                 return self._paper_broker
@@ -242,12 +250,21 @@ class DRMAHMStrategy(BaseStrategy):
           - 'DAILY_HALT': 15:00 CST to 17:00 CST - CME Globex maintenance halt
         """
         t = now_ct.time()
+        wd = now_ct.weekday()
         flatten_t = self._parse_time_cst(getattr(self.config, 'overnight_flatten_time_cst', '07:00'), dt_time(7, 0))
         open_t = self._parse_time_cst(getattr(self.config, 'market_open_time_cst', '08:30'), dt_time(8, 30))
         reg_start_t = self._parse_time_cst(getattr(self.config, 'regular_trading_start_time_cst', '09:00'), dt_time(9, 0))
-        eod_t = self._parse_time_cst(getattr(self.config, 'eod_exit_time_cst', '14:50'), dt_time(14, 50))
-        close_t = dt_time(15, 0)
+        eod_t = self._effective_eod_cutoff(now_ct)
+        close_t = market_close_time_ct(now_ct.date())
         reopen_t = dt_time(17, 0)
+
+        # Weekend CME Globex halt (Fri close -> Sun 17:00 CT reopen)
+        if wd == 5:
+            return 'DAILY_HALT'
+        if wd == 6:
+            return 'OVERNIGHT_TRADING' if t >= reopen_t else 'DAILY_HALT'
+        if wd == 4 and t >= close_t:
+            return 'DAILY_HALT'
 
         if t < flatten_t or t >= reopen_t:
             return 'OVERNIGHT_TRADING'
@@ -259,7 +276,7 @@ class DRMAHMStrategy(BaseStrategy):
             return 'REGULAR_TRADING'
         elif eod_t <= t < close_t:
             return 'EOD_FLATTEN'
-        else:  # 15:00 to 17:00
+        else:  # close_t to 17:00
             return 'DAILY_HALT'
 
     def _is_lunch_window(self, now_ct: datetime) -> bool:
@@ -267,14 +284,19 @@ class DRMAHMStrategy(BaseStrategy):
         t = now_ct.time()
         return dt_time(10, 30) <= t <= dt_time(12, 30)
 
+    def _effective_eod_cutoff(self, now_ct: datetime) -> dt_time:
+        raw = getattr(self.config, 'eod_exit_time_cst', '14:50') or '14:50'
+        return effective_session_time_ct(raw, now_ct.date(), default=dt_time(14, 50))
+
     def _is_eod_cutoff(self, now_ct: datetime) -> bool:
-        cutoff_t = self._parse_time_cst(self.config.eod_exit_time_cst)
-        return now_ct.time() >= cutoff_t
+        return now_ct.time() >= self._effective_eod_cutoff(now_ct)
 
     def _is_rth(self, now_ct: datetime) -> bool:
-        """08:30 to 15:00 CST (09:30 to 16:00 ET)."""
+        """08:30 to market close CST (15:00 normal, 12:00 on NYSE early-close days)."""
+        if now_ct.weekday() >= 5:
+            return False
         t = now_ct.time()
-        return dt_time(8, 30) <= t <= dt_time(15, 0)
+        return dt_time(8, 30) <= t <= market_close_time_ct(now_ct.date())
 
     def _recount_daily_signals(self, root: str, today: date) -> None:
         """Scan active and history trades for today to count entries per sub-strategy."""
@@ -292,33 +314,46 @@ class DRMAHMStrategy(BaseStrategy):
         if os.path.isdir(date_hist):
             search_dirs.append(date_hist)
 
+        search_dates = [today] + [(today - timedelta(days=d)) for d in (1, 2, 3)]
+
         for s_dir in search_dirs:
             if not os.path.isdir(s_dir):
                 continue
             for fname in os.listdir(s_dir):
-                if (fname.startswith(prefix) or today.isoformat() in fname) and fname.endswith('.json'):
-                    if fname.startswith('session_'):
+                if not fname.endswith('.json') or fname.startswith('session_'):
+                    continue
+                fpath = os.path.join(s_dir, fname)
+                try:
+                    with open(fpath, encoding='utf-8') as f:
+                        t_data = json.load(f)
+                    tid = t_data.get('trade_id') or fname
+                    if tid in seen_trade_ids or t_data.get('status') == 'skipped':
                         continue
-                    fpath = os.path.join(s_dir, fname)
-                    try:
-                        with open(fpath, encoding='utf-8') as f:
-                            t_data = json.load(f)
-                        tid = t_data.get('trade_id') or fname
-                        if tid in seen_trade_ids or t_data.get('status') == 'skipped':
-                            continue
-                        seen_trade_ids.add(tid)
-                        sub_strat = str(t_data.get('sub_strategy') or '').upper()
-                        struct_type = str(t_data.get('structure_type') or '').lower()
-                        trade_type = str(t_data.get('trade_type') or '').upper()
 
-                        if sub_strat == 'DRMA_HM_DIR' or trade_type == 'DIRECTIONAL':
-                            dir_count += 1
-                        elif sub_strat == 'DRMA_HM_FUT' or struct_type == 'futures' or trade_type == 'DIRECTIONAL_FUTURES':
-                            fut_count += 1
-                        else:
-                            nondir_count += 1
-                    except Exception:
-                        pass
+                    entered_at = str(t_data.get('entered_at') or '')
+                    is_today = (fname.startswith(prefix) or today.isoformat() in fname or t_data.get('date') == today.isoformat())
+                    is_overnight = (
+                        (t_data.get('session_phase') == 'overnight' or
+                         t_data.get('structure_type') == 'futures' or
+                         t_data.get('trade_type') in ('DIRECTIONAL_FUTURES', 'FUTURES')) and
+                        any(entered_at.startswith(p.isoformat()) and entered_at[11:16] >= '17:00' for p in search_dates[1:])
+                    )
+                    if not (is_today or is_overnight):
+                        continue
+
+                    seen_trade_ids.add(tid)
+                    sub_strat = str(t_data.get('sub_strategy') or '').upper()
+                    struct_type = str(t_data.get('structure_type') or '').lower()
+                    trade_type = str(t_data.get('trade_type') or '').upper()
+
+                    if sub_strat == 'DRMA_HM_DIR' or trade_type == 'DIRECTIONAL':
+                        dir_count += 1
+                    elif sub_strat == 'DRMA_HM_FUT' or struct_type == 'futures' or trade_type == 'DIRECTIONAL_FUTURES':
+                        fut_count += 1
+                    else:
+                        nondir_count += 1
+                except Exception:
+                    pass
 
         self._daily_dir_signals = dir_count
         self._daily_non_dir_signals = nondir_count
@@ -455,6 +490,7 @@ class DRMAHMStrategy(BaseStrategy):
                         last_cache_key = None
                         cached_overnight_snapshots = []
                         last_overnight_bars_ts = 0.0
+                        self._last_signal_bar = -999
 
                     # Grab ONL and ONH from Yahoo Finance once around 08:30 AM CST when morning RTH opens
                     if self._is_rth(now_ct) and self._morning_levels_fetched_date != today:
@@ -502,6 +538,9 @@ class DRMAHMStrategy(BaseStrategy):
 
                     # Determine current trading session phase
                     phase = self.get_session_phase(now_ct)
+                    if phase != getattr(self, '_last_phase', None):
+                        self._last_phase = phase
+                        self._last_signal_bar = -999
                     self._status['session_phase'] = phase
                     self._status['timing'] = {
                         'session_phase': phase,
@@ -510,6 +549,9 @@ class DRMAHMStrategy(BaseStrategy):
                         'market_open_time_cst': getattr(self.config, 'market_open_time_cst', '08:30'),
                         'regular_trading_start_time_cst': getattr(self.config, 'regular_trading_start_time_cst', '09:30'),
                         'eod_exit_time_cst': getattr(self.config, 'eod_exit_time_cst', '14:50'),
+                        'effective_eod_exit_time_cst': self._effective_eod_cutoff(now_ct).strftime('%H:%M'),
+                        'market_close_time_cst': market_close_time_ct(now_ct.date()).strftime('%H:%M'),
+                        'is_early_close_day': is_early_close_day_ct(now_ct.date()),
                     }
 
                     # Scan for currently active open trades (both overnight and daytime trades)
@@ -641,6 +683,8 @@ class DRMAHMStrategy(BaseStrategy):
                         # Check entry for overnight futures (Grade A+ only)
                         fut_max = getattr(self.config, 'futures_max_daily_signals', 0)
                         futs_limit_ok = (fut_max == 0) or (self._daily_futures_signals < fut_max)
+                        if bar_idx < self._last_signal_bar:
+                            self._last_signal_bar = -999
                         is_cooled_down = (bar_idx - self._last_signal_bar) >= self.config.cooldown_bars
                         futs_min_thresh = 5 if 'a+ only' in getattr(self.config, 'futures_min_grade', 'Grade A+ Only').lower() else 4
 
@@ -739,6 +783,7 @@ class DRMAHMStrategy(BaseStrategy):
                         'slow': latest_snap.hm_slow,
                         'bias': latest_snap.bias,
                         'grade': latest_snap.setup_grade,
+                        'active_score': latest_snap.active_score,
                         'vehicle': latest_snap.trade_vehicle,
                         'gamma_risk': latest_snap.gamma_risk,
                         'options_position_state': self._options_position_state,
@@ -875,6 +920,8 @@ class DRMAHMStrategy(BaseStrategy):
                     global_max = getattr(self.config, 'max_daily_signals', 0)
                     global_limit_ok = (global_max == 0) or (self._daily_signals < global_max)
 
+                    if bar_idx < self._last_signal_bar:
+                        self._last_signal_bar = -999
                     is_cooled_down = (bar_idx - self._last_signal_bar) >= self.config.cooldown_bars
                     lunch_blocked = self.config.filter_lunch_chop and self._is_lunch_window(now_ct)
 
@@ -955,7 +1002,15 @@ class DRMAHMStrategy(BaseStrategy):
         elif mode in ('non_directional_only', 'non_directional_options'):
             is_directional = False
 
-        is_overnight = (self.get_session_phase(util.central_now()) == 'OVERNIGHT_TRADING')
+        eval_dt = util.central_now()
+        if getattr(snap, 'datetime_str', None):
+            try:
+                s_str = str(snap.datetime_str).replace('T', ' ')
+                eval_dt = datetime.strptime(s_str[:19], '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+        current_phase = self.get_session_phase(eval_dt)
+        is_overnight = (current_phase == 'OVERNIGHT_TRADING' or self._status.get('session_phase') == 'OVERNIGHT_TRADING')
 
         # 1. Directional Options (SPX Debit Spread)
         if is_directional and self.config.is_directional_options_enabled and self._dir_options_position_state == 0 and dir_limit_ok and global_limit_ok and not is_overnight:
@@ -1096,6 +1151,22 @@ class DRMAHMStrategy(BaseStrategy):
         fill_price = abs(float(result.filled_price)) if (result and result.success and result.filled_price is not None and result.filled_price > 0) else est_debit
         raw_oid = getattr(result, 'order_id', None)
         order_id = str(raw_oid) if (raw_oid is not None and not hasattr(raw_oid, '_mock_return_value')) else ('mock_order_123' if raw_oid is not None else None)
+
+        entry_fill_confirmed = False
+        if not is_paper and hasattr(order_broker, 'get_order_status') and order_id and order_id != 'mock_order_123':
+            try:
+                for _ in range(5):
+                    time.sleep(0.35)
+                    chk = order_broker.get_order_status(order_id)
+                    if chk and getattr(chk, 'status', '').lower() == 'filled' and chk.filled_price is not None:
+                        actual_px = abs(float(chk.filled_price))
+                        if actual_px > 0:
+                            fill_price = actual_px
+                            entry_fill_confirmed = True
+                            break
+            except Exception as e:
+                self.logger.warning('Error polling entry fill price: %s', e)
+
         trade_data = {
             'trade_id': trade_id,
             'strategy': self.config.name,
@@ -1117,6 +1188,7 @@ class DRMAHMStrategy(BaseStrategy):
             'setup_grade': snap.setup_grade,
             'setup_score': snap.active_score,
             'paper': is_paper,
+            'entry_fill_confirmed': entry_fill_confirmed,
             'structures': [{
                 'structure_id': 'spread_1',
                 'name': f'Directional {snap.bias} Debit Spread',
@@ -1236,6 +1308,7 @@ class DRMAHMStrategy(BaseStrategy):
             # Paper execution: simulated fill, no live orders placed
             self.logger.info('Paper futures trade recorded at simulated fill price %.2f', fill_price)
 
+        entry_fill_confirmed = True if (is_paper or (order_id and res and getattr(res, 'success', False))) else False
         trade_data = {
             'trade_id': trade_id,
             'strategy': self.config.name,
@@ -1261,6 +1334,7 @@ class DRMAHMStrategy(BaseStrategy):
             'setup_grade': snap.setup_grade,
             'setup_score': snap.active_score,
             'paper': is_paper,
+            'entry_fill_confirmed': entry_fill_confirmed,
             'structures': [{
                 'structure_id': 'futures_1',
                 'name': f'Directional Futures {side} ({symbol})',
@@ -1352,6 +1426,21 @@ class DRMAHMStrategy(BaseStrategy):
         raw_oid = getattr(result, 'order_id', None)
         order_id = str(raw_oid) if (raw_oid is not None and not hasattr(raw_oid, '_mock_return_value')) else ('mock_order_123' if raw_oid is not None else None)
 
+        entry_fill_confirmed = False
+        if not is_paper and hasattr(order_broker, 'get_order_status') and order_id and order_id != 'mock_order_123':
+            try:
+                for _ in range(5):
+                    time.sleep(0.35)
+                    chk = order_broker.get_order_status(order_id)
+                    if chk and getattr(chk, 'status', '').lower() == 'filled' and chk.filled_price is not None:
+                        actual_px = abs(float(chk.filled_price))
+                        if actual_px > 0:
+                            fill_price = actual_px
+                            entry_fill_confirmed = True
+                            break
+            except Exception as e:
+                self.logger.warning('Error polling entry fill price: %s', e)
+
         # Place whole-spread OCO order protecting profit target and stop loss on broker
         pt_pct = float(self.config.non_dir_profit_target_pct or 0.50)
         sl_pct = float(self.config.non_dir_stop_loss_pct or 1.00)
@@ -1361,25 +1450,31 @@ class DRMAHMStrategy(BaseStrategy):
 
         oco_order_id = None
         if hasattr(order_broker, 'place_spread_oco_order'):
-            try:
-                oco_res = order_broker.place_spread_oco_order(
-                    short_symbol=legs[0].symbol,
-                    long_symbol=legs[1].symbol,
-                    qty=self.config.quantity,
-                    profit_debit=profit_debit,
-                    stop_trigger_debit=stop_trigger_debit,
-                    stop_limit_debit=stop_limit_debit,
-                )
-                if oco_res and oco_res.success:
-                    raw_id = getattr(oco_res, 'order_id', None)
-                    oco_order_id = str(raw_id) if (raw_id is not None and not hasattr(raw_id, '_mock_return_value')) else ('mock_oco_123' if raw_id is not None else None)
-                    self.logger.info(
-                        '[%s] Credit spread OCO placed: id=%s PT=%.2f SL_trig=%.2f SL_lim=%.2f',
-                        'PAPER' if is_paper else 'LIVE',
-                        oco_order_id, profit_debit, stop_trigger_debit, stop_limit_debit,
+            for attempt in range(1, 4):
+                try:
+                    oco_res = order_broker.place_spread_oco_order(
+                        short_symbol=legs[0].symbol,
+                        long_symbol=legs[1].symbol,
+                        qty=self.config.quantity,
+                        profit_debit=profit_debit,
+                        stop_trigger_debit=stop_trigger_debit,
+                        stop_limit_debit=stop_limit_debit,
                     )
-            except Exception as oco_err:
-                self.logger.warning('Failed to place spread OCO order: %s', oco_err)
+                    if oco_res and oco_res.success:
+                        raw_id = getattr(oco_res, 'order_id', None)
+                        oco_order_id = str(raw_id) if (raw_id is not None and not hasattr(raw_id, '_mock_return_value')) else ('mock_oco_123' if raw_id is not None else None)
+                        self.logger.info(
+                            '[%s] Credit spread OCO placed (attempt %d): id=%s PT=%.2f SL_trig=%.2f SL_lim=%.2f',
+                            'PAPER' if is_paper else 'LIVE',
+                            attempt, oco_order_id, profit_debit, stop_trigger_debit, stop_limit_debit,
+                        )
+                        break
+                    elif getattr(oco_res, 'status', '') == 'rejected_preflight' and attempt < 3:
+                        time.sleep(1.5)
+                except Exception as oco_err:
+                    self.logger.warning('Failed to place spread OCO order (attempt %d): %s', attempt, oco_err)
+                    if attempt < 3:
+                        time.sleep(1.5)
 
         trade_data = {
             'trade_id': trade_id,
@@ -1573,13 +1668,48 @@ class DRMAHMStrategy(BaseStrategy):
         exit_reason = ''
         exit_price = None
 
+        # Reconcile entry fill price from broker if live and not yet confirmed
+        if not trade.get('paper') and trade.get('entry_order_id') and not trade.get('entry_fill_confirmed'):
+            order_broker = self._get_broker(False)
+            if hasattr(order_broker, 'get_order_status'):
+                try:
+                    chk = order_broker.get_order_status(str(trade['entry_order_id']))
+                    if chk and getattr(chk, 'status', '').lower() == 'filled' and chk.filled_price is not None:
+                        actual_fill = abs(float(chk.filled_price))
+                        old_fill = float(trade.get('entry_price') or 0.0)
+                        if actual_fill > 0 and abs(actual_fill - old_fill) > 0.001:
+                            self.logger.info(
+                                'DRMA_HM: Reconciled entry fill price for %s: %.2f -> %.2f (order %s)',
+                                trade.get('trade_id'), old_fill, actual_fill, trade['entry_order_id'],
+                            )
+                            trade['entry_price'] = actual_fill
+                            if 'net_credit' in trade:
+                                trade['net_credit'] = actual_fill
+                            if 'net_debit' in trade:
+                                trade['net_debit'] = actual_fill
+                            for s in trade.get('structures') or []:
+                                if 'net_credit' in s:
+                                    s['net_credit'] = actual_fill
+                                if 'net_debit' in s:
+                                    s['net_debit'] = actual_fill
+                            trade['entry_fill_confirmed'] = True
+                            try:
+                                with open(trade_path, 'w', encoding='utf-8') as f:
+                                    json.dump(trade, f, indent=2)
+                            except OSError:
+                                pass
+                        elif getattr(chk, 'status', '').lower() == 'filled':
+                            trade['entry_fill_confirmed'] = True
+                except Exception as exc:
+                    self.logger.debug('DRMA_HM: Entry fill check failed: %s', exc)
+
         if is_futures:
             # Check Session Cutoffs for ES Futures (7:00 AM CST and End of Active Day)
             now_ct = util.central_now()
             t_now = now_ct.time()
             flatten_7am = self._parse_time_cst(getattr(self.config, 'overnight_flatten_time_cst', '07:00'), dt_time(7, 0))
             reg_start = self._parse_time_cst(getattr(self.config, 'regular_trading_start_time_cst', '09:00'), dt_time(9, 0))
-            eod_cutoff = self._parse_time_cst(getattr(self.config, 'eod_exit_time_cst', '14:50'), dt_time(14, 50))
+            eod_cutoff = self._effective_eod_cutoff(now_ct)
             reopen_1700 = dt_time(17, 0)
 
             is_overnight = (trade.get('session_phase') == 'overnight')
@@ -1643,7 +1773,7 @@ class DRMAHMStrategy(BaseStrategy):
             # Check EOD Cutoff (End of Active Day) for Option Spreads
             now_ct = util.central_now()
             t_now = now_ct.time()
-            eod_cutoff = self._parse_time_cst(getattr(self.config, 'eod_exit_time_cst', '14:50'), dt_time(14, 50))
+            eod_cutoff = self._effective_eod_cutoff(now_ct)
             reopen_1700 = dt_time(17, 0)
             if getattr(self.config, 'force_eod_exit', True) and (eod_cutoff <= t_now < reopen_1700):
                 should_exit = True
@@ -1668,8 +1798,37 @@ class DRMAHMStrategy(BaseStrategy):
             entry_price = float(trade.get('entry_price') or 0.0)
             unrealized = float(trade.get('unrealized_pnl') or 0.0)
 
-            # 0. Check broker OCO order status if present
+            # 0. Check broker OCO order status if present (or recover if missing on open live spread)
             oco_id = trade.get('oco_order_id')
+            trade_broker = self._get_broker(trade.get('paper', False))
+            if not oco_id and not trade.get('paper') and trade.get('structure_type') == 'credit_spread' and hasattr(trade_broker, 'place_spread_oco_order'):
+                s_legs = []
+                for s in trade.get('structures') or []:
+                    s_legs = s.get('legs') or []
+                    if len(s_legs) >= 2:
+                        break
+                if len(s_legs) >= 2:
+                    try:
+                        p_pct = float(trade.get('profit_target_pct') or 0.50)
+                        s_pct = float(trade.get('stop_loss_pct') or 1.00)
+                        p_debit = round(entry_price * (1.0 - p_pct), 2)
+                        st_debit = round(entry_price * (1.0 + s_pct), 2)
+                        sl_debit = round(st_debit + 0.20, 2)
+                        recovered_oco = trade_broker.place_spread_oco_order(
+                            short_symbol=s_legs[0]['symbol'],
+                            long_symbol=s_legs[1]['symbol'],
+                            qty=int(trade.get('quantity') or 1),
+                            profit_debit=p_debit,
+                            stop_trigger_debit=st_debit,
+                            stop_limit_debit=sl_debit,
+                        )
+                        if recovered_oco and recovered_oco.success and recovered_oco.order_id:
+                            trade['oco_order_id'] = str(recovered_oco.order_id)
+                            trade['oco_status'] = 'working'
+                            oco_id = str(recovered_oco.order_id)
+                            self.logger.info('DRMA_HM: Auto-recovered missing OCO order for %s: id=%s', trade_path, oco_id)
+                    except Exception as rec_err:
+                        self.logger.debug('DRMA_HM: OCO recovery attempt failed: %s', rec_err)
             trade_broker = self._get_broker(trade.get('paper', False))
             if oco_id and hasattr(trade_broker, 'get_order_status'):
                 try:
@@ -1770,6 +1929,41 @@ class DRMAHMStrategy(BaseStrategy):
         struct_type = str(trade.get('structure_type', '')).lower()
         is_futures = (struct_type == 'futures' or str(trade.get('trade_type', '')).upper() == 'DIRECTIONAL_FUTURES')
         qty = int(trade.get('quantity') or 1)
+
+        # Verify and reconcile broker fill prices (both entry and exit) before computing final realized PnL
+        if not trade.get('paper'):
+            order_broker = self._get_broker(False)
+            if hasattr(order_broker, 'get_order_status'):
+                entry_oid = trade.get('entry_order_id')
+                if entry_oid and not trade.get('entry_fill_confirmed'):
+                    try:
+                        chk = order_broker.get_order_status(str(entry_oid))
+                        if chk and getattr(chk, 'status', '').lower() == 'filled' and chk.filled_price is not None:
+                            actual_fill = abs(float(chk.filled_price))
+                            if actual_fill > 0:
+                                trade['entry_price'] = actual_fill
+                                if 'net_credit' in trade:
+                                    trade['net_credit'] = actual_fill
+                                if 'net_debit' in trade:
+                                    trade['net_debit'] = actual_fill
+                                for s in trade.get('structures') or []:
+                                    if 'net_credit' in s:
+                                        s['net_credit'] = actual_fill
+                                    if 'net_debit' in s:
+                                        s['net_debit'] = actual_fill
+                                trade['entry_fill_confirmed'] = True
+                    except Exception as exc:
+                        self.logger.debug('DRMA_HM: Entry fill check failed on finalize: %s', exc)
+
+                if close_order_id:
+                    try:
+                        chk_close = order_broker.get_order_status(str(close_order_id))
+                        if chk_close and getattr(chk_close, 'status', '').lower() == 'filled' and chk_close.filled_price is not None:
+                            actual_exit = abs(float(chk_close.filled_price))
+                            if actual_exit > 0:
+                                exit_price = actual_exit
+                    except Exception as exc:
+                        self.logger.debug('DRMA_HM: Close fill check failed on finalize: %s', exc)
 
         if is_futures:
             side_str = str(trade.get('side', 'LONG')).upper()
@@ -2225,18 +2419,5 @@ class DRMAHMStrategy(BaseStrategy):
             with open(trade_path, 'w', encoding='utf-8') as f:
                 json.dump(trade, f, indent=2)
 
-    def _is_lunch_window(self, now_ct: datetime) -> bool:
-        """Lunch chop window: 10:30 to 12:30 CT (11:30 to 13:30 ET)."""
-        t = now_ct.time()
-        return dt_time(10, 30) <= t <= dt_time(12, 30)
 
-    def _is_eod_cutoff(self, now_ct: datetime) -> bool:
-        """EOD exit cutoff (e.g. 14:50 CT)."""
-        cutoff_str = self.config.eod_exit_time_cst or '14:50'
-        try:
-            parts = cutoff_str.split(':')
-            cutoff_t = dt_time(int(parts[0]), int(parts[1]))
-            return now_ct.time() >= cutoff_t
-        except Exception:
-            return now_ct.time() >= dt_time(14, 50)
 
